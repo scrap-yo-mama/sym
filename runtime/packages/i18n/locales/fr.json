@@ -674,6 +674,7 @@
       "account": "Mon compte",
       "security": "Sécurité",
       "robot": "Identité du robot",
+      "browser": "Navigateur",
       "sso": "SSO"
     },
     "adminOnly": "Seul un admin de ton instance peut lire ou modifier ces réglages.",
@@ -2006,6 +2007,46 @@
       "contactUnset": "Non défini ici : le worker lit sa variable INSTANCE_CONTACT. Un contact est requis avant la première enquête.",
       "contactFromEnv": "Non défini ici : le worker annonce sa variable INSTANCE_CONTACT, {contact}. Saisis un contact et enregistre pour la remplacer.",
       "save": "Enregistrer"
+    },
+    "browser": {
+      "title": "Navigateur",
+      "intro": "Le navigateur que le worker pilote, et ce que son fournisseur apporte. L'activation d'un fournisseur CDP est une variable du worker, pas un réglage de cette page.",
+      "provider": "Fournisseur actuel",
+      "providerLocal": "Chromium local du worker",
+      "providerSymBrowser": "SYM Browser",
+      "providerCdp": "Navigateur CDP d'un autre fournisseur",
+      "providerUnknown": "Aucun worker n'a encore publié son navigateur. Il apparaît dès qu'un worker a démarré.",
+      "activation": "Navigateur CDP générique",
+      "activationOn": "Activé : BROWSER_ALLOW_GENERIC_CDP=true sur le worker.",
+      "activationOff": "Non activé : un navigateur CDP générique est refusé au démarrage du worker. Pour l'activer, pose BROWSER_ALLOW_GENERIC_CDP=true sur le worker.",
+      "bubble": "Ton navigateur vient d'un fournisseur CDP. Voici les capacités côté navigateur présentes et absentes.",
+      "tableTitle": "Capacités côté navigateur",
+      "colCapability": "Capacité",
+      "colSymBrowser": "SYM Browser",
+      "colCdp": "Fournisseur CDP",
+      "colWorker": "Ce worker",
+      "present": "présente",
+      "absent": "absente",
+      "unknown": "inconnue",
+      "responsibleUse": "Le choix d'un fournisseur tiers et son usage relèvent de toi.",
+      "responsibleUseLink": "Usage responsable",
+      "capabilities": {
+        "egress": "Egress par session et garde SSRF au niveau réseau",
+        "domainLock": "Verrou de domaines sur les sauts de redirection et les sous-ressources, dans le réseau",
+        "budget": "Budget d'octets par session (plafond du coût d'un run)",
+        "launchArgs": "Arguments de lancement (prérendu, WebSocketStream)",
+        "closedProxy": "Proxy de lancement fermé (navigateur oisif muet)",
+        "freshContext": "Contexte neuf par run avec proxy imposé",
+        "killBeforeDetach": "Ordre « tuer avant détacher »",
+        "sandbox": "Bac à sable vérifié",
+        "userAgent": "User-Agent réel posé au lancement",
+        "latency": "Latence des gardes dans les seuils prévus"
+      },
+      "cdpNotes": {
+        "domainLock": "le worker coupe les sauts par CDP",
+        "launchArgs": "le worker neutralise WebSocketStream par script d'initialisation",
+        "freshContext": "une session du fournisseur par run"
+      }
     },
     "sso": {
       "title": "Authentification unique (OIDC)",

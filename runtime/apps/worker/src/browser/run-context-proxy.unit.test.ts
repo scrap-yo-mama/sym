@@ -3,7 +3,7 @@
 // contexte de run n'a alors aucun `proxy` ; avec un serveur local, le proxy de l'essai reste posé.
 import type { Browser } from 'playwright-core';
 import { describe, expect, it, vi } from 'vitest';
-import { openRunContext, runContextProxy } from './run-context.js';
+import { openRunContext, runContextGuards, runContextProxy } from './run-context.js';
 
 describe('proxy du contexte de run', () => {
   it('serveur local : proxy de l’essai', () => {
@@ -26,5 +26,18 @@ describe('egress distant : attach (tâche 4.3)', () => {
     const attach = vi.fn().mockResolvedValue(undefined);
     await openRunContext({} as Browser, { egressServer: 'http://127.0.0.1:1', egress: { attach }, allowedHosts: [] }).catch(() => undefined);
     expect(attach).not.toHaveBeenCalled();
+  });
+});
+
+describe('gardes du worker selon les capacités du fournisseur (tâche 4.7, 4.6)', () => {
+  const none = { egressPolicy: false, launchArgs: false, freshContextPerRun: false, killBeforeDetach: false, sandboxProbe: false, engineUserAgent: false, privateLatency: false };
+  it('sans capacités déclarées (local, sym-browser) : egress qui impose les domaines, lancement qui coupe WebSocketStream', () => {
+    expect(runContextGuards({})).toEqual({ egressEnforcesDomains: true, neutralizeLaunchFeatures: false });
+  });
+  it('cdp : le worker coupe lui-même les sauts hors domaines et neutralise WebSocketStream par script d’init', () => {
+    expect(runContextGuards({ egress: { capabilities: none } })).toEqual({ egressEnforcesDomains: false, neutralizeLaunchFeatures: true });
+  });
+  it('une option explicite l’emporte', () => {
+    expect(runContextGuards({ egressEnforcesDomains: true, neutralizeLaunchFeatures: false, egress: { capabilities: none } })).toEqual({ egressEnforcesDomains: true, neutralizeLaunchFeatures: false });
   });
 });

@@ -44,7 +44,7 @@ export type AgentBrowserOptions = {
   /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT) ; `null` : le nœud distant impose son egress. */
   readonly egressServer: string | null;
   /** Egress de l'essai : `policy` posée à la création d'une session distante `dedicated`, `attach` après la connexion (tâche 4.3). */
-  readonly egress?: Pick<RunEgress, 'attach' | 'policy'>;
+  readonly egress?: Pick<RunEgress, 'attach' | 'policy' | 'capabilities'>;
   readonly allowedHosts: readonly string[];
   readonly allowWriteActions: boolean;
   readonly pacer?: RequestPacer;

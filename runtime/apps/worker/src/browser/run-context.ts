@@ -32,6 +32,7 @@
 // créer un contexte ou une page de run (`newContext`, `newPage`) : `assert_all_browser_contexts_guarded`
 // (browser/guarded-contexts.unit.test.ts) échoue sur tout autre appel du code du worker et du paquet agent.
 import { buildUserAgent } from '@runtime/core/access';
+import type { ProviderCapabilities } from '@sym/contracts/browser';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
 import { browserEngineIdentity } from './engine-identity.js';
 import { installPageGuard } from './page-guard.js';
@@ -41,6 +42,18 @@ import { engineUserAgentMetadata, installUserAgentOverride, NO_MEDIA_EMULATION }
 /** Option `proxy` de `newContext` : le proxy d'egress local de l'essai ; aucune quand le nœud distant impose le sien (`null`). */
 export function runContextProxy(egressServer: string | null): { proxy?: { server: string } } {
   return egressServer === null ? {} : { proxy: { server: egressServer } };
+}
+
+/**
+ * Gardes que le worker tient lui-même quand le fournisseur ne les tient pas (04g §3 et §4, tâches 4.6 et 4.7) : une option
+ * explicite l'emporte ; sinon les capacités de l'egress de l'essai (`egressPolicy` ou `launchArgs` absentes : fournisseur `cdp`).
+ */
+export function runContextGuards(options: Pick<RunContextOptions, 'egressEnforcesDomains' | 'neutralizeLaunchFeatures' | 'egress'>): { egressEnforcesDomains: boolean; neutralizeLaunchFeatures: boolean } {
+  const capabilities = options.egress?.capabilities;
+  return {
+    egressEnforcesDomains: options.egressEnforcesDomains ?? capabilities?.egressPolicy !== false,
+    neutralizeLaunchFeatures: options.neutralizeLaunchFeatures ?? capabilities?.launchArgs === false,
+  };
 }
 
 export type RunContextOptions = {
@@ -61,7 +74,7 @@ export type RunContextOptions = {
    * Egress de l'essai : avec `egressServer: null` (fournisseur distant), `egress.attach(browser)` pose la politique de l'essai
    * sur la session du navigateur AVANT tout contexte (tâche 4.3, 04e §3) ; un refus du nœud arrête l'ouverture.
    */
-  readonly egress?: { attach?(browser: Browser): Promise<void> };
+  readonly egress?: { attach?(browser: Browser): Promise<void>; capabilities?: ProviderCapabilities };
   /** Domaines de l'API (`allowed_hosts`) : toute autre requête du navigateur est coupée. */
   readonly allowedHosts: readonly string[];
   /** Portées de site admises en plus (domaine et sous-domaines) : reconnaissance de l'enquête seulement (2.1, 04b §2). */
@@ -159,6 +172,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     options.onViolation?.(host, request);
   };
   const dedicated = options.dedicated === true;
+  const guards = runContextGuards(options);
   // Chromium dédié : son User-Agent relève du lancement (aucun contexte n'est créé ici) ; un userAgent serait ignoré.
   if (dedicated && options.userAgent !== undefined) throw new Error('contexte de run dédié : userAgent refusé (il relève du lancement du Chromium dédié)');
   const userAgent = options.userAgent ?? buildUserAgent({ engine: browserEngineIdentity(browser) });
@@ -239,7 +253,7 @@ export async function openRunContext(browser: Browser, options: RunContextOption
       ws.connectToServer();
     });
     // Garde des documents (workers blob:/data:, règles de spéculation), avant la création de la page.
-    await installPageGuard(context, { neutralizeLaunchFeatures: options.neutralizeLaunchFeatures === true });
+    await installPageGuard(context, { neutralizeLaunchFeatures: guards.neutralizeLaunchFeatures });
     // Chromium dédié : sa page initiale (about:blank, rien chargé) devient la page du run ; toute autre est fermée.
     const page = dedicated ? (context.pages()[0] ?? (await context.newPage())) : await context.newPage();
     runPage = page;
@@ -250,9 +264,9 @@ export async function openRunContext(browser: Browser, options: RunContextOption
     // Saut de redirection hors domaines : coupé par la garde elle-même quand l'egress de SYM ne le voit pas (tâche 4.6), compté
     // comme toute coupure du verrou de domaines.
     await installRequestGuard(context, page, (url) => hostAllowed(url, options.allowedHosts, options.allowedHostSuffixes), checkRequest, {
-      cutOffsiteRedirects: options.egressEnforcesDomains === false,
+      cutOffsiteRedirects: !guards.egressEnforcesDomains,
       onDomainBlocked: (url) => note(url),
-      neutralizeLaunchFeatures: options.neutralizeLaunchFeatures === true,
+      neutralizeLaunchFeatures: guards.neutralizeLaunchFeatures,
     });
     context.on('page', (other) => {
       if (other !== page) void other.close().catch(() => undefined);

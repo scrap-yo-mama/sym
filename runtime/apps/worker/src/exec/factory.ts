@@ -11,9 +11,10 @@ import { costCapsFromEnv, DomainPacer, rejectionThresholdsFromEnv, type SandboxE
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
 import { identityFromEnv, instanceContactEnvInvalid, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
-import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
+import { PgPacingStore, publishBrowserProvider, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
+import { CDP_ABSENT_CAPABILITIES } from '../browser/provider-cdp.js';
 import { createLocalProvider } from '../browser/provider-local.js';
 import type { RunEgress } from '../browser/run-egress.js';
 import { detectProvider } from '../browser/provider-detect.js';
@@ -147,9 +148,20 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       const launchProxyUrl = launchProxy.url;
       provider = await detectProvider(env, fetch, { createLocal: () => createLocalProvider({ launchProxyUrl, env }) });
       logger.info({ kind: provider.kind, capabilities: provider.capabilities }, 'fournisseur de navigateur');
+      // Publié pour la console (Réglages > Navigateur) : genre, capacités, activation ; jamais d'adresse ni de secret. Best-effort.
+      try {
+        await publishBrowserProvider(pool, { kind: provider.kind, capabilities: provider.capabilities, genericCdpEnabled: env['BROWSER_ALLOW_GENERIC_CDP'] === 'true' });
+      } catch (error) {
+        logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'fournisseur de navigateur : publication impossible');
+      }
+      if (provider.kind === 'cdp') {
+        logger.warn({ absentCapabilities: CDP_ABSENT_CAPABILITIES }, 'navigateur CDP générique : capacités côté navigateur absentes (la garde SSRF, le verrou de domaines et le masquage restent tenus par SYM)');
+      }
       browsers = new BrowserPool({
         size: config.browserConcurrency,
         launch: provider.launchShared,
+        // Pas de contexte neuf par run (fournisseur `cdp`) : une session fournisseur par run, le navigateur est rendu après chaque run.
+        ...(provider.capabilities.freshContextPerRun ? {} : { recycleAfterRuns: 1 }),
         ...(limit === undefined ? {} : { memoryHigh: () => (cgroupMemoryWorkingSetBytes() ?? 0) > limit * BROWSER_MEMORY_RECYCLE_RATIO }),
         onEvent: (event) => logger.info(event, 'navigateur'),
       });

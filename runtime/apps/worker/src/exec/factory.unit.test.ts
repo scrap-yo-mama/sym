@@ -46,6 +46,23 @@ describe('productionExecutorFactory', () => {
     await pool.end();
   });
 
+  test('cdp_requires_explicit_opt_in : wss:// sans activation, démarrage refusé ; avec activation, fournisseur cdp journalisé, capacités absentes déclarées et aucun secret (G4, G5, G6)', async () => {
+    const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
+    const url = 'wss://zz-cdp.example/devtools?token=zz_url_token_secret';
+    await expect(productionExecutorFactory({ BROWSER_URL: url })({ pool, config: loadWorkerConfig(env()), checked, logger })).rejects.toThrow(/BROWSER_ALLOW_GENERIC_CDP/);
+    const infos: unknown[][] = [];
+    const spy = pino({ level: 'silent' });
+    spy.info = ((...args: unknown[]) => void infos.push(args)) as typeof spy.info;
+    spy.warn = ((...args: unknown[]) => void infos.push(args)) as typeof spy.warn;
+    const handle = await productionExecutorFactory({ BROWSER_URL: url, BROWSER_ALLOW_GENERIC_CDP: 'true', BROWSER_API_KEY: 'zz_token_secret_value' })({ pool, config: loadWorkerConfig(env()), checked, logger: spy });
+    expect(infos.find((args) => typeof args[1] === 'string' && args[1].includes('fournisseur de navigateur'))?.[0]).toMatchObject({ kind: 'cdp', capabilities: { egressPolicy: false, launchArgs: false } });
+    expect(infos.some((args) => typeof args[1] === 'string' && args[1].includes('CDP'))).toBe(true);
+    expect(JSON.stringify(infos)).not.toContain('zz_url_token_secret');
+    expect(JSON.stringify(infos)).not.toContain('zz_token_secret_value');
+    await handle.close?.();
+    await pool.end();
+  });
+
   test('sans BROWSER_URL : fournisseur local journalisé (G1)', async () => {
     const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
     const infos: unknown[][] = [];

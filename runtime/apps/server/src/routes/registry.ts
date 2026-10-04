@@ -145,6 +145,7 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'PUT', url: '/api/settings/security', auth: 'session', permission: 'settings:security:write' },
   { method: 'GET', url: '/api/settings/identity', auth: 'session', permission: 'settings:identity:write' },
   { method: 'PUT', url: '/api/settings/identity', auth: 'session', permission: 'settings:identity:write' },
+  { method: 'GET', url: '/api/settings/browser', auth: 'session', permission: 'settings:identity:write' },
   { method: 'GET', url: '/api/settings/sso', auth: 'session', permission: 'settings:sso:write' },
   { method: 'PUT', url: '/api/settings/sso', auth: 'session', permission: 'settings:sso:write' },
   // API REST (tâche 3.1, 05 § 4.2) : catalogue, enquête, runs, datasets, flux SSE, planifications, webhooks, réglages,

@@ -1989,6 +1989,24 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+  /api/settings/browser:
+    get:
+      operationId: getBrowserSettings
+      security:
+        - sessionCookie: []
+      tags: [settings]
+      summary: "Fournisseur de navigateur du worker (admin ou owner, lecture seule) : genre, capacités côté navigateur, activation du CDP générique"
+      responses:
+        '200':
+          description: Fournisseur publié par le worker, ou null pour chaque champ tant qu'aucun worker ne l'a publié.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserSettings'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
   /api/settings/sso:
     get:
       operationId: getSsoSettings
@@ -6280,6 +6298,38 @@ components:
           type: integer
           minimum: 1
           maximum: 120
+    BrowserSettings:
+      type: object
+      additionalProperties: false
+      required: [kind, capabilities, generic_cdp_enabled]
+      properties:
+        kind:
+          type: [string, 'null']
+          enum: [local, sym-browser, cdp, null]
+          description: "Fournisseur de navigateur du worker ; null tant qu'aucun worker ne l'a publié."
+        capabilities:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [egressPolicy, launchArgs, freshContextPerRun, killBeforeDetach, sandboxProbe, engineUserAgent, privateLatency]
+          description: Capacités côté navigateur du fournisseur (04g §1) ; une capacité absente est déclarée, jamais simulée.
+          properties:
+            egressPolicy:
+              type: boolean
+            launchArgs:
+              type: boolean
+            freshContextPerRun:
+              type: boolean
+            killBeforeDetach:
+              type: boolean
+            sandboxProbe:
+              type: boolean
+            engineUserAgent:
+              type: boolean
+            privateLatency:
+              type: boolean
+        generic_cdp_enabled:
+          type: [boolean, 'null']
+          description: "BROWSER_ALLOW_GENERIC_CDP=true sur le worker (variable du worker, jamais un réglage de la console)."
     IdentitySettings:
       type: object
       additionalProperties: false

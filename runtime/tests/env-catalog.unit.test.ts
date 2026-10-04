@@ -68,7 +68,7 @@ describe('assert_env_docs_in_sync : le catalogue est la source unique (14 § 2)'
       expect(variable.description.length, variable.name).toBeGreaterThan(10);
       if (variable.file) expect(variable.secret, `${variable.name} accepte _FILE sans être un secret`).toBe(true);
     }
-    expect(ENV_CATALOG.filter((v) => v.file).map((v) => v.name).sort()).toEqual(['ADMIN_BOOTSTRAP_TOKEN', 'BROWSER_API_KEY', 'MASTER_KEY', 'MASTER_KEY_PREVIOUS', 'METRICS_TOKEN']);
+    expect(ENV_CATALOG.filter((v) => v.file).map((v) => v.name).sort()).toEqual(['ADMIN_BOOTSTRAP_TOKEN', 'BROWSER_API_KEY', 'BROWSER_CDP_PROJECT_ID', 'MASTER_KEY', 'MASTER_KEY_PREVIOUS', 'METRICS_TOKEN']);
   });
 
   test('.env.example ne contient que des valeurs qui FONT ÉCHOUER le démarrage (aucune ne sert d’exemple utilisable)', () => {

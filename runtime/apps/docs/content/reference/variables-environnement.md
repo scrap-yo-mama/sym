@@ -11,7 +11,7 @@ Tout le reste (modèle IA, proxys, courrier sortant, authentification unique, al
 
 ## Règles communes
 
-- **Secrets en fichier** : `MASTER_KEY`, `MASTER_KEY_PREVIOUS`, `ADMIN_BOOTSTRAP_TOKEN`, `METRICS_TOKEN` et `BROWSER_API_KEY` acceptent le suffixe `_FILE` (`MASTER_KEY_FILE=/run/secrets/master_key`), pratique pour les secrets Docker. Poser la variable **et** son `_FILE` est refusé.
+- **Secrets en fichier** : `MASTER_KEY`, `MASTER_KEY_PREVIOUS`, `ADMIN_BOOTSTRAP_TOKEN`, `METRICS_TOKEN`, `BROWSER_API_KEY` et `BROWSER_CDP_PROJECT_ID` acceptent le suffixe `_FILE` (`MASTER_KEY_FILE=/run/secrets/master_key`), pratique pour les secrets Docker. Poser la variable **et** son `_FILE` est refusé.
 - **Variables retirées** : une fois lues, les variables sensibles sont retirées de l'environnement du processus, pour qu'un code tiers ou un processus enfant ne puisse pas les relire. Le bac à sable démarre avec un environnement vide.
 - **Valeur invalide** : le démarrage est refusé avec un message qui nomme la variable.
 - **Durées** en secondes (`_SECONDS`) ou en jours (`_DAYS`), nombres positifs.
@@ -67,7 +67,12 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `BROWSER_CONCURRENCY` | déduit de la mémoire du conteneur | worker | exécutions navigateur simultanées : `max(1, floor((limite − 0,5 Go) / 1,5 Go))`, soit 1 pour 2 Go et 2 pour 4 Go | lue |
 | `DISABLE_BROWSER` | `false` | worker | aucun Chromium : les exécutions navigateur sont refusées | lue |
 | `BROWSER_URL` | absente : Chromium local du worker | worker | navigateur à utiliser : `http(s)://hôte[:port]` ou `hôte:port` sans schéma vers SYM Browser, reconnu par `GET /v1/version` ; le worker démarre même si SYM Browser ne répond pas encore, les runs navigateur attendent son démarrage | lue |
-| `BROWSER_API_KEY` | aucune | worker | clé d'API de SYM Browser (requise avec `BROWSER_URL`), masquée dans les journaux ; accepte `BROWSER_API_KEY_FILE` | lue |
+| `BROWSER_API_KEY` | aucune | worker | clé d'API de SYM Browser (requise avec `BROWSER_URL`), clé du fournisseur d'un adaptateur CDP, ou jeton facultatif d'une URL CDP fixe ; masquée dans les journaux ; accepte `BROWSER_API_KEY_FILE` | lue |
+| `BROWSER_ALLOW_GENERIC_CDP` | absente | worker | `true` active le fournisseur `cdp` (navigateur d'un autre fournisseur derrière une adresse CDP) ; voir [Brancher un navigateur CDP](../guides/navigateur-cdp.md) | lue |
+| `BROWSER_CDP_ADAPTER` | absente : URL fixe | worker | `browserbase` ou `steel` : une session par run créée par l'API du fournisseur (`BROWSER_URL` : son API) | lue |
+| `BROWSER_CDP_PROJECT_ID` | aucune | worker | identifiant de projet de l'adaptateur `browserbase` ; accepte `BROWSER_CDP_PROJECT_ID_FILE` | lue |
+| `BROWSER_CDP_SESSION_TIMEOUT_SECONDS` | 900 | worker | durée maximale d'une session chez le fournisseur CDP, de 60 à 21600 | lue |
+| `BROWSER_CDP_ACCOUNT_PROXY` | `false` | worker | `true` demande au fournisseur CDP le proxy de son compte | lue |
 | `SHUTDOWN_TIMEOUT_SECONDS` | 30 | worker | délai d'arrêt propre | lue |
 | `RUN_BUDGET_SECONDS` | 900 | worker | durée maximale d'un run | lue |
 | `RUN_HEARTBEAT_SECONDS` | 10 | worker | battement d'un run actif | lue |

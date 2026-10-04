@@ -3,7 +3,7 @@
 // (fournisseur `local`) ou egress distant (fournisseur `sym-browser`, `server: null`). Le type de `@runtime/core` reste celui du
 // proxy local ; celui-ci l'élargit de ce que le fournisseur distant ajoute.
 import type { BrowserEgress } from '@runtime/core/net';
-import type { EgressPolicy } from '@sym/contracts/browser';
+import type { EgressPolicy, ProviderCapabilities } from '@sym/contracts/browser';
 import type { Browser } from 'playwright-core';
 
 export type RunEgress = Omit<BrowserEgress, 'server'> & {
@@ -13,6 +13,8 @@ export type RunEgress = Omit<BrowserEgress, 'server'> & {
   attach?(browser: Browser): Promise<void>;
   /** Fournisseur distant : politique de l'essai, posée à la création d'une session `dedicated`. */
   readonly policy?: EgressPolicy;
+  /** Fournisseur qui n'applique pas l'egress de SYM au navigateur (`cdp`) : capacités absentes, pour les gardes du worker (4.6). */
+  readonly capabilities?: ProviderCapabilities;
   /** Fournisseur distant : relit l'état final de l'époque (octets, demandes, dépassement) avant que l'exécuteur lise `usage()`. */
   settle?(): Promise<void>;
 };

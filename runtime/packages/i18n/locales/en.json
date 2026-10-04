@@ -674,6 +674,7 @@
       "account": "My account",
       "security": "Security",
       "robot": "Robot identity",
+      "browser": "Browser",
       "sso": "SSO"
     },
     "adminOnly": "Only an admin of your instance can read or change these settings.",
@@ -2006,6 +2007,46 @@
       "contactUnset": "Not set here: the worker uses its INSTANCE_CONTACT variable. A contact is needed before the first investigation.",
       "contactFromEnv": "Not set here: the worker announces its INSTANCE_CONTACT variable, {contact}. Type a contact and save to replace it.",
       "save": "Save"
+    },
+    "browser": {
+      "title": "Browser",
+      "intro": "The browser the worker drives, and what its provider brings. Turning on a CDP provider is a worker variable, not a setting on this page.",
+      "provider": "Current provider",
+      "providerLocal": "The worker's local Chromium",
+      "providerSymBrowser": "SYM Browser",
+      "providerCdp": "Another provider's CDP browser",
+      "providerUnknown": "No worker has reported its browser yet. It appears once a worker has started.",
+      "activation": "Generic CDP browser",
+      "activationOn": "On: BROWSER_ALLOW_GENERIC_CDP=true on the worker.",
+      "activationOff": "Off: a generic CDP browser is refused when the worker starts. To turn it on, set BROWSER_ALLOW_GENERIC_CDP=true on the worker.",
+      "bubble": "Your browser comes from a CDP provider. Here are the browser-side capabilities it has and lacks.",
+      "tableTitle": "Browser-side capabilities",
+      "colCapability": "Capability",
+      "colSymBrowser": "SYM Browser",
+      "colCdp": "CDP provider",
+      "colWorker": "This worker",
+      "present": "present",
+      "absent": "absent",
+      "unknown": "unknown",
+      "responsibleUse": "Choosing a third-party provider, and using it, is up to you.",
+      "responsibleUseLink": "Responsible use",
+      "capabilities": {
+        "egress": "Per-session egress and network-level SSRF guard",
+        "domainLock": "Domain lock on redirect hops and sub-resources, in the network",
+        "budget": "Per-session byte budget (run cost cap)",
+        "launchArgs": "Launch arguments (prerender, WebSocketStream)",
+        "closedProxy": "Closed launch proxy (silent idle browser)",
+        "freshContext": "Fresh context per run with an enforced proxy",
+        "killBeforeDetach": "“Kill before detach” order",
+        "sandbox": "Verified sandbox",
+        "userAgent": "Real User-Agent set at launch",
+        "latency": "Guard latency within the expected thresholds"
+      },
+      "cdpNotes": {
+        "domainLock": "the worker cuts hops over CDP",
+        "launchArgs": "the worker neutralizes WebSocketStream with an init script",
+        "freshContext": "one provider session per run"
+      }
     },
     "sso": {
       "title": "Single sign-on (OIDC)",

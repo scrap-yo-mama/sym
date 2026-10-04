@@ -1058,6 +1058,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/browser": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fournisseur de navigateur du worker (admin ou owner, lecture seule) : genre, capacités côté navigateur, activation du CDP générique */
+        get: operations["getBrowserSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/sso": {
         parameters: {
             query?: never;
@@ -3247,6 +3264,25 @@ export interface components {
             allowed_email_domains: string[];
             api_key_max_lifetime_days: number;
             audit_retention_months?: number;
+        };
+        BrowserSettings: {
+            /**
+             * @description Fournisseur de navigateur du worker ; null tant qu'aucun worker ne l'a publié.
+             * @enum {string|null}
+             */
+            kind: "local" | "sym-browser" | "cdp" | null;
+            /** @description Capacités côté navigateur du fournisseur (04g §1) ; une capacité absente est déclarée, jamais simulée. */
+            capabilities: {
+                egressPolicy: boolean;
+                launchArgs: boolean;
+                freshContextPerRun: boolean;
+                killBeforeDetach: boolean;
+                sandboxProbe: boolean;
+                engineUserAgent: boolean;
+                privateLatency: boolean;
+            } | null;
+            /** @description BROWSER_ALLOW_GENERIC_CDP=true sur le worker (variable du worker, jamais un réglage de la console). */
+            generic_cdp_enabled: boolean | null;
         };
         IdentitySettings: {
             /** @description Réglage admin ; null tant qu'il n'est pas posé (le worker retombe sur IDENTIFY_INSTANCE, puis sur désactivé). */
@@ -5872,6 +5908,28 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    getBrowserSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fournisseur publié par le worker, ou null pour chaque champ tant qu'aucun worker ne l'a publié. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSettings"];
+                };
+            };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
         };

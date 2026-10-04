@@ -23,6 +23,7 @@ import { webhookRoutes } from './routes/webhooks.js';
 import { authRoutes } from './routes/auth.js';
 import { extensionRoutes } from './routes/extension.js';
 import { guard, notFound, sendError } from './routes/guard.js';
+import { browserSettingsRoutes } from './routes/browser-settings.js';
 import { identityRoutes } from './routes/identity.js';
 import { invitationRoutes } from './routes/invitations.js';
 import { mcpRoutes, mcpTransportGuard } from './routes/mcp.js';
@@ -139,6 +140,7 @@ export function buildServer(
   responsibleUseRoutes(app, ctx);
   openapiRoutes(app);
   identityRoutes(app, ctx);
+  browserSettingsRoutes(app, ctx);
   // Serveur MCP (tâche 3.2, 05 § 1) : absent si DISABLE_MCP.
   mcpRoutes(app, ctx);
   const gateway = ctx.tunnel;

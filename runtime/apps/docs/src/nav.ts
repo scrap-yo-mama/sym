@@ -30,6 +30,7 @@ export const PAGES: readonly PageEntry[] = [
   { path: 'guides/docker-compose', quadrant: 'guides', title: 'Déployer avec Docker Compose', summary: 'Un VPS ou Coolify : PostgreSQL, migration, serveur et worker, TLS par un proxy inverse.' },
   { path: 'guides/autres-hebergeurs', quadrant: 'guides', title: 'Railway, Heroku et autres hébergeurs', summary: 'Best-effort : ce qui est attendu de n’importe quel hébergeur de conteneurs et ses pièges connus.' },
   { path: 'guides/modele-llm', quadrant: 'guides', title: 'Brancher son modèle IA', summary: 'Un fournisseur compatible OpenAI choisi par vous, ses clés chiffrées, ses capacités sondées.' },
+  { path: 'guides/navigateur-cdp', quadrant: 'guides', title: 'Brancher un navigateur CDP', summary: 'Le navigateur d’un autre fournisseur derrière une adresse CDP : activation, capacités présentes et absentes, adaptateurs.' },
   { path: 'guides/proxys', quadrant: 'guides', title: 'Configurer des proxys', summary: 'Proxys serveur et résidentiels définis par l’administrateur, et ce qu’ils ne font jamais.' },
   { path: 'guides/extension-et-tunnel', quadrant: 'guides', title: 'Extension Chrome et tunnel', summary: 'Appairer l’extension, connecter un site avec votre propre session, exécuter depuis votre navigateur.' },
   { path: 'guides/sauvegarde', quadrant: 'guides', title: 'Sauvegarder et restaurer', summary: 'Deux objets à garder : la base et la clé maîtresse ; restauration sur une base neuve.' },
