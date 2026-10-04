@@ -40,6 +40,26 @@ describe('prompt du rôle investigate', () => {
     expect(investigatePromptVersion).toMatch(/^investigate-[0-9a-f]{12}$/);
   });
 
+  test('bloc HTML répété (gisement dom, constat Janssens) : « html blocks », noms et formes des emplacements ; ni sous-sélecteur, ni valeur', () => {
+    const dom = candidate({
+      id: 'c2',
+      from: 'dom',
+      request: { method: 'GET', url: 'https://shop.test/nos-maisons/?ref=zz-secret-ref' },
+      records: 'article.item-bien',
+      count: 10,
+      skeleton: { '$.a_href': 'link;shape=url;present=10/10', '$.li': 'text;shape=area;present=9/10;suffix=m²' },
+      dom: { slots: [{ name: 'li', css: 'li.leading-3:not(.pl-2)', attr: 'text', shape: 'area', present: 9, prefix: null, suffix: 'm²', decimal: '.' }], pagination: { type: 'page_param', param: 'url.path', path_pattern: '/nos-maisons/page/{page}/', start: 1, last: 52 }, rendered: false },
+    });
+    const [system, user] = investigateMessages({ description: 'liste des biens', candidates: [dom] }, 'tok456');
+    expect(String(system!.content)).toContain('"html blocks"');
+    const text = String(user!.content);
+    expect(text).toContain('"source":"html blocks in https://shop.test/nos-maisons/"');
+    expect(text).toContain('"$.li":"text;shape=area;present=9/10;suffix=m²"');
+    expect(text).not.toContain('li.leading-3');
+    expect(text).not.toContain('zz-secret-ref');
+    expect(text).not.toContain('path_pattern');
+  });
+
   test('réponse structurée validée ; une réponse hors schéma est refusée par la couche LLM', async () => {
     const fake = await createFakeProvider();
     try {

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Reconnaissance (tâche 2.1, 04 §4, S5) : à partir de ce qu'une passe sur la page a capturé (trafic XHR / fetch en E3,
-// document servi et rendu), les GISEMENTS de données : réponses JSON du site et blobs embarqués (`__NEXT_DATA__`, Nuxt,
-// état Apollo, JSON-LD), cherchés AVANT de conclure « pas d'API ». Chaque gisement porte des tableaux d'enregistrements
+// document servi et rendu), les GISEMENTS de données dans l'ordre de 04b §2 : réponses JSON du site, blobs embarqués
+// (`__NEXT_DATA__`, Nuxt, état Apollo, JSON-LD), puis BLOCS RÉPÉTÉS du DOM (liste HTML : cartes de même balise et mêmes
+// classes, emplacements vérifiés, pagination détectée, dom.ts), cherchés AVANT de conclure « pas d'API ». Chaque gisement porte des tableaux d'enregistrements
 // (chemin JSONPath RFC 9535), leur nombre, leur taille mesurée et un SQUELETTE (chemins et types du premier
 // enregistrement, aucune valeur) : c'est tout ce que le LLM d'enquête verra du site (08 §4, 17 §6 ; une valeur de la
 // page n'est jamais une consigne). Une requête qui porte un jeton ou une signature calculés côté client rend la voie
@@ -11,6 +12,7 @@ import type { Document } from 'domhandler';
 import { decodeEmbedded, type BlobKind, type BlobLocator } from '../dsl/blobs.js';
 import { elementAttribute, parseHtml, selectElements } from '../dsl/css.js';
 import { DEFAULT_DSL_LIMITS, type DslLimits } from '../dsl/limits.js';
+import { analyzeDom, slotDescription, type DomPagination, type DomSlot } from './dom.js';
 import { narrativeUrl } from './events.js';
 
 /** Un échange capturé pendant la reconnaissance (requête de données de la page, ou sonde statique). */
@@ -40,15 +42,23 @@ export type ReconCapture = {
 /** Squelette d'un enregistrement : chemin relatif (`$.a.b`) → type JSON. Aucune valeur. */
 export type RecordSkeleton = Readonly<Record<string, string>>;
 
+/** Bloc répété du document (gisement `dom`) : emplacements vérifiés, pagination détectée ; aucune valeur d'un enregistrement. */
+export type DomCandidateInfo = {
+  readonly slots: readonly DomSlot[];
+  readonly pagination: DomPagination | null;
+  /** Bloc lu dans le DOM RENDU par Chromium (absent du document servi) : E1 ne le verra pas, E3 si. */
+  readonly rendered: boolean;
+};
+
 export type DataCandidate = {
-  /** `c1`, `c2`… dans l'ordre des sources de 04b §2 : API JSON, puis blob embarqué. */
+  /** `c1`, `c2`… dans l'ordre des sources de 04b §2 : API JSON, puis blob embarqué, puis blocs répétés du DOM. */
   readonly id: string;
-  readonly from: 'response' | 'embedded';
+  readonly from: 'response' | 'embedded' | 'dom';
   /** Requête de données (gisement `response`) ou page qui porte le blob (`embedded`). */
   readonly request: { readonly method: 'GET' | 'POST'; readonly url: string; readonly body_json?: unknown };
   readonly locator?: BlobLocator;
   readonly host: string;
-  /** JSONPath des enregistrements (RFC 9535). */
+  /** JSONPath des enregistrements (RFC 9535) ; sélecteur CSS des blocs pour un gisement `dom`. */
   readonly records: string;
   readonly count: number;
   /** Octets de la réponse (ou du document) qui porte le gisement. */
@@ -56,6 +66,8 @@ export type DataCandidate = {
   readonly skeleton: RecordSkeleton;
   /** Voie refusée sans tentative : paramètre calculé côté client (signature, jeton). */
   readonly unsupported?: 'client_signature';
+  /** Gisement `dom` : emplacements (clés `$.<nom>` du squelette) et pagination détectés par le code. */
+  readonly dom?: DomCandidateInfo;
 };
 
 /** Nombre de gisements gardés au plus (les plus gros tableaux d'abord). */
@@ -270,7 +282,7 @@ function blobsOf(doc: Document, limits: DslLimits): { locator: BlobLocator; valu
 }
 
 /**
- * Gisements d'une capture, dans l'ordre de 04b §2 (API JSON, puis blob embarqué). `allowedHosts` : seuls les échanges
+ * Gisements d'une capture, dans l'ordre de 04b §2 (API JSON, puis blob embarqué, puis blocs répétés du DOM). `allowedHosts` : seuls les échanges
  * vers un domaine de l'API comptent (une sous-ressource tierce n'est jamais un gisement).
  */
 export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly string[], limits: DslLimits = DEFAULT_DSL_LIMITS): DataCandidate[] {
@@ -336,8 +348,27 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
         }
       }
     }
+    // Blocs répétés du DOM (04b §2, troisième source) : document servi d'abord (E1 le lit tel quel), sinon DOM rendu.
+    const served = analyzeDom(doc.html, doc.url, limits);
+    const rendered = served === null && doc.renderedHtml !== null ? analyzeDom(doc.renderedHtml, doc.url, limits) : null;
+    const dom = served ?? rendered;
+    if (dom !== null) {
+      candidates.push({
+        from: 'dom',
+        request: { method: 'GET', url: doc.url },
+        host: docHost,
+        records: dom.blocks.records,
+        count: dom.blocks.count,
+        bytes: doc.bytes,
+        skeleton: Object.fromEntries(dom.blocks.slots.map((slot) => [`$.${slot.name}`, slotDescription(slot, dom.blocks.count)])),
+        dom: { slots: dom.blocks.slots, pagination: dom.pagination, rendered: served === null },
+      });
+    }
   }
-  return candidates.slice(0, MAX_CANDIDATES).map((c, i) => ({ id: `c${i + 1}`, ...c }));
+  // Le bloc du DOM garde sa place même derrière beaucoup de réponses JSON : il est la seule voie sans LLM d'une liste HTML.
+  const domIndex = candidates.findIndex((c) => c.from === 'dom');
+  const kept = domIndex < MAX_CANDIDATES ? candidates.slice(0, MAX_CANDIDATES) : [...candidates.slice(0, MAX_CANDIDATES - 1), candidates[domIndex]!];
+  return kept.map((c, i) => ({ id: `c${i + 1}`, ...c }));
 }
 
 const SCRIPT_URL_PATTERNS: readonly RegExp[] = [
@@ -406,8 +437,12 @@ function queryNames(url: string): string[] {
 
 export function storedCandidate(c: DataCandidate): StoredCandidate {
   const body = c.request.body_json;
+  // Gisement `dom` : ni emplacements ni libellés constants dans l'état (sélecteurs et forme relus au run suivant).
+  const { dom, ...rest } = c;
+  const skeleton = dom === undefined ? c.skeleton : Object.fromEntries(Object.entries(c.skeleton).map(([k, v]) => [k, v.split(';').filter((part) => !/^(prefix|suffix)=/.test(part)).join(';')]));
   return {
-    ...c,
+    ...rest,
+    skeleton,
     request: {
       method: c.request.method,
       url: narrativeUrl(c.request.url),
