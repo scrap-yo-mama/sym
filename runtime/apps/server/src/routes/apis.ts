@@ -181,7 +181,15 @@ const PERSISTENCE_MESSAGE: Record<PersistenceNotEligibleReason | 'human_confirma
 const validateSchemaBody = {
   type: 'object',
   additionalProperties: false,
-  properties: { output_schema: { type: 'object' }, exclude_executions: executionList, wait_seconds: { type: 'integer', minimum: 0, maximum: 25 } },
+  properties: {
+    output_schema: { type: 'object' },
+    exclude_executions: executionList,
+    wait_seconds: { type: 'integer', minimum: 0, maximum: 25 },
+    // Consignes du client (constat Barnes) : texte de l'utilisateur, borné comme la description de l'API.
+    instructions: { type: 'string', maxLength: 2000 },
+    // Source candidate de la reconnaissance (D-124) : contrôlée contre l'état de l'enquête (`unknown_source`).
+    source_id: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,64}$' },
+  },
 } as const;
 
 const runBody = {
@@ -221,6 +229,15 @@ async function investigationUrlOf(db: Pick<pg.ClientBase, 'query'>, apiId: strin
 
 /** Erreur d'état d'enquête → code HTTP (05 § 4.3). */
 export function investigationError(reply: FastifyReply, error: InvestigationStateError): FastifyReply {
+  if (error.code === 'unknown_source') {
+    // `source_id` absent de la reconnaissance : la liste des identifiants valides, dans le message et dans la marche à suivre.
+    const valid = error.validSources ?? [];
+    const what =
+      valid.length === 0
+        ? 'The reconnaissance kept no usable source: call validate_schema again without source_id.'
+        : `Use one of the source ids found by the reconnaissance: ${valid.join(', ')}; or call validate_schema without source_id.`;
+    return reply.code(400).send({ error: { code: 'unknown_source', message: error.message, what_to_do: what, retryable: true } });
+  }
   const status = error.code === 'api_not_found' ? 404 : error.code === 'invalid_request' || error.code === 'invalid_schema' ? 400 : 409;
   return error.code === 'api_not_found' ? notFound(reply) : sendError(reply, status, error.code, error.message);
 }
@@ -577,7 +594,11 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
   });
 
   // ——— Enquête : validation du schéma, ré-enquête ———
-  app.post<{ Params: { id: string }; Body: { output_schema?: Record<string, unknown>; exclude_executions?: Execution[]; wait_seconds?: number }; Querystring: { wait?: number } }>(
+  app.post<{
+    Params: { id: string };
+    Body: { output_schema?: Record<string, unknown>; exclude_executions?: Execution[]; wait_seconds?: number; instructions?: string; source_id?: string };
+    Querystring: { wait?: number };
+  }>(
     '/api/apis/:id/validate-schema',
     { schema: { body: validateSchemaBody, querystring: waitQuery } },
     async (request, reply) => {
@@ -605,6 +626,8 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
             trigger: triggerOf(actor),
             ...(request.body.output_schema === undefined ? {} : { outputSchema: request.body.output_schema }),
             ...(request.body.exclude_executions === undefined ? {} : { excludeExecutions: request.body.exclude_executions }),
+            ...(request.body.instructions === undefined ? {} : { instructions: request.body.instructions }),
+            ...(request.body.source_id === undefined ? {} : { sourceId: request.body.source_id }),
           });
         }));
       } catch (error) {
@@ -612,7 +635,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         if (error instanceof InvestigationStateError) return investigationError(reply, error);
         throw error;
       }
-      await audit(ctx, request, actor, { action: 'api.schema_validated', targetType: 'api', targetId: api.id, outcome: 'success', meta: { corrected: request.body.output_schema !== undefined } });
+      await audit(ctx, request, actor, { action: 'api.schema_validated', targetType: 'api', targetId: api.id, outcome: 'success', meta: { corrected: request.body.output_schema !== undefined, instructions: request.body.instructions !== undefined, source_id: request.body.source_id ?? null } });
       return runResponse(ctx, request, reply, actor, runId, waitSecondsOf(ctx, request.query.wait, request.body.wait_seconds));
     },
   );

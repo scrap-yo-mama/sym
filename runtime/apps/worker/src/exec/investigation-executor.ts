@@ -790,7 +790,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
               pageUrl,
               pageHost: host,
-              instruction: request.description,
+              instruction: agenticInstruction(request.description, state.validated_by === 'user' ? state.validation?.instructions : undefined),
               documentBytes: state.page?.document_bytes ?? 0,
               totalBytes: state.page?.total_bytes ?? 0,
             })
@@ -933,13 +933,28 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         // Voies agentiques essayables (E4 par le réseau, E6 avec Chromium) : un schéma sans gisement de données leur reste ouvert.
         const agenticOnly = deps.agentic === true && (rolePrice(config, 'extract') !== undefined || (deps.browsers !== null && rolePrice(config, 'agent') !== undefined));
         const fixed = state.validated_schema;
-        const remap = proposal !== undefined && fixed !== undefined && JSON.stringify(fixed) !== JSON.stringify(state.proposed_schema);
+        // Validation par l'appelant (constat Barnes) : schéma corrigé, consignes ou source choisie refont l'affectation des
+        // champs (rôle `investigate`, schéma validé) ; la source choisie limite les gisements montrés au modèle et construits.
+        const validation = !firstRun && state.validated_by === 'user' ? state.validation : undefined;
+        const mapCandidates = validation?.source_id === undefined ? candidates : candidates.filter((c) => c.id === validation.source_id);
+        if (validation !== undefined) {
+          await decide(EV.schemaValidated, {
+            by: 'user',
+            corrected: validation.corrected,
+            changes: validation.changes,
+            not_applied: validation.not_applied,
+            instructions: validation.instructions !== undefined,
+            ...(validation.source_id === undefined ? {} : { source_id: validation.source_id, source_found: mapCandidates.length > 0 }),
+          });
+        }
+        const remap =
+          proposal !== undefined && fixed !== undefined && (JSON.stringify(fixed) !== JSON.stringify(state.proposed_schema) || validation?.instructions !== undefined || validation?.source_id !== undefined);
         if (proposal === undefined || remap) {
           if (deps.llm === undefined || config === null || config.roles.investigate === undefined) {
             return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }, 'setup');
           }
-          if (!agenticOnly && candidates.filter((c) => c.unsupported === undefined).length === 0) {
-            return await finishFailed({ failure_class: 'extraction', retryable: false, detail: candidates.length > 0 ? 'client_signature' : 'no_data_source' }, 'reconnaissance');
+          if (!agenticOnly && mapCandidates.filter((c) => c.unsupported === undefined).length === 0) {
+            return await finishFailed({ failure_class: 'extraction', retryable: false, detail: mapCandidates.length > 0 ? 'client_signature' : 'no_data_source' }, 'reconnaissance');
           }
           let client: LlmClient;
           try {
@@ -960,9 +975,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           let args: Parameters<typeof investigateMessages>[0] = {
             description: request.description,
             ...(exampleOutput === undefined ? {} : { exampleOutput }),
-            candidates,
+            candidates: mapCandidates,
             accessFacts: accessFactsForPrompt(report),
             ...(fixed === undefined ? {} : { fixedSchema: fixed }),
+            ...(validation?.instructions === undefined ? {} : { ownerCorrections: validation.instructions }),
             ...(ctx.proseLocale === undefined ? {} : { proseLocale: ctx.proseLocale }),
             rules: renderRulesPrompt(ruled.resolved),
             ...(catalogMemory === '' ? {} : { catalogMemory }),
@@ -980,7 +996,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               const rendered = renderAgentBrief({ brief: briefRead.brief.content, digest: briefDigest, states: finalizeBriefHints(briefDigest, briefProbes, briefMatch, null), receivedAt: briefRead.brief.created_at, memoryKeys, maxTokens: briefConfig.maxTokens });
               return rendered.text === '' ? {} : { agentBrief: rendered.text };
             })()),
-            allowedCouples: previewCouples({ networks, browser: deps.browsers !== null, agentic: deps.agentic === true ? agenticPrices(config) : {}, candidates, documentBytes: state.page?.document_bytes ?? capture.document?.bytes ?? 0, totalBytes: state.page?.total_bytes ?? capture.totalBytes }),
+            allowedCouples: previewCouples({ networks, browser: deps.browsers !== null, agentic: deps.agentic === true ? agenticPrices(config) : {}, candidates: mapCandidates, documentBytes: state.page?.document_bytes ?? capture.document?.bytes ?? 0, totalBytes: state.page?.total_bytes ?? capture.totalBytes }),
           };
           // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
           // ferait dépasser `investigation_budget_usd` ; prix inconnu → aucun appel (08 §1, jamais 0).
@@ -1034,7 +1050,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             await ctx.log('info', 'catalog_memory', { entries: dossier.refs.length, tokens: dossier.tokens, truncated: dossier.truncated, sha256: dossier.sha256 });
           }
         }
-        const built = buildFromProposal(proposal!, candidates, fixed === undefined ? capture : null, { ...(fixed === undefined ? {} : { fixedSchema: fixed }), agenticOnly });
+        const built = buildFromProposal(proposal!, mapCandidates, fixed === undefined ? capture : null, { ...(fixed === undefined ? {} : { fixedSchema: fixed }), agenticOnly });
         if (!built.ok) {
           await event(EV.schemaProposed, { ok: false, reason: built.reason, rejected: built.rejected, budget: budgetView() });
           return await finishFailed({ failure_class: 'extraction', retryable: false, detail: built.reason }, 'schema');
@@ -1391,6 +1407,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           candidates: reconCandidates,
           accessFacts: accessFactsForPrompt(report),
           fixedSchema: outputSchema,
+          ...(state.validated_by === 'user' && state.validation?.instructions !== undefined ? { ownerCorrections: state.validation.instructions } : {}),
           ...(ctx.proseLocale === undefined ? {} : { proseLocale: ctx.proseLocale }),
           previousMapping: { paths: (previous?.paths ?? []).map((p) => ({ candidate: entry.source, field: p.field, path: p.path })), diff: fidelityDiff(issues) },
         };
@@ -1784,6 +1801,17 @@ function blockedParams(reasons: readonly string[] | undefined): Record<string, s
 }
 
 /** Prix des rôles agentiques (E4 : `extract`, E6 : `agent`) pour l'ensemble des couples autorisés. */
+/**
+ * Consigne des voies agentiques (E4, E6) : la demande, puis les consignes du client données à la validation du schéma
+ * (`validate_schema` `instructions`, constat Barnes), traitées comme elle ; la demande est raccourcie au besoin pour que les
+ * consignes tiennent sous le plafond de la spécification (2 000 caractères).
+ */
+function agenticInstruction(description: string, instructions: string | undefined): string {
+  if (instructions === undefined) return description;
+  const suffix = `\nOwner corrections: ${instructions}`.slice(0, 1_500);
+  return `${description.slice(0, Math.max(0, 2_000 - suffix.length))}${suffix}`;
+}
+
 function agenticPrices(config: LlmConfig | null): { extract?: TokenPrice | null; agent?: TokenPrice | null } {
   const extract = rolePrice(config, 'extract');
   const agent = rolePrice(config, 'agent');

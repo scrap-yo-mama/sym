@@ -53,6 +53,12 @@ export type InvestigateArgs = {
   readonly accessFacts?: Readonly<Record<string, boolean | number | string>>;
   /** Schéma validé par l'appelant (`validate_schema` avec correction) : le modèle ne fait plus que cartographier. */
   readonly fixedSchema?: unknown;
+  /**
+   * Consignes du client données à la validation du schéma (`validate_schema` `instructions`, constat Barnes) : texte de
+   * l'UTILISATEUR, jamais du site, traité comme la demande (masqué, borné à 2 000 caractères), placé après le
+   * schéma validé et avant les gisements. Il guide le choix de la source et l'affectation des champs ; il n'élargit rien.
+   */
+  readonly ownerCorrections?: string;
   /** `runs.locale` : langue de la prose destinée à l'humain (bloc `Language:` ajouté par le code, 21 § 4.5) ; sans elle, aucun bloc. */
   readonly proseLocale?: string;
   /** Règles résolues et liste des skills (`renderRulesPrompt`), puis skills lus (`renderSkillBodies`) : préfixe de confiance. */
@@ -127,7 +133,12 @@ export function investigateMessages(args: InvestigateArgs, token = randomBytes(1
   const user = [
     `REQUEST (from the API owner): ${maskTextForLlm(args.description).slice(0, MAX_REQUEST_CHARS)}`,
     example === '' ? '' : `EXAMPLE OUTPUT (from the API owner): ${example}`,
-    args.fixedSchema === undefined ? '' : `VALIDATED OUTPUT SCHEMA (use exactly these field names and types): ${JSON.stringify(args.fixedSchema).slice(0, 8_000)}`,
+    args.fixedSchema === undefined
+      ? ''
+      : `VALIDATED OUTPUT SCHEMA (use exactly these field names and types; each description says what the field must hold: map every field to the key or slot that matches its description): ${JSON.stringify(args.fixedSchema).slice(0, 8_000)}`,
+    args.ownerCorrections === undefined || args.ownerCorrections.trim() === ''
+      ? ''
+      : `OWNER CORRECTIONS (from the API owner, given when validating the schema; follow them to choose the source and map the fields): ${maskTextForLlm(args.ownerCorrections.replace(/\s+/g, ' ')).replace(/untrusted_candidates/gi, 'untrusted-candidates').slice(0, MAX_REQUEST_CHARS)}`,
     args.accessFacts === undefined ? '' : `ACCESS FACTS: ${JSON.stringify(args.accessFacts)}`,
     args.allowedCouples === undefined ? '' : `ALLOWED COUPLES (computed by the code; est_cost_usd per run): ${JSON.stringify(args.allowedCouples.slice(0, 40))}`,
     args.previousMapping === undefined

@@ -39,6 +39,29 @@ type TimelineStart = { kind: 'investigation'; step: 0; slug: string; domain: str
 export type TimelineAccess = { kind: 'access_report'; step: number; signal: 'allowed' | 'review' | null; cost_usd: number; ms: number };
 export type TimelineRecon = { kind: 'reconnaissance'; step: number; mode: string | null; sources: number; failure_class: string | null; cost_usd: number; ms: number };
 type TimelineSchema = { kind: 'schema'; step: null; ok: boolean; fields: number | null };
+/**
+ * Validation du schéma PAR L'UTILISATEUR (`validate_schema`, constat Barnes) : ce qui a changé par rapport à la proposition,
+ * ce qui n'est pas appliqué, consignes reçues (oui ou non, jamais leur texte), source choisie et retrouvée au run. Noms de
+ * champs du schéma du client, filtrés sur la forme d'un nom (20 par liste au plus) : jamais un texte du site.
+ */
+export type TimelineSchemaValidated = {
+  kind: 'schema_validated';
+  step: null;
+  corrected: boolean;
+  changes: {
+    added: string[];
+    removed: string[];
+    renamed: { from: string; to: string }[];
+    type_changed: string[];
+    description_changed: string[];
+    required_changed: string[];
+    other_changed: string[];
+  };
+  not_applied: { code: string; field: string }[];
+  instructions: boolean;
+  source_id: string | null;
+  source_found: boolean | null;
+};
 export type TimelineAttempt = {
   kind: 'attempt';
   step: number;
@@ -64,7 +87,46 @@ export type TimelineFinished = {
   stop_reason: string | null;
   failure_class: string | null;
 };
-export type TimelineEntry = TimelineStart | TimelineAccess | TimelineRecon | TimelineSchema | TimelineAttempt | TimelinePruned | TimelineAction | TimelineFinished;
+export type TimelineEntry = TimelineStart | TimelineAccess | TimelineRecon | TimelineSchema | TimelineSchemaValidated | TimelineAttempt | TimelinePruned | TimelineAction | TimelineFinished;
+
+/** Nom de champ d'un schéma (forme d'un nom, jamais une phrase) ; identifiant de source candidate. */
+const FIELD = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+const SOURCE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((n): n is string => typeof n === 'string' && FIELD.test(n)).slice(0, 20) : []);
+
+/** Entrée de la validation de l'utilisateur, d'après la charge de `schema.validated` (codes et noms filtrés). */
+export function schemaValidatedEntry(p: Rec): TimelineSchemaValidated {
+  const c = rec(p['changes']);
+  const renamed = (Array.isArray(c['renamed']) ? c['renamed'] : [])
+    .map(rec)
+    .filter((r) => typeof r['from'] === 'string' && FIELD.test(r['from']) && typeof r['to'] === 'string' && FIELD.test(r['to']))
+    .slice(0, 20)
+    .map((r) => ({ from: r['from'] as string, to: r['to'] as string }));
+  const notApplied = (Array.isArray(p['not_applied']) ? p['not_applied'] : [])
+    .map(rec)
+    .filter((n) => typeof n['field'] === 'string' && FIELD.test(n['field']))
+    .slice(0, 20)
+    .map((n) => ({ code: codeOf(n['code']), field: n['field'] as string }));
+  const source = typeof p['source_id'] === 'string' && SOURCE.test(p['source_id']) ? p['source_id'] : null;
+  return {
+    kind: 'schema_validated',
+    step: null,
+    corrected: p['corrected'] === true,
+    changes: {
+      added: names(c['added']),
+      removed: names(c['removed']),
+      renamed,
+      type_changed: names(c['type_changed']),
+      description_changed: names(c['description_changed']),
+      required_changed: names(c['required_changed']),
+      other_changed: names(c['other_changed']),
+    },
+    not_applied: notApplied,
+    instructions: p['instructions'] === true,
+    source_id: source,
+    source_found: source === null || typeof p['source_found'] !== 'boolean' ? null : p['source_found'],
+  };
+}
 
 /** Phase courante d'une enquête, d'après ses événements (codes de `phase.started`, `done`, `stopped`, `failed`). */
 function phaseOf(events: readonly EventRow[]): string {
@@ -127,6 +189,11 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
       case EV.schemaProposed: {
         const schema = rec(p['output_schema']);
         out.push({ kind: 'schema', step: null, ok: p['ok'] === true, fields: p['ok'] === true ? Object.keys(rec(schema['properties'])).length : null });
+        break;
+      }
+      case EV.schemaValidated: {
+        // Validation automatique (`auto_validate`) : aucune entrée (rien n'a été corrigé ni choisi par l'utilisateur).
+        if (p['by'] === 'user') out.push(schemaValidatedEntry(p));
         break;
       }
       case EV.attemptFinished: {

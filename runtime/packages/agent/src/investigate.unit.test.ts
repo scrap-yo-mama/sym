@@ -98,6 +98,28 @@ describe('prompt du rôle investigate', () => {
   });
 });
 
+describe('validate_schema avec corrections du client (constat Barnes)', () => {
+  test('schéma validé : les descriptions guident l’affectation ; consignes du client après la demande, masquées et bornées', () => {
+    const fixedSchema = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference without the carousel- prefix' } } };
+    const instructions = 'Use the results list, not the carousel; write to zz.owner@example.test. ' + 'x'.repeat(3000);
+    const [, user] = investigateMessages({ description: 'liste des biens', candidates: [candidate()], fixedSchema, ownerCorrections: instructions }, 'tok789');
+    const text = String(user!.content);
+    expect(text).toMatch(/VALIDATED OUTPUT SCHEMA \(use exactly these field names and types; each description says what the field must hold/);
+    expect(text).toContain('Listing reference without the carousel- prefix');
+    const line = text.split('\n').find((l) => l.startsWith('OWNER CORRECTIONS'))!;
+    expect(line).toContain('Use the results list, not the carousel');
+    expect(line).not.toContain('zz.owner@example.test');
+    expect(line.length).toBeLessThan(2_200);
+    // Après la demande et le schéma, avant les gisements (donnée non fiable) : jamais dans l’enveloppe du site.
+    expect(text.indexOf('OWNER CORRECTIONS')).toBeGreaterThan(text.indexOf('VALIDATED OUTPUT SCHEMA'));
+    expect(text.indexOf('OWNER CORRECTIONS')).toBeLessThan(text.indexOf('<untrusted_candidates_tok789>'));
+  });
+  test('sans consignes : aucune ligne', () => {
+    const [, user] = investigateMessages({ description: 'liste', candidates: [candidate()] }, 'tok');
+    expect(String(user!.content)).not.toContain('OWNER CORRECTIONS');
+  });
+});
+
 describe('M6 : langue de la prose du LLM (21 § 4.5)', () => {
   test('assert_llm_prompt_has_output_language : le prompt système envoyé porte le bloc Language: avec French pour runs.locale = fr, identique hors langue pour en', async () => {
     const fake = await createFakeProvider();
