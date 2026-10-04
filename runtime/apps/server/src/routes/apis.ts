@@ -101,6 +101,7 @@ const createSchema = {
     url: { type: 'string', minLength: 1, maxLength: 2048 },
     example_output: { type: ['object', 'array'] },
     auto_validate: { type: 'boolean' },
+    name: { type: 'string', minLength: 1, maxLength: 80 },
     network_policy: networkPolicySchema,
     wait_seconds: { type: 'integer', minimum: 0, maximum: 25 },
     visibility: { type: 'string', enum: ['private', 'instance'] },
@@ -115,6 +116,7 @@ type CreateBody = {
   url: string;
   example_output?: unknown;
   auto_validate?: boolean;
+  name?: string;
   network_policy?: Record<string, unknown>;
   wait_seconds?: number;
   visibility?: 'private' | 'instance';
@@ -360,8 +362,10 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
     // UX-04 : sans contact d'instance, l'enquête échouerait aussitôt (17 § 5) : refus AVANT de créer l'API ou le run.
     if (await rejectWithoutInstanceContact(ctx, reply)) return reply;
-    // Validation automatique : le schéma proposé n'est pas encore connu ; s'il porte `x-personal`, la case est exigée.
-    if (body.auto_validate === true && (await rejectWithoutAck(ctx, reply, actor, true))) return reply;
+    // Validation automatique PAR DÉFAUT (Q2 du CDC UX : condition du premier coup) ; `auto_validate: false` garde la porte du
+    // schéma. Le schéma proposé n'est pas encore connu ; s'il porte `x-personal`, la case est exigée.
+    const autoValidate = body.auto_validate !== false;
+    if (autoValidate && (await rejectWithoutAck(ctx, reply, actor, true))) return reply;
     let policy: Record<string, unknown> | null = null;
     try {
       if (body.network_policy) policy = await checkNetworkPolicy(ctx, body.network_policy);
@@ -381,7 +385,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     let briefSaved = null as { version: number; sha256: string } | null;
     let created: { apiId: string; runId: string };
     try {
-      const slug = await freeSlug(ctx, body.description, body.url);
+      const slug = await freeSlug(ctx, body.description, body.url, body.name);
       const queue = await ctx.jobs();
       created = await withActor(ctx.pool, actor, async (tx) => {
         await reserveRunSlot(tx, ctx, { kind: 'investigation' });
@@ -392,7 +396,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
           apiId,
           ownerId: actor.userId,
           trigger: triggerOf(actor),
-          request: { url: body.url, description: body.description, auto_validate: body.auto_validate === true },
+          request: { url: body.url, description: body.description, auto_validate: autoValidate, ...(body.name === undefined ? {} : { name: body.name }) },
           ...(body.example_output === undefined ? {} : { exampleOutput: body.example_output }),
         });
         return { apiId, runId };
@@ -410,7 +414,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       outcome: 'success',
       // Dossier : version, empreinte, taille et compte d'indices ; jamais le contenu (assert_brief_not_logged).
       meta: {
-        auto_validate: body.auto_validate === true,
+        auto_validate: autoValidate,
         account_site_acknowledged: body.account_site_acknowledged === true,
         ...(briefSaved === null || brief === null ? {} : { brief: { version: briefSaved.version, sha256: briefSaved.sha256, bytes: brief.bytes, hints: (brief.brief.hints ?? []).length } }),
       },
@@ -425,7 +429,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       // pendant l'attente ne se répond qu'avec le statut qui en découle, jamais `failed` + `enquete` (attente bornée).
       if (row?.state === 'failed') await waitApiLeavesEnquete(ctx, actor, created.apiId, Math.min(deadline, Date.now() + 2_000), controller.signal);
       // Validation automatique terminée : l'enveloppe RunResult (05 § 4.1, `auto_validate`).
-      if (row !== null && body.auto_validate === true && isTerminalRunState(row.state)) {
+      if (row !== null && autoValidate && isTerminalRunState(row.state)) {
         // Accusé du dossier (19c § 7) dans l'enveloppe RunResult aussi : version, rapport et récit du code, sans texte du dossier.
         const locale = await ownerNarrativeLocale(ctx, actor.userId);
         const brief = await withActor(ctx.pool, actor, async (db) => briefViewOf(db, { apiId: created.apiId, ownerId: actor.userId, locale, pageUrl: await investigationUrlOf(db, created.apiId, actor.userId) }));

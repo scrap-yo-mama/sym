@@ -339,27 +339,50 @@ export async function checkNetworkPolicy(ctx: ServerContext, input: unknown): Pr
   return input as Record<string, unknown>;
 }
 
-/**
- * Slug lisible tiré de la description (ASCII, tirets) et TOUJOURS suffixé d'un aléa (`base-xxxxxx`), unique ; jamais celui
- * d'une autre API. Le suffixe systématique ne laisse aucun indice (13 § 3) : la réponse a la même forme que la base soit
- * libre ou prise par une API invisible pour l'acteur. L'URL est validée par l'appelant (400 `invalid_request`).
- */
-export async function freeSlug(ctx: ServerContext, description: string, url: string): Promise<string> {
-  const words = description
+/** Mots vides ignorés pour le slug (fr et en) : ils ne disent rien de l'objet demandé. */
+const SLUG_STOP_WORDS = new Set([
+  'les', 'des', 'une', 'the', 'and', 'all', 'toutes', 'tous', 'tout', 'page', 'pages', 'liste', 'list', 'this', 'that', 'cette', 'ces', 'from', 'with', 'avec', 'pour', 'dans', 'sur',
+  'sans', 'without', 'each', 'chaque', 'veux', 'want', 'recupere', 'recuperer', 'get', 'give', 'donne', 'moi', 'ouvrir', 'open', 'les', 'qui', 'que', 'est', 'are', 'sont', 'site',
+]);
+
+const asciiWords = (text: string): string[] =>
+  text
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .split(' ')
-    .filter((w) => w.length > 2)
-    .slice(0, 4);
-  let base = words.join('-').slice(0, 40).replace(/-+$/, '');
+    .filter((w) => w.length > 2);
+
+/**
+ * Base du slug (UX-08) : COURTE et lisible, « objet-domaine » (« biens-janssens-immobilier ») ; avec un `name`, ses mots seuls.
+ * Tirée de la demande, jamais de l'état d'autres API.
+ */
+export function slugBase(description: string, url: string, name?: string): string {
+  const named = name === undefined ? [] : asciiWords(name).slice(0, 5);
+  const label = (URL.parse(url)?.hostname ?? '').replace(/^www\./, '').split('.').slice(0, -1).join('-').replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '');
+  const objectWords = asciiWords(description).filter((w) => !SLUG_STOP_WORDS.has(w) && !label.split('-').includes(w)).slice(0, 2);
+  // Le domaine dit QUI, les mots disent QUOI : sous 32 caractères, on retire des mots de l'objet avant de couper le domaine.
+  const words = [...objectWords];
+  const joined = () => [...words, ...(label === '' ? [] : [label])].join('-');
+  while (named.length === 0 && joined().length > 32 && words.length > 0) words.pop();
+  let base = (named.length > 0 ? named.join('-') : joined()).slice(0, 32).replace(/-+$/, '');
   if (base === '') base = (URL.parse(url)?.hostname ?? '').replace(/^www\./, '').split('.')[0]?.replace(/[^a-z0-9-]/g, '') ?? '';
   if (!/^[a-z0-9]/.test(base)) base = `api-${base}`.replace(/-+$/, '');
+  return base;
+}
+
+/**
+ * Slug lisible (voir `slugBase`) et TOUJOURS suffixé d'un aléa (`base-xxxxxx`), unique ; jamais celui d'une autre API. Le
+ * suffixe systématique ne laisse aucun indice (13 § 3) : la réponse a la même forme que la base soit libre ou prise par une
+ * API invisible pour l'acteur. L'URL est validée par l'appelant (400 `invalid_request`).
+ */
+export async function freeSlug(ctx: ServerContext, description: string, url: string, name?: string): Promise<string> {
+  const base = slugBase(description, url, name);
   // Identité système : un slug pris par une API invisible de l'acteur est évité sans révéler qu'elle existe.
   for (let attempt = 0; attempt < 20; attempt++) {
-    const candidate = `${base.slice(0, 50).replace(/-+$/, '')}-${randomBytes(3).toString('hex')}`;
+    const candidate = `${base.slice(0, 40).replace(/-+$/, '')}-${randomBytes(3).toString('hex')}`;
     const { rowCount } = await ctx.pool.query('SELECT 1 FROM apis WHERE slug = $1', [candidate]);
     if (!rowCount) return candidate;
   }

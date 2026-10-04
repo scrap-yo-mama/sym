@@ -73,7 +73,7 @@ describe('assert_budget_usd_daily : budget USD par utilisateur et par jour (08b 
       // Pas de Retry-After : retryable false jusqu'à la réinitialisation (minuit UTC).
       expect(blocked.headers['retry-after']).toBeUndefined();
       // Mêmes refus sur les autres routes qui créent un run (enquête lancée à la création d'API).
-      const created = await post(c, '/api/apis', { description: 'Les livres zz test du budget, avec titre et prix', url: 'https://zz-test-budget.example/' });
+      const created = await post(c, '/api/apis', { description: 'Les livres zz test du budget, avec titre et prix', url: 'https://zz-test-budget.example/', auto_validate: false });
       expect(created.statusCode).toBe(429);
       expect(created.json()).toMatchObject({ error: { code: 'budget_exceeded' } });
       expect(await count('SELECT count(*) FROM runs WHERE owner_id = $1', [c.id])).toBe(before);
@@ -187,7 +187,7 @@ describe('réservation de l’enveloppe maximale (08b § 3, PA-02)', () => {
       expect(third.headers['retry-after']).toBeUndefined();
       expect(await count("SELECT count(*) FROM runs WHERE owner_id = $1 AND state = 'queued'", [h.id])).toBe(2);
       // Une enquête (enveloppe par défaut 1 USD) ne passe pas non plus.
-      const inv = await post(h, '/api/apis', { description: 'Les livres zz test de la rafale, avec titre et prix', url: 'https://zz-test-burst.example/' });
+      const inv = await post(h, '/api/apis', { description: 'Les livres zz test de la rafale, avec titre et prix', url: 'https://zz-test-burst.example/', auto_validate: false });
       expect(inv.statusCode).toBe(429);
       expect(inv.json()).toMatchObject({ error: { code: 'budget_exceeded' } });
       // Un run qui se termine libère son enveloppe (seule la dépense réelle reste).

@@ -22,8 +22,8 @@ Le serveur MCP (`/mcp`) est livré : outils génériques, outils par API, envelo
 
 | Outil | Entrée | Sortie |
 |---|---|---|
-| `create_api` | `description`, `url`, et facultativement `example_output`, `brief`, `auto_validate`, `network_policy`, `wait_seconds` | identifiant, schéma de sortie proposé, échantillon, rapport d'accès et récit de l'enquête ; ou le résultat d'un run avec `auto_validate` |
-| `validate_schema` | `api_id`, et facultativement un `output_schema` corrigé | résultat d'un run (ou « en cours ») |
+| `create_api` | `description`, `url`, et facultativement `name`, `example_output`, `brief`, `auto_validate` (vrai par défaut), `force_new`, `network_policy`, `wait_seconds` | le bloc de résultat : état, jalon, récit de l'enquête, puis les éléments (total, aperçu de 10 lignes, curseur) une fois le premier run complet fini ; ou, sur une ambiguïté réelle ou un coût au-delà de `CONFIRM_ABOVE_USD`, une question unique et fermée |
+| `validate_schema` | `api_id`, et facultativement `choice` (l'option choisie à la question de SYM, `continue` par défaut) ou un `output_schema` corrigé | le bloc de résultat (ou « en cours ») |
 | `run_api` | `slug` ou `api_id`, `input`, et facultativement `wait_seconds`, `force_investigate` | résultat d'un run |
 | `get_run` | `run_id` | résultat d'un run |
 | `get_items` | `run_id` ou `dataset_id`, `cursor`, `limit` (200 au plus), `fields` | items et curseur suivant |
@@ -126,7 +126,7 @@ Si le client envoie un jeton de progression, une enquête en cours publie `notif
 
 ## Runs longs
 
-Les outils acceptent `wait_seconds` (25 par défaut et au plus). Au-delà, ils renvoient `{ run_id, state: "running", poll_after_seconds }` et l'IA interroge `get_run`. Un run complet à la cadence par défaut (1,5 seconde entre deux requêtes vers un domaine) dure plusieurs minutes : le mode asynchrone est la règle, pas l'exception.
+Les outils acceptent `wait_seconds` (`MAX_WAIT_SECONDS` par défaut et au plus, 50 s au plus). Pendant l'attente, SYM envoie une progression libellée (jalon `n/4` et durée) au moins toutes les 5 s si le client la demande. Au-delà, ils renvoient `{ run_id, state: "running", poll_after_seconds }` et l'IA rappelle `get_run` avec `wait_seconds` : l'appel est tenu jusqu'à la fin du run ou jusqu'à une décision attendue. Un run complet à la cadence par défaut (1,5 seconde entre deux requêtes vers un domaine) dure plusieurs minutes : le mode asynchrone est la règle, pas l'exception.
 
 ## Erreurs
 

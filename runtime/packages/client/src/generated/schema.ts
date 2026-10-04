@@ -2227,7 +2227,10 @@ export interface components {
             url: string;
             /** @description Exemple de sortie facultatif (objet ou tableau JSON). */
             example_output?: unknown;
+            /** @description Validation automatique du schéma proposé (défaut `true`, Q2 du CDC UX) ; `false` garde la porte du schéma (`validate_schema`). */
             auto_validate?: boolean;
+            /** @description Nom lisible de l'API (1 à 80 caractères) ; il court le slug. Absent, SYM le tire de la demande. */
+            name?: string;
             network_policy?: components["schemas"]["NetworkPolicy"];
             wait_seconds?: number;
             visibility?: components["schemas"]["Visibility"];

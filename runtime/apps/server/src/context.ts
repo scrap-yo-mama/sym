@@ -84,6 +84,11 @@ type RestLimits = {
   maxConcurrentRuns: number;
   /** Période de relecture d'une attente synchrone et du flux SSE (ms). */
   pollMs: number;
+  /**
+   * Intervalle (ms) sans événement au bout duquel `create_api` et `get_run` renvoient quand même une progression au client
+   * (03 § 5 : un jalon libellé toutes les 5 s au plus ; 4 000 par défaut). Les tests le raccourcissent.
+   */
+  progressHeartbeatMs?: number;
   /** Commentaire `: ping` du flux SSE (ms, 15 à 20 s en production). */
   pingMs: number;
   /** Flux SSE ouverts en même temps par un utilisateur (plafond, 06 § 3). */
