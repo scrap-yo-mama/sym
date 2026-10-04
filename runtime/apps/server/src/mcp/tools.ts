@@ -189,13 +189,23 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     name: 'validate_schema',
     toolset: 'build',
     scope: 'apis:write',
-    description: 'Validate (optionally corrected) the output schema proposed by create_api, after the user agreed. SYM then tries the strategies, cheapest first, and returns a RunResult.',
+    description:
+      'Validate the output schema proposed by create_api, after the user agreed. SYM then tries the strategies, cheapest first, and returns a RunResult. ' +
+      'To apply corrections: send the corrected output_schema (rename, add or remove properties; each property description says what goes in the field) ' +
+      'and, for what a schema cannot say (which list, a prefix to drop), the user\'s instructions. source_id limits the trials to one source of the reconnaissance. ' +
+      'schema_validation in the answer shows the retained schema, what changed and what was not applied.',
     annotations: EXECUTE,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['api_id'],
-      properties: { api_id: UUID_STRING, output_schema: { type: 'object', description: 'Corrected JSON Schema of one item (optional).' }, wait_seconds: WAIT },
+      properties: {
+        api_id: UUID_STRING,
+        output_schema: { type: 'object', description: 'Corrected JSON Schema of one item (optional).' },
+        instructions: { type: 'string', maxLength: 2000, description: 'Corrections from the user, in plain words (optional).' },
+        source_id: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,64}$', description: 'Id of a source found by the reconnaissance (optional).' },
+        wait_seconds: WAIT,
+      },
     },
     outputSchema: RUN_RESULT_SCHEMA,
   },

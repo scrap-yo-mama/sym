@@ -23,7 +23,7 @@ Le serveur MCP (`/mcp`) est livré : outils génériques, outils par API, envelo
 | Outil | Entrée | Sortie |
 |---|---|---|
 | `create_api` | `description`, `url`, et facultativement `example_output`, `brief`, `auto_validate`, `network_policy`, `wait_seconds` | identifiant, schéma de sortie proposé, échantillon, rapport d'accès et récit de l'enquête ; ou le résultat d'un run avec `auto_validate` |
-| `validate_schema` | `api_id`, et facultativement un `output_schema` corrigé | résultat d'un run (ou « en cours ») |
+| `validate_schema` | `api_id`, et facultativement un `output_schema` corrigé (appliqué : noms, types, descriptions), des `instructions` de l'utilisateur (2 000 caractères au plus, transmises à l'affectation des champs) et un `source_id` de la reconnaissance (essais limités à cette source) | résultat d'un run (ou « en cours »), avec `schema_validation` : schéma retenu, ce qui a changé, ce qui n'est pas appliqué |
 | `run_api` | `slug` ou `api_id`, `input`, et facultativement `wait_seconds`, `force_investigate` | résultat d'un run |
 | `get_run` | `run_id` | résultat d'un run |
 | `get_items` | `run_id` ou `dataset_id`, `cursor`, `limit` (200 au plus), `fields` | items et curseur suivant |

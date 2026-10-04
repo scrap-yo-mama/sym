@@ -77,6 +77,10 @@ type NarrativeCatalog = {
   /** Motif d'un essai en échec (UX-33) : phrase fermée pour les codes connus, sinon le code ; `reason` : motif de la garde. */
   why: (code: string, reason: string | null) => string;
   schema: (ok: boolean, fields: number | null) => string;
+  /** Validation du schéma par l'utilisateur (`validate_schema`, constat Barnes) : ce qui a changé et ce qui n'est pas appliqué. */
+  validated: (v: ValidatedView) => string;
+  /** Titre du schéma retenu dans la réponse de `validate_schema`. */
+  retained: string;
   pruned: (label: string | null, reason: string | null, count: number) => string;
   strategy: (label: string, code: string, perRun: string) => string;
   stopped: (cause: string | null) => string;
@@ -95,6 +99,62 @@ type NarrativeCatalog = {
   brief: BriefCatalog;
   header: { restart: string };
 };
+
+/** Vue d'une validation (noms déjà filtrés par la chronologie ou la réponse) : jamais un texte du site. */
+type ValidatedView = {
+  readonly corrected: boolean;
+  readonly changes: {
+    readonly added: readonly string[];
+    readonly removed: readonly string[];
+    readonly renamed: readonly { readonly from: string; readonly to: string }[];
+    readonly type_changed: readonly string[];
+    readonly description_changed: readonly string[];
+    readonly required_changed: readonly string[];
+    readonly other_changed: readonly string[];
+  };
+  readonly not_applied: readonly { readonly code: string; readonly field: string }[];
+  readonly instructions: boolean;
+  readonly source_id: string | null;
+  /** Source retrouvée au run des essais ; `null` : pas encore su (réponse de l'outil). */
+  readonly source_found: boolean | null;
+};
+
+/** Phrase de validation : tête, puis segments (changements, consignes, source, non appliqué) séparés par « ; ». */
+function validatedSentence(v: ValidatedView, w: {
+  asProposed: string;
+  corrected: string;
+  proposedHead: string;
+  renamed: string;
+  added: string;
+  removed: string;
+  types: string;
+  descriptions: string;
+  required: string;
+  other: string;
+  instructions: string;
+  source: (id: string) => string;
+  sourceLost: (id: string) => string;
+  ignored: (field: string) => string;
+  kept: (field: string) => string;
+  colon: string;
+}): string {
+  const list = (label: string, names: readonly string[], colon = true) => (names.length === 0 ? [] : [`${label}${colon ? w.colon : ' '}${names.join(', ')}`]);
+  const c = v.changes;
+  const parts = [
+    ...list(w.renamed, c.renamed.map((r) => `${r.from} → ${r.to}`), false),
+    ...list(w.added, c.added, false),
+    ...list(w.removed, c.removed, false),
+    ...list(w.types, c.type_changed),
+    ...list(w.descriptions, c.description_changed),
+    ...list(w.required, c.required_changed),
+    ...list(w.other, c.other_changed),
+    ...(v.instructions ? [w.instructions] : []),
+    ...(v.source_id === null ? [] : [v.source_found === false ? w.sourceLost(v.source_id) : w.source(v.source_id)]),
+    ...v.not_applied.map((n) => (n.code === 'personal_mark_kept' ? w.kept(n.field) : w.ignored(n.field))),
+  ];
+  if (parts.length === 0) return v.corrected ? `${w.corrected}.` : w.asProposed;
+  return `${v.corrected ? w.corrected : w.proposedHead}${w.colon}${parts.join('; ')}.`;
+}
 
 type BriefCatalog = {
   /** Accusé : première ligne du récit quand un dossier est présent (« SYM 👻 : J'ai lu ton dossier… »). */
@@ -124,6 +184,26 @@ const EN: NarrativeCatalog = {
     return `(${code})`;
   },
   schema: (ok, fields) => (ok ? `Output schema proposed${fields === null ? '' : `: ${fields} fields`}` : 'No usable output schema could be proposed'),
+  validated: (v) =>
+    validatedSentence(v, {
+      asProposed: 'Schema validated as proposed.',
+      corrected: 'Schema validated with your corrections',
+      proposedHead: 'Schema validated as proposed',
+      renamed: 'renamed',
+      added: 'added',
+      removed: 'removed',
+      types: 'types changed',
+      descriptions: 'descriptions changed',
+      required: 'required changed',
+      other: 'other changes',
+      instructions: 'your instructions guide the field mapping',
+      source: (id) => `trials limited to source ${id}`,
+      sourceLost: (id) => `source ${id} was not found again on the page`,
+      ignored: (field) => `not applied: x-personal mark on ${field} (only the marks SYM detected count)`,
+      kept: (field) => `x-personal mark kept on ${field} (detected by SYM)`,
+      colon: ': ',
+    }),
+  retained: 'Retained schema',
   pruned: (label, reason, count) => `Skipped ${count} more expensive trial${count === 1 ? '' : 's'}${label === null ? '' : ` after ${label}`}${reason === null ? '' : ` (${reason})`}`,
   strategy: (label, code, perRun) => `Strategy kept: ${label} (${code}, ${perRun} per run)`,
   stopped: (cause) => `The investigation stopped${cause === null ? '' : ` (${cause})`}: SYM does not try other ways to reach the site.`,
@@ -139,7 +219,7 @@ const EN: NarrativeCatalog = {
     poll: (s, ids) => `Next step: call get_run with ${ids ?? 'this run_id'}${s === null ? '' : ` in about ${s} seconds`}.`,
     items: (ids) => `Next step: call get_items with ${ids ?? 'next_cursor'} for the rest.`,
     none: 'Next step: none.',
-    schemaRemark: (ids) => `Next step: adjust the schema to the remark, show it to the user again, then call validate_schema with ${ids === null ? '' : `${ids} and `}output_schema.`,
+    schemaRemark: (ids) => `Next step: adjust the schema to the remark, show it to the user again, then call validate_schema with ${ids === null ? '' : `${ids} and `}output_schema (put what a schema cannot say in instructions).`,
   },
   console: 'Console',
   stepWord: 'Step',
@@ -173,6 +253,26 @@ const FR: NarrativeCatalog = {
     return `(${code})`;
   },
   schema: (ok, fields) => (ok ? `Schéma de sortie proposé${fields === null ? '' : ` : ${fields} champs`}` : 'Aucun schéma de sortie exploitable n’a pu être proposé'),
+  validated: (v) =>
+    validatedSentence(v, {
+      asProposed: 'Schéma validé tel que proposé.',
+      corrected: 'Schéma validé avec tes corrections',
+      proposedHead: 'Schéma validé tel que proposé',
+      renamed: 'renommé',
+      added: 'ajouté',
+      removed: 'retiré',
+      types: 'types changés',
+      descriptions: 'descriptions changées',
+      required: 'champs requis changés',
+      other: 'autres changements',
+      instructions: 'tes consignes guident l’affectation des champs',
+      source: (id) => `essais limités à la source ${id}`,
+      sourceLost: (id) => `source ${id} introuvable de nouveau sur la page`,
+      ignored: (field) => `non appliqué : marque x-personal sur ${field} (seules comptent celles que SYM a détectées)`,
+      kept: (field) => `marque x-personal gardée sur ${field} (détectée par SYM)`,
+      colon: ' : ',
+    }),
+  retained: 'Schéma retenu',
   pruned: (label, reason, count) => `${count} essai${count === 1 ? '' : 's'} plus coûteux écarté${count === 1 ? '' : 's'}${label === null ? '' : ` après ${label}`}${reason === null ? '' : ` (${reason})`}`,
   strategy: (label, code, perRun) => `Stratégie retenue : ${label} (${code}, ${perRun} par run)`,
   stopped: (cause) => `L’enquête s’est arrêtée${cause === null ? '' : ` (${cause})`} : SYM n’essaie pas d’autre voie pour atteindre le site.`,
@@ -188,7 +288,7 @@ const FR: NarrativeCatalog = {
     poll: (s, ids) => `Prochaine étape : appelle get_run avec ${ids ?? 'ce run_id'}${s === null ? '' : ` dans environ ${s} secondes`}.`,
     items: (ids) => `Prochaine étape : appelle get_items avec ${ids ?? 'next_cursor'} pour la suite.`,
     none: 'Prochaine étape : aucune.',
-    schemaRemark: (ids) => `Prochaine étape : ajuste le schéma à la remarque, montre-le de nouveau à l’utilisateur, puis appelle validate_schema avec ${ids === null ? '' : `${ids} et `}output_schema.`,
+    schemaRemark: (ids) => `Prochaine étape : ajuste le schéma à la remarque, montre-le de nouveau à l’utilisateur, puis appelle validate_schema avec ${ids === null ? '' : `${ids} et `}output_schema (ce qu’un schéma ne peut pas dire va dans instructions).`,
   },
   console: 'Console',
   stepWord: 'Étape',

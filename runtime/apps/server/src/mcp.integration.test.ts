@@ -619,6 +619,45 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
     expect(toolError(await call(client, 'validate_schema', { api_id: view.api_id })).code).toBe('not_awaiting_validation');
   });
 
+  test('validate_schema (constat Barnes) : corrections, consignes et source transmises ; schema_validation montre le schéma retenu et ce qui a changé ; source inconnue → erreur claire', async () => {
+    const client = await connect(a.key);
+    const created = await call(client, 'create_api', { description: 'zz_test biens immobiliers', url: 'https://zz-test-barnes.example/', wait_seconds: 0 });
+    const view = created.structuredContent as { api_id: string; run_id: string };
+    const proposed = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference' }, type: { type: 'string', description: 'Type' } } };
+    await withClient(srv.db.url, async (c) => {
+      await c.query("UPDATE apis SET investigation_phase = 'awaiting_schema_validation', investigation = investigation || jsonb_build_object('proposed_schema', $2::jsonb, 'candidates', $3::jsonb) WHERE id = $1", [
+        view.api_id,
+        JSON.stringify(proposed),
+        JSON.stringify([{ id: 'c1' }, { id: 'c2' }]),
+      ]);
+      await c.query("UPDATE runs SET state = 'succeeded', outcome = 'clean', finished_at = now() WHERE id = $1", [view.run_id]);
+    });
+    const unknown = toolError(await call(client, 'validate_schema', { api_id: view.api_id, source_id: 'results-list', wait_seconds: 0 }));
+    expect(unknown).toMatchObject({ code: 'unknown_source', retryable: true });
+    expect(unknown.message).toContain('c1, c2');
+    expect(unknown.what_to_do).toContain('c1, c2');
+
+    const corrected = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference without the carousel- prefix' }, property_type: { type: 'string', description: 'Type' } } };
+    const validated = await call(client, 'validate_schema', { api_id: view.api_id, output_schema: corrected, instructions: 'Use the results list, not the carousel.', source_id: 'c2', wait_seconds: 0 });
+    expect(validated.isError ?? false).toBe(false);
+    expect(validated.structuredContent).toMatchObject({
+      state: 'queued',
+      schema_validation: {
+        output_schema: corrected,
+        corrected: true,
+        changes: { renamed: [{ from: 'type', to: 'property_type' }], description_changed: ['reference'] },
+        not_applied: [],
+        instructions: { received: true, used_by: 'investigate' },
+        source_id: 'c2',
+      },
+    });
+    const text = (validated.content[0] as { text: string }).text;
+    expect(text).toMatch(/^Schema validated with your corrections: renamed type → property_type; descriptions changed: reference; your instructions guide the field mapping; trials limited to source c2\./);
+    expect(text).toContain('Retained schema:');
+    // Le texte des consignes n'est jamais recopié dans la réponse (seulement leur réception).
+    expect(text).not.toContain('Use the results list');
+  });
+
   test('list_apis et get_api : forme de 05 § 4.1 ; report_problem consigne le problème (audit, acteur mcp)', async () => {
     const api = await seedApi(srv.db.url, a.user.id, { slug: 'zz-test-catalog-shape' });
     const client = await connect(a.key);

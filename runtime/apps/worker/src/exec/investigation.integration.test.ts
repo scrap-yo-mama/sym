@@ -342,6 +342,34 @@ describe('enquête (tâche 2.1)', () => {
     await expect(withActor(pool, actorA, (tx) => validateInvestigationSchema(tx, queue, { apiId, ownerId: A, trigger: 'rest' }))).rejects.toMatchObject({ code: 'not_awaiting_validation' });
   });
 
+  test('validate_schema avec corrections (constat Barnes) : schéma corrigé, consignes et source → nouvelle affectation par le rôle investigate, événement schema.validated avec ce qui a changé', async () => {
+    fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL), scripted.json(CONTACTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_inv_validate_fix');
+    const first = await investigate(apiId, { url: `${base(API_HOST)}/`, description: 'liste des contacts' });
+    expect(first).toMatchObject({ state: 'succeeded', items: 0 });
+    const proposed = (await eventsOf(first.id)).find((e) => e.kind === 'schema.proposed')!.payload as { output_schema: { properties: Record<string, Record<string, unknown>> } };
+    const corrected = structuredClone(proposed.output_schema);
+    corrected.properties['city'] = { ...corrected.properties['city'], description: 'City of the contact, without the zz postal code' };
+    const { runId, validation } = await withActor(pool, actorA, (tx) =>
+      validateInvestigationSchema(tx, queue, { apiId, ownerId: A, trigger: 'rest', outputSchema: corrected, instructions: 'Use the contacts list; write to zz.owner@example.test', sourceId: 'c1' }),
+    );
+    expect(validation).toMatchObject({ corrected: true, changes: { description_changed: ['city'] }, source_id: 'c1' });
+    expect(await waitRun(runId)).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    // Schéma corrigé et consignes : second appel du rôle investigate, qui voit la description corrigée, les consignes (masquées)
+    // et la seule source choisie.
+    expect(fake.requests).toBe(2);
+    const prompt = String((fake.calls[1]!.body as { messages: { content: string }[] }).messages[1]!.content);
+    expect(prompt).toContain('without the zz postal code');
+    expect(prompt).toMatch(/OWNER CORRECTIONS[^\n]*Use the contacts list/);
+    expect(prompt).not.toContain('zz.owner@example.test');
+    const block = /<untrusted_candidates_[0-9a-f]+>\n(.*)\n<\/untrusted_candidates_/s.exec(prompt)![1]!;
+    expect((JSON.parse(block) as { id: string }[]).map((c) => c.id)).toEqual(['c1']);
+    const all = await eventsOf(runId);
+    const validated = all.find((e) => e.kind === 'schema.validated')!.payload;
+    expect(validated).toMatchObject({ by: 'user', corrected: true, changes: { description_changed: ['city'], renamed: [], added: [], removed: [] }, not_applied: [], instructions: true, source_id: 'c1', source_found: true });
+    expect(JSON.stringify(all)).not.toContain('Use the contacts list');
+  });
+
   test('assert_schema_gate_before_trials, assert_trial_plan_cheapest_first_ui (worker → console) : le plan chiffré et le coût de rejeu partent AVEC la porte, avant tout essai ; assert_milestones_same_labels (journaux)', async () => {
     fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
     const apiId = await insertApi('zz_test_inv_gate_plan', { allow: ['direct', 'dc_proxy'] });

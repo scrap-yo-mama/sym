@@ -10,8 +10,8 @@
 // lisible des membres par `instance_read` (visibilité instance, sans session) : elle ne doit figurer dans AUCUNE projection
 // servie à un non-propriétaire (REST, MCP, console : 3.x), seulement dans celles du propriétaire.
 import { assertInputSchema, assertSchemaAcceptable, EXECUTIONS, SchemaError, type MemoryRef, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger, type StrategyRuleRow, type StrategySource } from '@runtime/core';
-import type { InvestigationProposal, StoredCandidate } from '@runtime/core/investigation';
-import { INVESTIGATION_DEFAULTS } from '@runtime/core/investigation';
+import type { InvestigationProposal, NotApplied, SchemaChanges, StoredCandidate } from '@runtime/core/investigation';
+import { checkValidationSource, INVESTIGATION_DEFAULTS, normalizeValidationInstructions, schemaValidationReport, VALIDATION_SOURCE_ID } from '@runtime/core/investigation';
 import type pg from 'pg';
 import { withActor } from './rls.js';
 import { recordStrategySource } from './rules.js';
@@ -49,6 +49,13 @@ export type InvestigationState = {
   readonly validated_columns?: readonly string[];
   readonly validated_by?: 'auto' | 'user' | 'import';
   /**
+   * Validation par l'appelant (`validate_schema`, constat Barnes) : ce qui a changé par rapport à la proposition et ce qui
+   * n'est pas appliqué (montrés au client et dans la chronologie), consignes libres du client (texte de l'utilisateur, jamais
+   * du site, 2 000 caractères au plus, relues par le rôle `investigate` pour refaire l'affectation des champs) et source
+   * candidate choisie (`source_id`, D-124 : les essais déclaratifs se limitent à ce gisement).
+   */
+  readonly validation?: ValidationRecord;
+  /**
    * Import (tâche 3.12, 16 § 6) : stratégie déclarative et schéma d'entrée venus du fichier. Après l'étape 0, l'enquête
    * essaie CETTE stratégie (aucune reconnaissance ni appel LLM) ; la version retenue porte `created_by = import`.
    */
@@ -74,6 +81,15 @@ export type InvestigationState = {
    * plafond du mode et du budget du jour). Jamais posé par une enquête ordinaire ; une nouvelle enquête repart sans lui.
    */
   readonly budget_cap_usd?: number;
+};
+
+/** Validation par l'appelant (`InvestigationState.validation`). */
+export type ValidationRecord = {
+  readonly corrected: boolean;
+  readonly changes: SchemaChanges;
+  readonly not_applied: readonly NotApplied[];
+  readonly instructions?: string;
+  readonly source_id?: string;
 };
 
 /** Stratégie d'un export relu (`@runtime/core` `parseApiExport`) : E1-E3, hors tunnel, sans session. */
@@ -141,11 +157,14 @@ function checkExcluded(excluded: readonly string[] | undefined): readonly Execut
 }
 
 export class InvestigationStateError extends Error {
-  readonly code: 'invalid_request' | 'not_awaiting_validation' | 'invalid_schema' | 'api_not_found' | 'investigation_in_progress' | 'reinvestigation_required';
-  constructor(code: InvestigationStateError['code'], message: string) {
+  readonly code: 'invalid_request' | 'not_awaiting_validation' | 'invalid_schema' | 'api_not_found' | 'investigation_in_progress' | 'reinvestigation_required' | 'unknown_source';
+  /** `unknown_source` : identifiants de source valides (gisements utilisables de la reconnaissance). */
+  readonly validSources?: readonly string[];
+  constructor(code: InvestigationStateError['code'], message: string, validSources?: readonly string[]) {
     super(message);
     this.name = 'InvestigationStateError';
     this.code = code;
+    if (validSources !== undefined) this.validSources = validSources;
   }
 }
 
@@ -275,9 +294,16 @@ export async function startInvestigation(
 export async function validateInvestigationSchema(
   tx: Queryable,
   queue: JobQueue,
-  input: { apiId: string; ownerId: string; trigger: RunTrigger; outputSchema?: unknown; excludeExecutions?: readonly string[] },
-): Promise<{ runId: string; jobId: string }> {
+  input: { apiId: string; ownerId: string; trigger: RunTrigger; outputSchema?: unknown; excludeExecutions?: readonly string[]; instructions?: string; sourceId?: string },
+): Promise<{ runId: string; jobId: string; validation: ValidationRecord; validatedSchema: Record<string, unknown> }> {
   const excluded = checkExcluded(input.excludeExecutions);
+  let instructions: string | null;
+  try {
+    instructions = normalizeValidationInstructions(input.instructions);
+  } catch {
+    throw new InvestigationStateError('invalid_request', 'instructions : 2000 caractères au plus');
+  }
+  if (input.sourceId !== undefined && !VALIDATION_SOURCE_ID.test(input.sourceId)) throw new InvestigationStateError('invalid_request', 'source_id : identifiant de source de la reconnaissance attendu (c1, c2…)');
   const { rows } = await tx.query<{ investigation: InvestigationState | null; investigation_phase: InvestigationPhase | null }>(
     'SELECT investigation, investigation_phase FROM apis WHERE id = $1 AND owner_id = $2 FOR UPDATE',
     [input.apiId, input.ownerId],
@@ -288,6 +314,13 @@ export async function validateInvestigationSchema(
   if (row.investigation_phase !== 'awaiting_schema_validation' || state === null || state.proposed_schema === undefined) {
     throw new InvestigationStateError('not_awaiting_validation', 'aucun schéma proposé en attente de validation');
   }
+  if (input.sourceId !== undefined) {
+    const source = checkValidationSource(input.sourceId, state.candidates);
+    if (!source.ok) {
+      const list = source.valid.length === 0 ? 'aucune source utilisable' : source.valid.join(', ');
+      throw new InvestigationStateError('unknown_source', `source_id inconnu : sources de la reconnaissance utilisables : ${list}`, source.valid);
+    }
+  }
   const schema = input.outputSchema === undefined ? state.proposed_schema : correctedSchemaWithDetectedMarks(input.outputSchema, state.proposed_schema);
   try {
     assertSchemaAcceptable(schema);
@@ -297,15 +330,25 @@ export async function validateInvestigationSchema(
   }
   // Ordre des colonnes : celui du schéma corrigé (lu du corps de la requête), sinon celui relevé à la proposition.
   const columns = input.outputSchema !== undefined ? schemaColumns(input.outputSchema) : state.proposed_columns;
+  // Ce qui a changé et ce qui n'est pas appliqué : calculé ici, montré par la réponse et par la chronologie (jamais tu).
+  const report = schemaValidationReport(state.proposed_schema, input.outputSchema ?? state.proposed_schema);
+  const validation: ValidationRecord = {
+    ...report,
+    ...(instructions === null ? {} : { instructions }),
+    ...(input.sourceId === undefined ? {} : { source_id: input.sourceId }),
+  };
+  const { validation: _previous, ...rest } = state;
   const next: InvestigationState = {
-    ...state,
+    ...rest,
     validated_schema: schema as Record<string, unknown>,
     ...(columns === undefined ? {} : { validated_columns: columns }),
     validated_by: 'user',
+    validation,
     ...(excluded === undefined ? {} : { excluded_executions: excluded }),
   };
   await tx.query("UPDATE apis SET investigation = $2::jsonb, investigation_phase = 'testing', updated_at = now() WHERE id = $1", [input.apiId, JSON.stringify(next)]);
-  return createRun(tx, queue, { apiId: input.apiId, ownerId: input.ownerId, trigger: input.trigger, kind: 'investigation' });
+  const run = await createRun(tx, queue, { apiId: input.apiId, ownerId: input.ownerId, trigger: input.trigger, kind: 'investigation' });
+  return { ...run, validation, validatedSchema: schema as Record<string, unknown> };
 }
 
 /** Vue de l'API pour l'exécuteur d'enquête (lue comme le propriétaire). */

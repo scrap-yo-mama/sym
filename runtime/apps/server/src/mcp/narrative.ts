@@ -11,7 +11,7 @@
 // `error` de l'enveloppe (`error_detail` du run), pas dans `failure_class` (NULL). Le récit la reçoit en entrée et la dit,
 // avec son gabarit fermé, même quand la chronologie n'a ni action requise ni événement de fin.
 import { isTerminalRunState, type RunState } from '@runtime/core';
-import { codeOf, codeOrNull, hostOrNull, type TimelineAccess, type TimelineAttempt, type TimelineEntry, type TimelineFinished, type TimelineRecon } from '../rest/timeline.js';
+import { codeOf, codeOrNull, hostOrNull, schemaValidatedEntry, type TimelineAccess, type TimelineAttempt, type TimelineEntry, type TimelineFinished, type TimelineRecon } from '../rest/timeline.js';
 import {
   ACTION_CAUSES,
   actionTemplate,
@@ -94,6 +94,8 @@ export function entryText(entry: TimelineEntry, locale: McpLocale, cause: string
     }
     case 'schema':
       return c.schema(entry.ok, entry.fields);
+    case 'schema_validated':
+      return c.validated(entry);
     case 'pruned':
       return entry.count === 0 ? null : c.pruned(entry.by === null ? null : pathLabel(entry.by), codeOrNull(entry.reason), entry.count);
     case 'action_required':
@@ -128,6 +130,21 @@ function briefLines(brief: BriefNarrative, locale: McpLocale): { head: string; b
   return { head: b.read(brief.hints, brief.tried), body };
 }
 
+/**
+ * Bloc de la réponse de `validate_schema` (constat Barnes) : la phrase de validation (ce qui a changé, consignes, source, ce
+ * qui n'est pas appliqué) dans la langue de la personne, puis le schéma retenu (celui du client, marques détectées comprises).
+ * Noms filtrés comme la chronologie ; jamais le texte des consignes.
+ */
+export function schemaValidationLines(
+  validation: { readonly corrected?: unknown; readonly changes?: unknown; readonly not_applied?: unknown; readonly instructions?: unknown; readonly source_id?: unknown },
+  retained: unknown,
+  locale: McpLocale,
+): string[] {
+  const c = narrativeCatalog(locale);
+  const view = schemaValidatedEntry({ ...validation, instructions: typeof validation.instructions === 'string' && validation.instructions !== '' });
+  return [c.validated(view), `${c.retained}${locale === 'fr' ? ' :' : ':'}`, JSON.stringify(retained, null, 2).slice(0, 6_000)];
+}
+
 /** Le récit complet : en-tête, une ligne par étape, jalons, coût, stratégie, prochaine étape, console. */
 export function renderNarrative(input: NarrativeInput, locale: McpLocale): string {
   const c = narrativeCatalog(locale);
@@ -141,7 +158,7 @@ export function renderNarrative(input: NarrativeInput, locale: McpLocale): strin
     const text = entryText(entry, locale, cause);
     if (text === null) continue;
     if (entry.step !== null && entry.step > 0) lines.push(`${entry.step}. ${text}`);
-    else lines.push(entry.kind === 'schema' || entry.kind === 'pruned' ? `   ${text}` : text);
+    else lines.push(entry.kind === 'schema' || entry.kind === 'schema_validated' || entry.kind === 'pruned' ? `   ${text}` : text);
     // Les états des indices suivent le rapport d'accès : le dossier est lu avant la reconnaissance.
     if (entry.kind === 'access_report' && brief !== null) lines.push(...brief.body);
   }

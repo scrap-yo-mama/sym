@@ -5,11 +5,11 @@
 // retenue est la moins chère conforme, comme sans dossier (INV2). Puis les états finaux de chaque indice (`used`,
 // `verified_unused`, `probe_failed`, `ignored`, `unverified`), la source de la version (`source.brief`) et les faits du code.
 import type { Element } from 'domhandler';
-import { parseHtml, selectElements } from '../dsl/css.js';
+import { elementText, parseHtml, selectElements } from '../dsl/css.js';
 import { DEFAULT_DSL_LIMITS } from '../dsl/limits.js';
 import type { TrialPair } from '../investigation/plan.js';
 import type { BriefHintKind, BriefHintState, BriefReason } from './schema.js';
-import type { BriefDigest, DigestHint } from './digest.js';
+import type { BriefDigest, DigestHint, ParsedHint } from './digest.js';
 import type { ProbeFacts, ProbeRun } from './probe.js';
 import { matchTemplate, templatePath } from './url.js';
 
@@ -35,6 +35,38 @@ function patternRegex(pattern: string): RegExp {
   const [head, tail] = pattern.split('{page}');
   const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, (c) => `\\${c}`);
   return new RegExp(`^${esc(head ?? '')}[0-9]{1,6}${esc(tail ?? '')}$`);
+}
+
+/** Contrôles qui chargent la suite d'une liste (bouton, lien, rôle bouton). */
+const LOAD_MORE_CONTROLS = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
+const foldText = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
+const LOAD_MORE_TEXT = /\b(?:load more|show more|see more|more results|charger plus|voir plus|afficher plus|plus de resultats|suivant(?:e|es|s)?|next)\b/;
+
+/** Texte d'un contrôle : contient le libellé déclaré (sans casse ni accents) ; sans libellé, un libellé usuel de « charger plus ». */
+function loadMoreText(text: string, label: string | undefined): boolean {
+  const t = foldText(text);
+  if (t === '' || t.length > 120) return false;
+  return label === undefined ? LOAD_MORE_TEXT.test(t) : t.includes(foldText(label));
+}
+
+/** Réponse de données d'un gisement désignée par un indice `xhr` : même hôte et requête nommée, ou paramètre nommé. */
+function xhrMatches(p: Extract<ParsedHint, { kind: 'pagination' }>, candidateUrl: string): boolean {
+  let c: URL;
+  try {
+    c = new URL(candidateUrl);
+  } catch {
+    return false;
+  }
+  if (p.param !== null) return c.searchParams.has(p.param.replace(/^url\.query\./, ''));
+  if (p.host !== undefined && c.hostname.toLowerCase() !== p.host) return false;
+  if (p.pattern !== undefined) {
+    const [path, query] = p.pattern.split('?');
+    const pathOk = path!.includes('{page}') ? patternRegex(path!).test(c.pathname) : pathMatches(templatePath(path!), templatePath(c.pathname)) || path!.toLowerCase() === c.pathname.toLowerCase();
+    const names = [...new URLSearchParams(query ?? '').keys()];
+    return pathOk && names.every((n) => c.searchParams.has(n));
+  }
+  if (p.endpoint !== undefined) return pathMatches(p.endpoint, templatePath(c.pathname)) || pathMatches(p.endpoint, c.pathname);
+  return true;
 }
 
 export type HintProvenance = 'probe' | 'traffic' | 'dom';
@@ -141,6 +173,20 @@ export function matchBriefHints(
       // Plusieurs éléments (les cartes d'une liste) : c'était un refus silencieux (borne de 1 résultat), constat Janssens.
       const found = select(p.selector);
       if (found.length > 0) confirmed.set(hint.id, { provenance: 'dom', candidates: domCandidatesOf(found) });
+      continue;
+    }
+    if (p.kind === 'pagination' && p.family === 'xhr') {
+      // Liste chargée par XHR / fetch : les réponses de données vues par la reconnaissance (celles de la requête nommée, ou
+      // portant le paramètre nommé). Rien de vu : l'indice reste non vérifié, transmis tel quel au prompt.
+      const candidates = recon.candidates.filter((c) => c.from === 'response' && xhrMatches(p, c.url)).map((c) => c.id);
+      if (candidates.length > 0) confirmed.set(hint.id, { provenance: 'traffic', candidates });
+      continue;
+    }
+    if (p.kind === 'pagination' && p.family === 'load_more') {
+      // Bouton « charger plus » présent dans la page déjà chargée (sélecteur, ou libellé dans un bouton ou un lien) : il
+      // désigne les listes du DOM. Aucun clic ici : la reconnaissance ne fait que le retrouver.
+      const found = p.selector !== undefined ? select(p.selector) : select(LOAD_MORE_CONTROLS).filter((el) => loadMoreText(elementText(el, 200), p.label));
+      if (found.length > 0) confirmed.set(hint.id, { provenance: 'dom', candidates: domCandidatesOf([]) });
       continue;
     }
     if (p.kind === 'pagination' && p.selector !== undefined) {

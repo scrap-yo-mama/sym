@@ -2573,10 +2573,15 @@ export interface components {
                 dataset_url?: string;
             };
         };
+        /** @description Validation (ou correction) du schéma proposé. Le schéma validé est celui de l'appelant : propriétés renommées, retirées ou ajoutées et descriptions modifiées sont appliquées, et l'affectation des champs est refaite par le rôle `investigate` (les descriptions guident l'affectation). Ce qui a changé par rapport à la proposition et ce qui n'est pas appliqué (marques `x-personal` de l'appelant ignorées, celles détectées gardées) entrent dans la chronologie du run des essais (entrée `schema_validated`) et dans `schema_validation` de la réponse MCP. */
         ValidateSchemaRequest: {
             output_schema?: {
                 [key: string]: unknown;
             };
+            /** @description Consignes de l'utilisateur (jamais du site), traitées comme la description de l'API : transmises au rôle `investigate` pour refaire l'affectation des champs (quelle liste lire, préfixe à retirer…) et ajoutées à la consigne des voies agentiques. */
+            instructions?: string;
+            /** @description Source candidate de la reconnaissance (`candidates[].id` de l'événement `reconnaissance.finished`, ex. `c2`) : les essais déclaratifs se limitent aux stratégies construites sur elle ; les voies agentiques sur la page restent essayées en dernier (les retirer par `exclude_executions`). Identifiant inconnu ou inutilisable : 400 `unknown_source`, la liste des identifiants valides dans `message` et `what_to_do`. */
+            source_id?: string;
             /** @description Plan d'essais restreint avant exécution (06 § 2, tâche 3.5), dans les bornes de la politique réseau ; jamais d'ajout. */
             exclude_executions?: components["schemas"]["Execution"][];
             wait_seconds?: number;
