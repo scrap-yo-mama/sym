@@ -14,6 +14,7 @@
     "test:fast": "vitest run --project unit --project contract",
     "test:integration": "node scripts/test-integration.ts",
     "test:e2e": "pnpm --filter @runtime/extension test:e2e && pnpm --filter @runtime/web test:e2e && playwright test -c tests/e2e/playwright.config.ts",
+    "test:parity": "node scripts/provider-parity.ts",
     "test:security": "vitest run --project security",
     "test:image": "vitest run --project image",
     "eval": "node eval/scripts/eval.ts",
