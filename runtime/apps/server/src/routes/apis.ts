@@ -430,7 +430,11 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         const locale = await ownerNarrativeLocale(ctx, actor.userId);
         const brief = await withActor(ctx.pool, actor, async (db) => briefViewOf(db, { apiId: created.apiId, ownerId: actor.userId, locale, pageUrl: await investigationUrlOf(db, created.apiId, actor.userId) }));
         const result = await buildRunResult(ctx, actor, row);
-        return reply.code(201).send(brief === null ? result : { ...result, brief_version: brief.brief_version, brief_report: brief.brief_report, brief_narrative: brief.narrative });
+        // Banc réel (passage 2, R03 à R06) : une enquête terminée pendant l'attente ne rendait ni `slug` ni `api_id` : la réponse de
+        // création les porte toujours, comme celle d'une enquête encore en cours (ApiCreated).
+        const api = await withActor(ctx.pool, actor, (db) => readApiById(db, created.apiId));
+        const identity = { api_id: created.apiId, slug: api?.slug ?? '' };
+        return reply.code(201).send(brief === null ? { ...result, ...identity } : { ...result, ...identity, brief_version: brief.brief_version, brief_report: brief.brief_report, brief_narrative: brief.narrative });
       }
     }
     return reply.code(201).send(await createdView(ctx, actor, created.apiId, created.runId));

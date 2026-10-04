@@ -506,7 +506,9 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
           // Accusé du dossier aussi dans l'enveloppe RunResult : version, rapport et récit du code.
           const { brief_narrative: runNarrative, ...runBrief } = ((await createdView(ctx, caller.actor, apiId, runId)) as unknown as Json);
           const briefLines = narrativeLines(runNarrative);
-          return withBriefLines(runResultAnswer(briefLines.length === 0 ? envelope : { ...envelope, ...pickBrief(runBrief) }, call), briefLines);
+          // `api_id` et `slug` toujours (banc réel, passage 2) : le client suit l'API créée sans relire le run.
+          const identity: Json = { api_id: apiId, slug: runBrief['slug'] };
+          return withBriefLines(runResultAnswer(briefLines.length === 0 ? { ...envelope, ...identity } : { ...envelope, ...identity, ...pickBrief(runBrief) }, call), briefLines);
         }
       }
       const view = (await createdView(ctx, caller.actor, apiId, runId)) as unknown as Json;

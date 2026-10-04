@@ -2614,6 +2614,13 @@ export interface components {
             brief_report?: components["schemas"]["BriefReportEntry"][];
             /** @description Récit du dossier en gabarits fermés (narrative.brief.*), sans texte du dossier. */
             brief_narrative?: string[];
+            /**
+             * Format: uuid
+             * @description Réponse de création d'API (`auto_validate`, enquête terminée pendant l'attente) : l'API créée, toujours présente.
+             */
+            api_id?: string;
+            /** @description Réponse de création d'API (`auto_validate`, enquête terminée pendant l'attente) : le slug de l'API créée, toujours présent. */
+            slug?: string;
             /** Format: uuid */
             run_id: string;
             state: components["schemas"]["RunState"];
