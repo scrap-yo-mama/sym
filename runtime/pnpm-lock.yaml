@@ -605,6 +605,9 @@ importers:
       '@runtime/llm':
         specifier: workspace:*
         version: link:../../packages/llm
+      '@sym-browser/sdk':
+        specifier: workspace:*
+        version: link:../../modules/browser/packages/sdk
       '@sym/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

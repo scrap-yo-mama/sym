@@ -73,6 +73,8 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `WORKER_CONCURRENCY` | worker, CLI | facultative | 5 | Jobs sans navigateur en parallèle par worker (inférieur ou égal à `DB_POOL_MAX`). |
 | `BROWSER_CONCURRENCY` | worker | facultative | déduit de la mémoire du conteneur | Runs navigateur simultanés par worker (1 à 32). Dimensionnement : 2 Go de mémoire pour 1 run navigateur, 4 Go pour 2. |
 | `DISABLE_BROWSER` | worker | facultative | false | `true` : aucun Chromium, les exécuteurs navigateur sont refusés. |
+| `BROWSER_URL` | worker | facultative | absente : Chromium local du worker | Navigateur à utiliser : `http(s)://hôte[:port]` ou `hôte:port` sans schéma (complété par `http://`) vers SYM Browser, reconnu par `GET /v1/version`. Le worker démarre même si SYM Browser ne répond pas encore ; les runs navigateur attendent son démarrage. |
+| `BROWSER_API_KEY` (`BROWSER_API_KEY_FILE`) secret | worker | obligatoire avec `BROWSER_URL` | aucun | Clé d’API de SYM Browser (portées `sessions:write` et `sessions:read`) ; masquée dans les journaux comme tout secret. |
 | `SHUTDOWN_TIMEOUT_SECONDS` | worker | facultative | 30 | Délai d’arrêt propre sur SIGTERM. |
 | `RUN_BUDGET_SECONDS` | worker | facultative | 900 | Budget de durée d’un run. |
 | `RUN_HEARTBEAT_SECONDS` | worker | facultative | 10 | Période d’écriture du battement d’un run actif. |

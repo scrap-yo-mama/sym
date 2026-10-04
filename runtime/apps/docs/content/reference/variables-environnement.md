@@ -11,7 +11,7 @@ Tout le reste (modèle IA, proxys, courrier sortant, authentification unique, al
 
 ## Règles communes
 
-- **Secrets en fichier** : `MASTER_KEY`, `MASTER_KEY_PREVIOUS`, `ADMIN_BOOTSTRAP_TOKEN` et `METRICS_TOKEN` acceptent le suffixe `_FILE` (`MASTER_KEY_FILE=/run/secrets/master_key`), pratique pour les secrets Docker. Poser la variable **et** son `_FILE` est refusé.
+- **Secrets en fichier** : `MASTER_KEY`, `MASTER_KEY_PREVIOUS`, `ADMIN_BOOTSTRAP_TOKEN`, `METRICS_TOKEN` et `BROWSER_API_KEY` acceptent le suffixe `_FILE` (`MASTER_KEY_FILE=/run/secrets/master_key`), pratique pour les secrets Docker. Poser la variable **et** son `_FILE` est refusé.
 - **Variables retirées** : une fois lues, les variables sensibles sont retirées de l'environnement du processus, pour qu'un code tiers ou un processus enfant ne puisse pas les relire. Le bac à sable démarre avec un environnement vide.
 - **Valeur invalide** : le démarrage est refusé avec un message qui nomme la variable.
 - **Durées** en secondes (`_SECONDS`) ou en jours (`_DAYS`), nombres positifs.
@@ -66,6 +66,8 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `WORKER_CONCURRENCY` | 5 | worker | jobs en parallèle ; au plus `DB_POOL_MAX` | lue |
 | `BROWSER_CONCURRENCY` | déduit de la mémoire du conteneur | worker | exécutions navigateur simultanées : `max(1, floor((limite − 0,5 Go) / 1,5 Go))`, soit 1 pour 2 Go et 2 pour 4 Go | lue |
 | `DISABLE_BROWSER` | `false` | worker | aucun Chromium : les exécutions navigateur sont refusées | lue |
+| `BROWSER_URL` | absente : Chromium local du worker | worker | navigateur à utiliser : `http(s)://hôte[:port]` ou `hôte:port` sans schéma vers SYM Browser, reconnu par `GET /v1/version` ; le worker démarre même si SYM Browser ne répond pas encore, les runs navigateur attendent son démarrage | lue |
+| `BROWSER_API_KEY` | aucune | worker | clé d'API de SYM Browser (requise avec `BROWSER_URL`), masquée dans les journaux ; accepte `BROWSER_API_KEY_FILE` | lue |
 | `SHUTDOWN_TIMEOUT_SECONDS` | 30 | worker | délai d'arrêt propre | lue |
 | `RUN_BUDGET_SECONDS` | 900 | worker | durée maximale d'un run | lue |
 | `RUN_HEARTBEAT_SECONDS` | 10 | worker | battement d'un run actif | lue |

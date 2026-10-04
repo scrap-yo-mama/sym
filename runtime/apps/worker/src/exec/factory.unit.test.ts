@@ -32,6 +32,31 @@ describe('productionExecutorFactory', () => {
     await pool.end();
   });
 
+  test('worker_starts_without_browser : BROWSER_URL vers un SYM Browser arrêté, le worker démarre, fournisseur sym-browser journalisé sans secret (G1, G3)', async () => {
+    const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
+    const infos: unknown[][] = [];
+    const spy = pino({ level: 'silent' });
+    spy.info = ((...args: unknown[]) => void infos.push(args)) as typeof spy.info;
+    const handle = await productionExecutorFactory({ BROWSER_URL: '127.0.0.1:1', BROWSER_API_KEY: 'zz_secret_key_value' })({ pool, config: loadWorkerConfig(env()), checked, logger: spy });
+    expect(handle.browserContexts?.()).toBe(0);
+    const started = infos.find((args) => typeof args[1] === 'string' && args[1].includes('fournisseur de navigateur'));
+    expect(started?.[0]).toMatchObject({ kind: 'sym-browser', capabilities: { egressPolicy: true } });
+    expect(JSON.stringify(infos)).not.toContain('zz_secret_key_value');
+    await handle.close?.();
+    await pool.end();
+  });
+
+  test('sans BROWSER_URL : fournisseur local journalisé (G1)', async () => {
+    const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
+    const infos: unknown[][] = [];
+    const spy = pino({ level: 'silent' });
+    spy.info = ((...args: unknown[]) => void infos.push(args)) as typeof spy.info;
+    const handle = await productionExecutorFactory({})({ pool, config: loadWorkerConfig(env()), checked, logger: spy });
+    expect(infos.find((args) => typeof args[1] === 'string' && args[1].includes('fournisseur de navigateur'))?.[0]).toMatchObject({ kind: 'local' });
+    await handle.close?.();
+    await pool.end();
+  });
+
   test('drapeau de test « autoriser le privé » hors NODE_ENV=test → refus de démarrer', async () => {
     const pool = new pg.Pool({ connectionString: 'postgres://zz_test@127.0.0.1:1/zz_test' });
     await expect(productionExecutorFactory({ RUNTIME_TEST_ALLOW_PRIVATE: '1', NODE_ENV: 'production' })({ pool, config: loadWorkerConfig(env()), checked, logger })).rejects.toThrow(

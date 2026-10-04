@@ -26,6 +26,9 @@
     },
     {
       "path": "../../packages/contracts"
+    },
+    {
+      "path": "../../modules/browser/packages/sdk"
     }
   ]
 }

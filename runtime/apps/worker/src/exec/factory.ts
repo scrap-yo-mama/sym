@@ -15,6 +15,8 @@ import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readIns
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { createLocalProvider } from '../browser/provider-local.js';
+import { detectProvider } from '../browser/provider-detect.js';
+import type { BrowserProvider } from '@sym/contracts/browser';
 import { installedEngineIdentity } from '../browser/engine-identity.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool } from '../browser/pool.js';
@@ -131,7 +133,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     }
     let browsers: BrowserPool | null = null;
     let launchProxy: EgressProxy | undefined;
-    let provider: ReturnType<typeof createLocalProvider> | undefined;
+    let provider: BrowserProvider | undefined;
     if (!config.disableBrowser) {
       launchProxy = await startEgressProxy({
         guard,
@@ -139,7 +141,11 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
         onRequest: (target) => logger.warn({ host: target.host, port: target.port }, 'Chromium : trafic hors contexte de run refusé'),
       });
       const limit = cgroupMemoryLimitBytes();
-      provider = createLocalProvider({ launchProxyUrl: launchProxy.url, env });
+      // `BROWSER_URL` absente : Chromium local ; présente : SYM Browser (04g §2). Un SYM Browser qui ne répond pas encore ne
+      // retient pas le démarrage : l'ouverture des sessions attend et réessaie (worker_starts_without_browser).
+      const launchProxyUrl = launchProxy.url;
+      provider = await detectProvider(env, fetch, { createLocal: () => createLocalProvider({ launchProxyUrl, env }) });
+      logger.info({ kind: provider.kind, capabilities: provider.capabilities }, 'fournisseur de navigateur');
       browsers = new BrowserPool({
         size: config.browserConcurrency,
         launch: provider.launchShared,
@@ -150,7 +156,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       // Bac à sable de Chromium (jamais --no-sandbox) : sans espaces de noms utilisateur (profil seccomp par défaut de Docker,
       // AppArmor de l'hôte), chaque run navigateur s'arrêterait sur « No usable sandbox! ». Dit dès le démarrage, sans
       // empêcher les runs sans navigateur (revue 4.1b : Render n'applique pas le profil du compose).
-      if (production) {
+      if (production && provider.kind === 'local') {
         const status = await (overrides.chromiumSandbox ?? chromiumSandboxCheck)();
         const seccomp = seccompMode() ?? 'inconnu';
         if (status.available) logger.info({ seccomp }, 'Chromium : bac à sable disponible');
