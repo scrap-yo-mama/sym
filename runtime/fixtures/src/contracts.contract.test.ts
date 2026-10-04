@@ -708,6 +708,28 @@ const contracts: Record<string, Contract> = {
     expect((await fx.get(host, '/catalogue/page-4.html')).status).toBe(404);
   },
 
+  async html_list() {
+    const host = H('html_list');
+    const cards = (body: string): number => (body.match(/<article class="item-bien block h-full {2}css-card-bien js-card-bien">/g) ?? []).length;
+    const first = await fx.get(host, '/nos-maisons/');
+    expect(first.status).toBe(200);
+    expect(cards(first.body)).toBe(10);
+    expect(first.body).toContain('href="/nos-maisons/page/2/"');
+    expect(first.body).toContain('href="/nos-maisons/page/52/"');
+    expect(first.body).not.toContain('rel="next"');
+    const last = await fx.get(host, '/nos-maisons/page/52/');
+    expect(cards(last.body)).toBe(9);
+    expect(last.body).toContain('href="# "');
+    const beyond = await fx.get(host, '/nos-maisons/page/53/');
+    expect(beyond.status).toBe(200);
+    expect(cards(beyond.body)).toBe(0);
+    expect((await fx.get(host, '/nos-maisons/page/1/')).status).toBe(301);
+    const page2 = (await fx.get(host, '/nos-maisons/page/2/')).body;
+    expect(page2).toContain('Prix : Nous consulter');
+    expect(page2).toMatch(/<li class="leading-3">\s+[0-9]+\.[0-9]{2}\s+m²\s+<\/li>/);
+    expect(page2).toContain('data-ref="ZZ0011va"');
+  },
+
   async search_guarded() {
     const host = H('search_guarded');
     expect((await fx.get(host, '/recherche?q=lampe')).body).toContain('/api/search?q=lampe&page=1');

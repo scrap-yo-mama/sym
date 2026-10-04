@@ -15,6 +15,7 @@
 import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { createLogger, DomainPacer, generateExtensionToken, Secret, validateOutput, type RunExecutor } from '@runtime/core';
+import { analyzeCapture } from '@runtime/core/investigation';
 import type { CommandFrame } from '@runtime/core/tunnel';
 import * as net from '@runtime/core/net';
 import { createRun, listInvestigationEvents, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, startInvestigation, withActor } from '@runtime/db';
@@ -36,6 +37,8 @@ import { createUser, runSetup, startTestServer, type TestServer, type TestUser }
 import { SimExtension } from '../helpers/tunnel-sim.js';
 
 const BOOKS = 'zz_test_books.localhost';
+/** Liste HTML statique paginée par le chemin (constat Janssens) : 519 biens, 52 pages, fixture `html_list`. */
+const HTML_LIST = 'zz_test_html_list.localhost';
 const SEARCH = 'zz_test_search_guarded.localhost';
 const LOGIN = 'zz_test_login.localhost';
 const CONTACTS = 'zz_test_api_json.localhost';
@@ -225,7 +228,7 @@ beforeAll(async () => {
   await queue.createQueue(runQueueDefinition());
   tunnel = new TunnelJobClient({ pool, sessionUrl: srv.db.url, logger: silent, pollMs: 100, offlineGraceMs: 2500 });
   await tunnel.start();
-  const guard = fixtureGuard(client.server.port, [BOOKS, SEARCH, LOGIN, CONTACTS, ACCOUNT], net);
+  const guard = fixtureGuard(client.server.port, [BOOKS, SEARCH, LOGIN, CONTACTS, ACCOUNT, HTML_LIST], net);
   const pacer = new DomainPacer(new PgPacingStore(pool));
   const agent = {
     llmConfig: async () => llmConfig(),
@@ -336,6 +339,77 @@ describe('cas de référence en version fixtures, au niveau du worker (gate M2)'
     const schema = (await apiRow(apiId)).output_schema;
     for (const item of items) expect(validateOutput(schema, item)).toEqual({ ok: true });
     expect(new Set(items.map((i) => i['sku'])).size).toBe(60);
+  });
+
+  test('assert_case_html_list_fixture — liste HTML statique paginée par le chemin (constat Janssens) : reconnaissance DOM → stratégie html paginée sans LLM, rejeu des 52 pages à 0 appel LLM, 519 biens', async () => {
+    // Ce que voit la reconnaissance statique (DISABLE_BROWSER) : la page 1 telle que servie ; les gisements sont ceux du worker.
+    const url = `${base(HTML_LIST)}/nos-maisons/`;
+    const page1 = (await client.get(HTML_LIST, '/nos-maisons/')).body;
+    const candidates = analyzeCapture({ mode: 'static', pageUrl: url, document: { url, status: 200, html: page1, renderedHtml: null, bytes: page1.length }, exchanges: [], totalBytes: page1.length }, [HTML_LIST]);
+    const dom = candidates.find((c) => c.from === 'dom')!;
+    expect(dom).toMatchObject({ count: 10 });
+    // Le faux LLM ne fait QUE relier les champs aux emplacements (noms et formes fabriqués par le code) ; aucune valeur ne lui est montrée.
+    const slot = (pred: (description: string) => boolean) => Object.entries(dom.skeleton).find(([, d]) => pred(d))![0];
+    const field = (name: string, type: string, path: string) => ({ name, type, required: true, personal: false, description: `Field ${name}`, path });
+    const fields = [
+      field('url', 'string', slot((d) => d.startsWith('link'))),
+      field('reference', 'string', slot((d) => d.startsWith('attribute data-ref'))),
+      field('title', 'string', '$.h3'),
+      field('postal_code', 'string', slot((d) => d.includes('paren_code'))),
+      field('surface_m2', 'number', slot((d) => d.includes('shape=area'))),
+      field('bedrooms', 'integer', slot((d) => d.includes('number_with_unit'))),
+      field('price_eur', 'number', slot((d) => d.includes('money'))),
+    ];
+    fake.setScenario(MODEL, [
+      scripted.json({
+        fields: fields.map(({ path: _path, ...f }) => f),
+        sources: [{ candidate: dom.id, paths: fields.map((f) => ({ field: f.name, path: f.path, ops: [] })), pagination: { type: 'none', param: null, start: null, has_more_path: null, next_path: null } }],
+      }),
+    ]);
+    const apiId = await insertApi('zz_test_case_html_list', { networkPolicy: { allow: ['direct', 'dc_proxy'] } });
+    const run = await investigate(apiId, { url, description: 'Liste des biens de cette page, toutes les pages, sans ouvrir les fiches' });
+    expect(run).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    // Stratégie déclarative html (E1, direct), née de la reconnaissance DOM : pagination par le chemin détectée par le code.
+    const sv = await strategyOf(apiId);
+    expect(sv).toMatchObject({ execution: 'fetch', network: 'direct' });
+    expect(sv.spec.sources[0]).toMatchObject({ from: 'html', records: dom.records });
+    expect(sv.spec.pagination).toMatchObject({ type: 'page_param', param: 'url.path', path_pattern: '/nos-maisons/page/{page}/', limits: { hard_max_pages: 200 } });
+    // Un seul essai (E1) ; ni E4 ni navigateur ; un seul appel LLM (le rôle investigate) pour toute l'enquête.
+    expect(await attemptsOf(run.id)).toEqual([{ execution: 'fetch', network: 'direct', result_class: 'ok' }]);
+    expect(fake.requests).toBe(1);
+    expect(run.cost.proxy_usd).toBe(0);
+    // Page 2 atteinte par les essais ; règle d'arrêt constatée sur la page vide qui suit la dernière (53).
+    const finished = (await eventsOf(run.id)).filter((e) => e.kind === 'attempt.finished').map((e) => e.payload as { executions: { pages: number }[]; pagination?: { verified: boolean; stop: string | null; pages: number } });
+    expect(finished[0]!.executions.every((e) => e.pages === 2)).toBe(true);
+    expect(finished[0]!.pagination).toEqual({ verified: true, stop: 'records_empty', pages: 53 });
+
+    // Rejeu : un run ordinaire lit les 52 pages (et la 53e, vide), 0 appel LLM, 519 biens conformes au schéma validé.
+    await client.reset();
+    const llmCalls = fake.requests;
+    const again = await replay(apiId);
+    expect(again).toMatchObject({ state: 'succeeded', items: 519, outcome: 'clean' });
+    expect(fake.requests).toBe(llmCalls);
+    expect(again.cost).toMatchObject({ llm_usd: 0 });
+    const paths = await hitsOf(HTML_LIST);
+    expect(paths['/nos-maisons/']).toBe(1);
+    expect(paths['/nos-maisons/page/2/']).toBe(1);
+    expect(paths['/nos-maisons/page/52/']).toBe(1);
+    expect(paths['/nos-maisons/page/53/']).toBe(1);
+    expect(paths['/nos-maisons/page/54/']).toBeUndefined();
+    const items = await itemsOf(again.dataset_id);
+    expect(items).toHaveLength(519);
+    const schema = (await apiRow(apiId)).output_schema as { required: string[] };
+    expect([...schema.required].sort()).toEqual(['reference', 'title', 'url']);
+    for (const item of items) expect(validateOutput(schema, item)).toEqual({ ok: true });
+    expect(new Set(items.map((i) => i['reference'])).size).toBe(519);
+    const first = items.find((i) => i['reference'] === 'ZZ0001va')!;
+    expect(first).toMatchObject({ url: `${base(HTML_LIST)}/propriete/zz-bien-zz0001va/`, title: 'Maison Zztest n°0001 à vendre', bedrooms: 2 });
+    expect(typeof first['price_eur']).toBe('number');
+    expect(typeof first['surface_m2']).toBe('number');
+    // « Prix : Nous consulter » (tous les 13 biens) : prix absent, bien gardé ; sans chambres (tous les 7) : champ absent.
+    expect(items.find((i) => i['reference'] === 'ZZ0013va')).not.toHaveProperty('price_eur');
+    expect(items.find((i) => i['reference'] === 'ZZ0014va')).not.toHaveProperty('bedrooms');
+    expect(items.find((i) => i['reference'] === 'ZZ0011va')).not.toHaveProperty('surface_m2');
   });
 
   test('assert_case_c1_fixture — C1 : recherche paginée dont la page 2 sert un défi → bloquee, arrêt de toute escalade : 0 essai proxy ni tunnel, rien après la détection', async () => {

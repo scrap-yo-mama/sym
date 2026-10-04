@@ -15,7 +15,8 @@ interface SiteInfo {
 }
 
 // Inventaire attendu (15 §8) : 12 existantes + défi en 200, 5 ajouts Q1, 6 ajouts S5, 8 accès O8, 4 du spike 0.6a, 2 du banc 2.8
-// (corpus d’injection, miroir local des mutations par étape), 2 des cas de référence de la gate M2 (D0, C1) = 40 sites.
+// (corpus d’injection, miroir local des mutations par étape), 2 des cas de référence de la gate M2 (D0, C1),
+// la liste HTML paginée par le chemin (constat Janssens) = 41 sites.
 const EXPECTED: Record<string, string[]> = {
   base: ['api_json', 'ssr', 'spa', 'login', 'challenge', '429', 'geo', 'injection', 'dom', 'signed403', 'irregular', '503', 'challenge_200'],
   q1: ['ssrf', 'slow', 'volume', 'personal', 'scroll'],
@@ -25,8 +26,9 @@ const EXPECTED: Record<string, string[]> = {
   agent: ['agent_irregular_html', 'agent_mobile_next', 'agent_no_api_unstable_dom', 'agent_prompt_injection'],
   // Banc 2.8 (15 §11) : corpus d’injection (4 techniques) et miroir local des 10 mutations par étape.
   bench: ['bench_injection', 'bench_steps'],
-  // Gate M2 (tests/cases) : D0 (catalogue rendu serveur paginé par rel=next) et C1 (recherche paginée, défi à la page 2).
-  cases: ['books', 'search_guarded'],
+  // Gate M2 (tests/cases) : D0 (catalogue rendu serveur paginé par rel=next) et C1 (recherche paginée, défi à la page 2) ;
+  // liste HTML statique paginée par le chemin (constat Janssens).
+  cases: ['books', 'search_guarded', 'html_list'],
 };
 
 let fx: Client;
@@ -43,11 +45,11 @@ beforeEach(async () => {
 });
 
 describe('fixtures : inventaire', () => {
-  it('sert exactement les 40 sites attendus, par lot', () => {
+  it('sert exactement les 41 sites attendus, par lot', () => {
     for (const [lot, ids] of Object.entries(EXPECTED)) {
       expect(sites.filter((s) => s.lot === lot).map((s) => s.id).sort(), lot).toEqual([...ids].sort());
     }
-    expect(sites).toHaveLength(40);
+    expect(sites).toHaveLength(41);
   });
 });
 
