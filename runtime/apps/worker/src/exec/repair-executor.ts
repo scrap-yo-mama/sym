@@ -50,7 +50,9 @@ import {
 } from '@runtime/core';
 import { assertPromptSafe, ClassificationGuardError, type AgentEvidence, type ExecFailure } from '@runtime/core/exec';
 import { proposeRepair, readSkillsPhase, renderSkillBodies, repairCallCeilingUsd, repairMessages, repairPromptVersion } from '@runtime/agent';
-import { acquireRepairLease, buildStrategySource, inputHash, readBaselineItem, readCatalogMemory, readCurrentStrategyVersion, readHealthyItems, readSourceBase, releaseRepairLease, renewRepairLease, resolveRulesForApi, saveRunJudge, type CatalogMemory } from '@runtime/db';
+import { buildBriefDigest, renderAgentBrief } from '@runtime/core';
+import { siteScope } from '@runtime/core/investigation';
+import { acquireRepairLease, buildStrategySource, inputHash, readBriefForApi, readBaselineItem, readCatalogMemory, readCurrentStrategyVersion, readHealthyItems, readSourceBase, releaseRepairLease, renewRepairLease, resolveRulesForApi, saveRunJudge, type CatalogMemory } from '@runtime/db';
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -248,6 +250,8 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
           investigationId: base?.investigation_id ?? null,
           decisions: base?.decisions ?? [],
           rows,
+          // Dossier d'enquête (2.14, 19c § 4) : vN+1 garde la version consultée par vN (`source.brief.ref`).
+          ...(base?.brief === undefined || base.brief === null ? {} : { brief: base.brief }),
         }),
         rules: rows,
       };
@@ -301,9 +305,12 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
       // Masquage des couches 1 et 2 (19 §3, rôle `repair`) : la demande ne part jamais en clair, ni au prompt ni à l'étage 3.
       const description = maskTextForLlm(target.api.description ?? '');
       const catalogMemory = await repairMemory(ctx, spec, description);
+      // Réparer, c'est recompiler depuis la source, dossier compris (19c § 4, assert_brief_survives_repair) : la version du
+      // dossier de vN est relue (filtrée sur le propriétaire), rendue avec les faits du code ; aucune sonde ici.
+      const agentBrief = await repairBrief(deps.pool, ctx, base?.brief?.ref?.version ?? null, base?.request.url ?? null);
       for (;;) {
         if (!(await holds())) return leaseLost();
-        const base = { description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, rules: rulesPrompt, ...(catalogMemory === '' ? {} : { catalogMemory }) };
+        const base = { description, spec, outputSchema: target.api.outputSchema, failure, evidence, healthy, reasons: request.reasons, refused, rules: rulesPrompt, ...(agentBrief === '' ? {} : { agentBrief }), ...(catalogMemory === '' ? {} : { catalogMemory }) };
         const args = skillsPrompt === '' ? base : { ...base, skills: skillsPrompt };
         const ceiling = repairCallCeilingUsd(args, price);
         if (!ledger.canPropose(ceiling)) break;
@@ -389,4 +396,23 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
     await ctx.log('warn', 'repair_failed', { cause, attempts: ledger.attempts, spent_usd: ledger.spentUsd, refused: [...new Set(refused)].slice(0, 10) });
     return { kind: 'failed', cause, detail: cause === 'repeated_patch' ? 'repair_repeated_patch' : 'repair_budget_exhausted' };
   }
+}
+
+/**
+ * Section `<untrusted_agent_brief>` de la réparation (19c § 4) : la version du dossier de la source de vN, relue avec les
+ * faits du code (`brief_hint_outcomes`) ; jamais un dossier d'un autre propriétaire (clone, transfert : `ref` à null).
+ */
+async function repairBrief(pool: pg.Pool, ctx: RunCtx, version: number | null, pageUrl: string | null): Promise<string> {
+  if (version === null || pageUrl === null) return '';
+  const read = await readBriefForApi(pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, preferVersion: version }).catch(() => null);
+  if (read === null || read.brief.version !== version) return '';
+  if (!URL.canParse(pageUrl)) return '';
+  const host = new URL(pageUrl).hostname.toLowerCase();
+  const digest = buildBriefDigest(read.brief.content, { pageUrl, scope: siteScope(host), now: new Date(), sessionOrTunnel: true, outcomes: read.outcomes, subjectExcluded: read.brief.subject_excluded });
+  const states = digest.hints.flatMap((h) => {
+    const fact = read.outcomes.get(h.identity_key);
+    return fact === undefined ? [] : [{ id: h.id, state: fact.state, reason: null, provenance: null }];
+  });
+  await ctx.log('info', 'brief_read', { version: read.brief.version, sha256: read.brief.sha256, hints: digest.hints.length, at: 'repair' });
+  return renderAgentBrief({ brief: read.brief.content, digest, states, receivedAt: read.brief.created_at }).text;
 }

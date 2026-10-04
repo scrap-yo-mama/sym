@@ -457,7 +457,20 @@ export async function cloneApi(db: Queryable, input: { apiId: string; fromOwnerI
     `INSERT INTO strategy_versions (api_id, owner_id, ${svList}) SELECT $3, $4, ${svList} FROM strategy_versions WHERE api_id = $1 AND owner_id = $2`,
     [input.apiId, input.fromOwnerId, id, input.toOwnerId],
   );
+  // Dossier d'enquête (2.14, 19c § 4, assert_clone_no_brief) : ni `api_briefs`, ni `brief_hint_outcomes` ne sont copiés,
+  // et `source.brief.ref` passe à null (`brief_not_transferred`) : une réparation chez le nouveau propriétaire ne lit aucun
+  // dossier de l'ancien.
+  await detachBriefSources(db, [id]);
   return { id, slug, status };
+}
+
+/** `source.brief` des versions d'API clonées ou transférées : référence retirée, raison `brief_not_transferred`. */
+async function detachBriefSources(db: Queryable, apiIds: readonly string[]): Promise<void> {
+  await db.query(
+    `UPDATE strategy_versions SET source = jsonb_set(source, '{brief}', jsonb_build_object('ref', NULL, 'used', '[]'::jsonb, 'ignored', '[]'::jsonb, 'not_transferred', 'brief_not_transferred'))
+     WHERE api_id = ANY($1::uuid[]) AND source IS NOT NULL AND jsonb_typeof(source -> 'brief') = 'object'`,
+    [apiIds],
+  );
 }
 
 /**
@@ -478,6 +491,10 @@ export async function transferApisWithoutSession(db: Queryable, fromOwnerId: str
     await db.query('DELETE FROM api_persistence WHERE api_id = ANY($1::uuid[])', [ids]);
     await db.query('UPDATE strategy_versions SET owner_id = $2 WHERE api_id = ANY($1::uuid[])', [ids, toOwnerId]);
     await db.query('UPDATE schedules SET owner_id = $2, enabled = false, updated_at = now() WHERE api_id = ANY($1::uuid[])', [ids, toOwnerId]);
+    // Dossier d'enquête (2.14, 19c § 4) : il ne suit pas l'API transférée (versions et faits du code supprimés).
+    await db.query('DELETE FROM api_briefs WHERE api_id = ANY($1::uuid[])', [ids]);
+    await db.query('DELETE FROM brief_hint_outcomes WHERE api_id = ANY($1::uuid[])', [ids]);
+    await detachBriefSources(db, ids);
   }
   const kept = await db.query<{ id: string }>('SELECT id FROM apis WHERE owner_id = $1 AND requires_session ORDER BY id', [fromOwnerId]);
   return { transferred: ids, kept: kept.rows.map((r) => r.id) };

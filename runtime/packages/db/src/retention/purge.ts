@@ -13,6 +13,7 @@
 // inchangé retrouvé ne repousse aucune échéance. Identité système (propriétaire des tables, hors RLS).
 import pg from 'pg';
 import { appendAudit } from '../audit.js';
+import { pruneBriefVersions, purgeBriefSamples } from '../briefs.js';
 import { ensureDatasetItemsPartitions, listDatasetItemsPartitions } from '../partitions.js';
 import { DEFAULT_RETENTION_POLICY, type RetentionPolicy } from './policy.js';
 
@@ -183,7 +184,7 @@ export async function purgeMarkedDatasets(db: SessionDb, now: Date, opts: Physic
 }
 
 export type CleanupResult = Record<
-  'investigation_payloads' | 'rejected_samples' | 'run_profiles' | 'error_detail' | 'run_inputs' | 'run_logs' | 'run_artifacts' | 'tunnel_jobs' | 'runs' | 'dedup_keys' | 'audit_events',
+  'investigation_payloads' | 'rejected_samples' | 'brief_samples' | 'brief_versions' | 'run_profiles' | 'error_detail' | 'run_inputs' | 'run_logs' | 'run_artifacts' | 'tunnel_jobs' | 'runs' | 'dedup_keys' | 'audit_events',
   number
 >;
 
@@ -213,6 +214,10 @@ export async function cleanupExpiredRunData(
     `UPDATE run_rejected_items SET sample = '[]'::jsonb WHERE created_at < $1 AND sample <> '[]'::jsonb`,
     [samples],
   );
+  // Dossier d'enquête (2.14, 19c § 4) : `hints[].sample` réduit à son empreinte passé RETENTION_SAMPLES_DAYS (une
+  // recompilation ultérieure lit le dossier sans `sample`) ; au plus BRIEF_VERSIONS_KEEP versions par API.
+  out.brief_samples = await purgeBriefSamples(db, samples, now);
+  out.brief_versions = await pruneBriefVersions(db, { keep: policy.briefVersionsKeep });
   // Profils des runs (2.12) : la baseline validée reste avec sa version (purgée avec l'API).
   out.run_profiles = await count(`DELETE FROM run_profiles WHERE NOT baseline AND created_at < $1`, [before(policy.profilesDays)]);
   out.error_detail = await count(

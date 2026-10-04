@@ -31,6 +31,7 @@ export * from './rejected.js';
 export * from './rules.js';
 export * from './memory.js';
 export * from './quality.js';
+export * from './briefs.js';
 export * from './runs.js';
 export * from './schedules.js';
 export * from './webhooks.js';

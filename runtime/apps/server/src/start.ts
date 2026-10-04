@@ -213,6 +213,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
         maxCostUsdPerRun: config.rest.maxCostUsdPerRun,
       },
       mcp: config.mcp.disabled ? null : createMcpRuntime(pool, config.mcp, options.mcp),
+      ...(config.brief === undefined ? {} : { brief: config.brief }),
       persistence: { policy: config.persistence, ...(options.persistence?.negativeMemory === undefined ? {} : { negativeMemory: options.persistence.negativeMemory }) },
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),

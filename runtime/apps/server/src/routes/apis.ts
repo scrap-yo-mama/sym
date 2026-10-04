@@ -21,6 +21,7 @@ import {
 import {
   applyStatusAndNotify,
   asActorInTransaction,
+  briefHintsView,
   confirmInstructedSteps,
   createRun,
   InvestigationStateError,
@@ -35,7 +36,9 @@ import {
   withActor,
   type InvestigationState,
 } from '@runtime/db';
+import type { BriefRejection, InvestigationBrief } from '@runtime/core';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type pg from 'pg';
 import type { ServerContext } from '../context.js';
 import {
   apiDetail,
@@ -54,6 +57,7 @@ import {
   versionSummary,
   type ApiRow,
 } from '../rest/apis.js';
+import { briefViewOf, ownerNarrativeLocale, prepareBrief, rejectBrief, saveBrief } from '../rest/briefs.js';
 import { runErrorOf } from '../rest/run-error.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
 import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
@@ -100,6 +104,8 @@ const createSchema = {
     wait_seconds: { type: 'integer', minimum: 0, maximum: 25 },
     visibility: { type: 'string', enum: ['private', 'instance'] },
     account_site_acknowledged: { type: 'boolean' },
+    // Dossier d'enquête (2.14, 19c) : tout JSON ici, contrôlé par le service (schéma fermé, taille, secrets) avant toute création.
+    brief: {},
   },
 } as const;
 
@@ -112,6 +118,7 @@ type CreateBody = {
   wait_seconds?: number;
   visibility?: 'private' | 'instance';
   account_site_acknowledged?: boolean;
+  brief?: unknown;
 };
 
 const patchSchema = {
@@ -200,6 +207,17 @@ const listQuery = {
 
 const pageQuery = { type: 'object', properties: { cursor: { type: 'string', maxLength: 512 }, limit: { type: 'integer', minimum: 1, maximum: 200 } } } as const;
 
+/** Refus d'un dossier d'enquête (19c § 9.3) : 400, code, champ nommé, conduite à tenir ; jamais la valeur reçue. */
+function sendBriefError(reply: FastifyReply, refused: BriefRejection): FastifyReply {
+  return reply.code(400).send({ error: { code: refused.code, message: refused.message, what_to_do: refused.what_to_do, ...(refused.field === null ? {} : { field: refused.field }) } });
+}
+
+/** URL de la demande d'enquête d'une API du propriétaire (rapport du dossier : portée de site). */
+async function investigationUrlOf(db: Pick<pg.ClientBase, 'query'>, apiId: string, ownerId: string): Promise<string> {
+  const { rows } = await db.query<{ url: string | null }>("SELECT investigation -> 'request' ->> 'url' AS url FROM apis WHERE id = $1 AND owner_id = $2", [apiId, ownerId]);
+  return rows[0]?.url ?? 'https://invalid.invalid/';
+}
+
 /** Erreur d'état d'enquête → code HTTP (05 § 4.3). */
 export function investigationError(reply: FastifyReply, error: InvestigationStateError): FastifyReply {
   const status = error.code === 'api_not_found' ? 404 : error.code === 'invalid_request' || error.code === 'invalid_schema' ? 400 : 409;
@@ -241,13 +259,17 @@ async function waitApiLeavesEnquete(ctx: ServerContext, actor: Actor, apiId: str
 
 /** Corps de `ApiCreated` (05 § 4.1) : phase, schéma proposé et échantillon (propriétaire), rapport d'accès, run. */
 export async function createdView(ctx: ServerContext, actor: Actor, apiId: string, runId: string) {
+  const locale = await ownerNarrativeLocale(ctx, actor.userId);
   return withActor(ctx.pool, actor, async (db) => {
     const api = await readApiById(db, apiId);
     const proposal = await latestProposal(db, apiId);
+    // Dossier d'enquête (19c § 7) : rapport et récit du code, propriétaire seulement (lecture filtrée par owner_id).
+    const brief = api !== null && api.owner_id === actor.userId ? await briefViewOf(db, { apiId, ownerId: actor.userId, locale, pageUrl: await investigationUrlOf(db, apiId, actor.userId) }) : null;
     // UX-07 : l'état réel de l'enquête (en cours, ou échec avec sa cause), pour que la phase, le schéma et la phrase ne se contredisent pas.
     const run = await readRunRow(db, runId);
     const error = run === null ? null : runErrorOf(run);
     return {
+      ...(brief === null ? {} : { brief_version: brief.brief_version, brief_report: brief.brief_report, brief_narrative: brief.narrative }),
       api_id: apiId,
       slug: api?.slug ?? '',
       investigation_phase: api?.investigation_phase ?? null,
@@ -341,6 +363,14 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     }
     // URL illisible : 400 avant toute lecture (jamais 500) ; le reste de la demande est validé par l'enquête.
     if (!URL.canParse(body.url)) return sendError(reply, 400, 'invalid_request', 'url : URL absolue attendue (https://…)');
+    // Dossier d'enquête (19c § 9.3) : contrôlé AVANT toute création ; une erreur ne crée rien et ne renvoie jamais la valeur.
+    let brief: Awaited<ReturnType<typeof prepareBrief>> | null = null;
+    if (body.brief !== undefined) {
+      const refused = rejectBrief(ctx, body.brief);
+      if (refused !== null) return sendBriefError(reply, refused);
+      brief = await prepareBrief(ctx, body.brief as InvestigationBrief);
+    }
+    let briefSaved = null as { version: number; sha256: string } | null;
     let created: { apiId: string; runId: string };
     try {
       const slug = await freeSlug(ctx, body.description, body.url);
@@ -348,6 +378,8 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       created = await withActor(ctx.pool, actor, async (tx) => {
         await reserveRunSlot(tx, ctx, { kind: 'investigation' });
         const apiId = await insertApi(tx, actor, { slug, description: body.description.trim(), visibility: body.visibility ?? 'private', networkPolicy: policy });
+        // Version 1 du dossier, dans la même transaction que l'API et l'enquête (lue par le worker avant la reconnaissance).
+        if (brief !== null) briefSaved = await saveBrief(tx, ctx, { apiId, ownerId: actor.userId, authorId: actor.userId, via: triggerOf(actor) === 'mcp' ? 'mcp' : triggerOf(actor) === 'ui' ? 'console' : 'rest', normalized: brief });
         const { runId } = await startInvestigation(tx, queue, {
           apiId,
           ownerId: actor.userId,
@@ -368,7 +400,12 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       targetType: 'api',
       targetId: created.apiId,
       outcome: 'success',
-      meta: { auto_validate: body.auto_validate === true, account_site_acknowledged: body.account_site_acknowledged === true },
+      // Dossier : version, empreinte, taille et compte d'indices ; jamais le contenu (assert_brief_not_logged).
+      meta: {
+        auto_validate: body.auto_validate === true,
+        account_site_acknowledged: body.account_site_acknowledged === true,
+        ...(briefSaved === null || brief === null ? {} : { brief: { version: briefSaved.version, sha256: briefSaved.sha256, bytes: brief.bytes, hints: (brief.brief.hints ?? []).length } }),
+      },
     });
     const wait = waitSecondsOf(ctx, request.query.wait, body.wait_seconds);
     if (wait > 0) {
@@ -380,7 +417,13 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       // pendant l'attente ne se répond qu'avec le statut qui en découle, jamais `failed` + `enquete` (attente bornée).
       if (row?.state === 'failed') await waitApiLeavesEnquete(ctx, actor, created.apiId, Math.min(deadline, Date.now() + 2_000), controller.signal);
       // Validation automatique terminée : l'enveloppe RunResult (05 § 4.1, `auto_validate`).
-      if (row !== null && body.auto_validate === true && isTerminalRunState(row.state)) return reply.code(201).send(await buildRunResult(ctx, actor, row));
+      if (row !== null && body.auto_validate === true && isTerminalRunState(row.state)) {
+        // Accusé du dossier (19c § 7) dans l'enveloppe RunResult aussi : version, rapport et récit du code, sans texte du dossier.
+        const locale = await ownerNarrativeLocale(ctx, actor.userId);
+        const brief = await withActor(ctx.pool, actor, async (db) => briefViewOf(db, { apiId: created.apiId, ownerId: actor.userId, locale, pageUrl: await investigationUrlOf(db, created.apiId, actor.userId) }));
+        const result = await buildRunResult(ctx, actor, row);
+        return reply.code(201).send(brief === null ? result : { ...result, brief_version: brief.brief_version, brief_report: brief.brief_report, brief_narrative: brief.narrative });
+      }
     }
     return reply.code(201).send(await createdView(ctx, actor, created.apiId, created.runId));
   });
@@ -857,6 +900,21 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
   });
 
   // ——— Chronologie des statuts (06 § 2, « Bugs & statut ») ———
+  // Indices du dossier d'enquête (2.14, 19c § 7) : état, raison, coût, version du dossier utilisée par chaque version de
+  // stratégie. Propriétaire seulement : un membre qui lit une API partagée reçoit le même 404 qu'une API inexistante
+  // (assert_authz_matrix). Aucun texte du dossier : identifiants, types et codes ; le texte se relit ailleurs, en texte brut.
+  app.get<{ Params: { slug: string } }>('/api/apis/:slug/brief', async (request, reply) => {
+    const actor = request.actor!;
+    const api = await readOwnApi(ctx, actor, request.params.slug);
+    if (api === null) return notFound(reply);
+    const view = await withActor(ctx.pool, actor, async (db) => {
+      const hints = await briefHintsView(db, { apiId: api.id, ownerId: actor.userId });
+      const report = await briefViewOf(db, { apiId: api.id, ownerId: actor.userId, pageUrl: await investigationUrlOf(db, api.id, actor.userId) });
+      return { ...hints, report: report?.brief_report ?? [] };
+    });
+    return view;
+  });
+
   app.get<{ Params: { slug: string }; Querystring: { cursor?: string; limit?: number } }>('/api/apis/:slug/status-events', { schema: { querystring: pageQuery } }, async (request, reply) => {
     const actor = request.actor!;
     const cursor = decodeCursor(request.query.cursor, 1);

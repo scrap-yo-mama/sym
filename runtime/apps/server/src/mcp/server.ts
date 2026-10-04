@@ -16,7 +16,7 @@
 // l'appeler répond 403 `insufficient_scope` avec le défi de scope, 05 § 4.4) ; les outils par API ne viennent que des API
 // de l'appelant (jamais une API partagée d'un autre membre, joignable par `list_apis` et `run_api`).
 import { randomUUID } from 'node:crypto';
-import { can, compileSchema, formatIssues, isTerminalRunState, validateOutput, type Permission, type RunState } from '@runtime/core';
+import { briefWhatToDo, can, checkBrief as checkBriefInput, formatIssues, isTerminalRunState, validateOutput, type Permission, type RunState } from '@runtime/core';
 import { withActor } from '@runtime/db';
 import { fromJsonSchema, McpServer, ProtocolError, ProtocolErrorCode, requireScopes, type CallToolResult, type jsonSchemaValidator, type ListToolsResult } from '@modelcontextprotocol/server';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -32,7 +32,6 @@ import {
   apiToolDescription,
   apiToolName,
   BRIEF_MAX_BYTES,
-  BRIEF_SCHEMA,
   GENERIC_TOOLS,
   MAX_API_TOOLS,
   MCP_INSTRUCTIONS,
@@ -80,9 +79,9 @@ const GUIDES: Record<string, ErrorGuide> = {
   run_not_active: { what_to_do: 'This run is already finished: read its result with get_run.', retryable: false },
   forbidden: { what_to_do: 'This key or account is not allowed to do this; ask the API owner or an admin.', retryable: false },
   storage_full: { what_to_do: 'The instance storage is full: tell the user to ask the admin to free or extend it.', retryable: false },
-  invalid_brief: { what_to_do: 'Remove or fix the named brief field (closed schema), or call create_api again without brief.', retryable: true },
-  brief_too_large: { what_to_do: `Keep the highest-confidence hints and drop notes; resend under ${Math.floor(BRIEF_MAX_BYTES / 1000)} KB.`, retryable: true },
-  brief_unavailable: { what_to_do: 'Call create_api again without brief: this instance does not read investigation briefs yet, and nothing was created.', retryable: true },
+  invalid_brief: { what_to_do: briefWhatToDo('invalid_brief'), retryable: true },
+  brief_too_large: { what_to_do: briefWhatToDo('brief_too_large', BRIEF_MAX_BYTES), retryable: true },
+  secret_in_brief: { what_to_do: briefWhatToDo('secret_in_brief'), retryable: true },
   // UX-04 : prérequis de l'instance, une tâche pour l'utilisateur ; l'appel peut être refait dès que le contact est posé.
   instance_contact_missing: { what_to_do: runErrorFor('instance_contact_missing').what_to_do, retryable: runErrorFor('instance_contact_missing').retryable },
   internal: { what_to_do: 'The instance hit an internal error: call again in a moment; if it persists, tell the user to check the instance logs.', retryable: true },
@@ -197,19 +196,14 @@ async function executionAnswer(ctx: ServerContext, caller: McpCaller, answer: Re
 /** Erreur de statut d'API → prochaine action (05 § 4.3 : `api_error` → ré-enquête par le propriétaire). */
 const runNextAction = (slug: string) => (code: string): Json | null => (code === 'api_error' ? { tool: 'run_api', args: { slug, force_investigate: true } } : null);
 
-/** Contrôle d'un dossier d'enquête (19c § 9.1, § 9.3) : taille puis schéma fermé ; jamais une valeur reçue dans l'erreur. */
-function checkBrief(brief: unknown): CallToolResult | null {
-  if (Buffer.byteLength(JSON.stringify(brief), 'utf8') > BRIEF_MAX_BYTES) return toolError('brief_too_large', `brief : plus de ${BRIEF_MAX_BYTES} octets (aucune troncature)`);
-  const validate = compileSchema(BRIEF_SCHEMA);
-  if (!validate(brief)) {
-    const first = validate.errors?.[0];
-    const extra = first?.keyword === 'additionalProperties' ? `/${String((first.params as { additionalProperty?: unknown }).additionalProperty ?? '')}` : '';
-    const field = `brief${(first?.instancePath ?? '') + extra}`.replace(/\//g, '.').replace(/[^a-zA-Z0-9_.]/g, '');
-    return toolError('invalid_brief', `champ ${field} refusé (schéma fermé du dossier d'enquête)`);
-  }
-  // Service du dossier d'enquête (tâche 2.14) pas encore livré (D-83) : un dossier valide n'est ni lu ni conservé. 2.14
-  // remplace ce bouchon par l'appel à son service et joue les deux test.todo du bloc create_api de mcp.integration.test.ts.
-  return toolError('brief_unavailable', 'dossier d’enquête non pris en charge par cette instance : rien n’a été créé');
+/**
+ * Contrôle d'un dossier d'enquête (19c § 9.1, § 9.3), par le service de 2.14 (D-83) : taille, schéma fermé, secrets ;
+ * jamais une valeur reçue dans l'erreur, rien n'est créé. Un dossier valide est lu : transmis à la route REST, qui le
+ * contrôle à nouveau, le masque et l'enregistre avec l'API.
+ */
+function checkBrief(ctx: ServerContext, brief: unknown): CallToolResult | null {
+  const out = checkBriefInput(brief, { maxBytes: ctx.brief?.maxBytes ?? BRIEF_MAX_BYTES });
+  return out.ok ? null : toolError(out.code, out.message);
 }
 
 /**
@@ -251,11 +245,21 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
   return {
     async create_api(args, caller) {
       const body: Json = { description: args['description'], url: args['url'] };
-      for (const key of ['example_output', 'auto_validate', 'network_policy'] as const) if (args[key] !== undefined) body[key] = args[key];
+      for (const key of ['example_output', 'auto_validate', 'network_policy', 'brief'] as const) if (args[key] !== undefined) body[key] = args[key];
       const answer = await rest(ctx, caller, 'POST', `/api/apis${query({ wait: wait(args) })}`, body);
       if (answer.status !== 201) return restError(answer);
-      if (typeof answer.body['run_id'] === 'string' && Array.isArray(answer.body['items'])) return runResultAnswer(answer.body);
-      return success(createdSummary(answer.body), answer.body);
+      // Enveloppe RunResult (`auto_validate`) : l'accusé du dossier y figure aussi, en tête du message.
+      if (typeof answer.body['run_id'] === 'string' && Array.isArray(answer.body['items'])) {
+        const { brief_narrative: runNarrative, ...envelope } = answer.body;
+        const runLines = Array.isArray(runNarrative) ? runNarrative.filter((l): l is string => typeof l === 'string') : [];
+        return success(runLines.length === 0 ? String(envelope['message'] ?? '') : `${runLines.join('\n')}\n${String(envelope['message'] ?? '')}`, envelope);
+      }
+      // Récit du dossier (19c § 7) : gabarits fermés du code en tête du texte, `brief_report[]` dans structuredContent ;
+      // aucun texte du dossier. Sans dossier, aucune ligne de plus. Phrase selon l'état réel de l'enquête (UX-07).
+      const { brief_narrative: narrative, ...structured } = answer.body;
+      const lines = Array.isArray(narrative) ? narrative.filter((l): l is string => typeof l === 'string') : [];
+      const summary = createdSummary(structured);
+      return success(lines.length === 0 ? summary : `${lines.join('\n')}\n${summary}`, structured);
     },
 
     async validate_schema(args, caller) {
@@ -498,7 +502,7 @@ export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, vers
       guarded(tool.name, async (input) => {
         // Dossier d'enquête contrôlé AVANT le reste (19c § 9.3) : invalid_brief nomme le champ, brief_too_large sans troncature.
         if (tool.name === 'create_api' && input['brief'] !== undefined) {
-          const refused = checkBrief(input['brief']);
+          const refused = checkBrief(ctx, input['brief']);
           if (refused) return refused;
         }
         const checked = validateOutput(tool.inputSchema, input);

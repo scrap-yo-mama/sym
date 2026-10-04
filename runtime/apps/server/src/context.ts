@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Dépendances partagées par les routes.
 import type { JobQueue, Kek, Keyring, MfaEnforced, PersistencePolicy, Secret } from '@runtime/core';
+import type { BriefConfig } from '@runtime/core';
 import type { SsrfGuard } from '@runtime/core/net';
 import type { KeyCheckResult, NegativeMemory, SecretStore } from '@runtime/db';
 import type pg from 'pg';
@@ -64,6 +65,8 @@ export type ServerContext = {
   rest: RestLimits;
   /** Serveur MCP (tâche 3.2) ; null : `DISABLE_MCP` (aucune route /mcp). */
   mcp: McpRuntime | null;
+  /** Dossier d'enquête (tâche 2.14) : bornes `BRIEF_*` ; absent : valeurs par défaut de 19c § 9.2. */
+  brief?: BriefConfig;
   /** Fichier du statut « modèle validé » (eval/validated-models.json, 15 § 11) ; tests : un autre fichier. */
   validatedModelsFile?: URL | string;
   /**

@@ -34,6 +34,8 @@ export * from './steps/index.js';
 export * from './persistence/index.js';
 export * from './rules/index.js';
 export * from './memory/index.js';
+// Dossier d'enquête (2.14) : jamais importé par un module de politique (assert_policy_module_no_brief_import).
+export * from './brief/index.js';
 export * from './quality/index.js';
 export * from './agent/phases.js';
 export type * from './sandbox/index.js';

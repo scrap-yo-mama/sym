@@ -18,6 +18,7 @@ import {
   type ObservabilityConfig,
   type PersistencePolicy,
 } from '@runtime/core';
+import { briefConfigFromEnv, type BriefConfig } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import type { McpConfig } from './mcp/runtime.js';
 import { TOOL_EXPOSURES, type ToolExposure } from './mcp/tools.js';
@@ -59,6 +60,8 @@ export type ServerConfig = {
   rest: RestConfig;
   /** Serveur MCP (tâche 3.2, 05 § 1 et § 3). */
   mcp: McpConfig;
+  /** Dossier d'enquête (tâche 2.14, 19c § 9.2) : variables `BRIEF_*` bornées. */
+  brief?: BriefConfig;
   /**
    * Mode « SYM ne lâche pas » (2.16, D-49) : `PERSISTENCE_*` (14 § 2), mêmes valeurs que le worker. Le serveur s'en sert
    * pour l'activation (plafond effectif), le premier créneau d'une API déjà en `erreur` et l'état `Api.persistence`.
@@ -319,5 +322,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       ...costCaps,
     },
     mcp: loadMcpConfig(env, publicUrl),
+    brief: briefConfigFromEnv(env),
   };
 }

@@ -59,6 +59,11 @@ export type InvestigateArgs = {
    * demande, l'exemple et le contexte, juste avant la page (les gisements).
    */
   readonly catalogMemory?: string;
+  /**
+   * Dossier d'enquête de l'IA de l'utilisateur (tâche 2.14, 19c § 5) déjà rendu (`renderAgentBrief`) : ordre fixe du
+   * prompt, juste avant la mémoire du catalogue ; donnée non fiable, aucune règle ni aucun plan n'en naît.
+   */
+  readonly agentBrief?: string;
 };
 
 /** Message système : consignes produit fixes, puis règles et skills (préfixe stable pour le cache du fournisseur). */
@@ -91,7 +96,8 @@ export function investigateMessages(args: InvestigateArgs, token = randomBytes(1
     args.accessFacts === undefined ? '' : `ACCESS FACTS: ${JSON.stringify(args.accessFacts)}`,
     args.allowedCouples === undefined ? '' : `ALLOWED COUPLES (computed by the code; est_cost_usd per run): ${JSON.stringify(args.allowedCouples.slice(0, 40))}`,
     `TOKEN: ${token}`,
-    // Dossier de mémoire : sa propre enveloppe, qui ne peut imiter celle des gisements.
+    // Dossier d'enquête (2.14) puis dossier de mémoire : chacun dans sa propre enveloppe, qui ne peut imiter celle des gisements.
+    args.agentBrief === undefined || args.agentBrief === '' ? '' : args.agentBrief.replace(/untrusted_candidates/gi, 'untrusted-candidates'),
     args.catalogMemory === undefined || args.catalogMemory === '' ? '' : args.catalogMemory.replace(/untrusted_candidates/gi, 'untrusted-candidates'),
     `<${tag}>`,
     block,

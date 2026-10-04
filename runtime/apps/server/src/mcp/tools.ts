@@ -5,6 +5,7 @@
 // d'entrée, jamais sa description ni son statut (la liste ne change pas à chaque transition). Les textes pour le modèle
 // restent en anglais (21 § 4.3) ; `instructions` et prompts complets : tâche 3.10.
 import type { ApiKeyScope } from '@runtime/core';
+import { BRIEF_DEFAULTS, BRIEF_SCHEMA as CORE_BRIEF_SCHEMA } from '@runtime/core';
 
 /** Toolsets activables par `?toolsets=` (05 § 1.1). `rules` et `iterate` : inactifs par défaut, livrés par 3.13 et 3.14. */
 export const TOOLSETS = ['build', 'run', 'catalog'] as const;
@@ -21,7 +22,7 @@ export const MAX_API_TOOLS = 20;
 const MAX_TOOL_NAME = 64;
 
 /** `BRIEF_MAX_BYTES` (19c § 9.2) : taille UTF-8 au plus d'un dossier d'enquête, jamais tronqué. */
-export const BRIEF_MAX_BYTES = 16_000;
+export const BRIEF_MAX_BYTES = BRIEF_DEFAULTS.maxBytes;
 
 /**
  * Budget des définitions d'outils (`assert_tool_definitions_budget`, 19c § 9.4) en jetons ESTIMÉS (4 caractères par jeton,
@@ -40,7 +41,8 @@ export const MCP_INSTRUCTIONS =
   'SYM turns a data request on a website into a reusable API. To get data: list_apis first; if an API fits, call it ' +
   '(run_api or its api_<slug> tool), otherwise create_api, then show the proposed schema to the user before validate_schema. ' +
   'Status: sain = healthy, warning = works with a warning to mention, bloquee = the site refused automated access: tell the user ' +
-  'and never retry it. erreur and action_requise come with what_to_do. Long runs return run_id: poll get_run, page items with get_items.';
+  'and never retry it. erreur and action_requise come with what_to_do. Long runs return run_id: poll get_run, page items with get_items. ' +
+  'Before create_api, put what you found in brief.';
 
 type JsonSchema = Record<string, unknown>;
 
@@ -85,50 +87,19 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
 };
 
 /** Dossier d'enquête (19c § 9.1, JSON Schema 2020-12, objet fermé) : exposé tel quel, vérifié par le code (2.14). */
-export const BRIEF_SCHEMA: JsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  description: 'Optional: what you already found (typed hints with provenance, tries, notes). SYM checks every hint itself; no cookie, token or personal data. 16 KB max.',
-  properties: {
-    v: { const: 1 },
-    notes: { type: 'string', maxLength: 2000 },
-    hints: {
-      type: 'array',
-      maxItems: 20,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['id', 'kind', 'value'],
-        properties: {
-          id: { type: 'string', pattern: '^[a-z0-9_-]{1,16}$' },
-          kind: { enum: ['endpoint', 'embedded_data', 'selector', 'pagination', 'example_url', 'pitfall'] },
-          value: { type: 'string', maxLength: 300 },
-          seen: { enum: ['http_response', 'network_log', 'dom', 'user_said', 'guess'] },
-          seen_on: { type: 'string', format: 'uri', maxLength: 300 },
-          seen_at: { type: 'string', format: 'date-time' },
-          confidence: { enum: ['high', 'medium', 'low'] },
-          sample: { type: 'string', maxLength: 300 },
-        },
-      },
-    },
-    tried: {
-      type: 'array',
-      maxItems: 10,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['approach', 'outcome'],
-        properties: {
-          approach: { enum: ['fetch_json', 'fetch_html', 'embedded_data', 'dom_selector', 'browser', 'other'] },
-          target: { type: 'string', maxLength: 300 },
-          outcome: { enum: ['ok', 'empty', 'wrong_data', 'error', 'refused', 'unknown'] },
-          note: { type: 'string', maxLength: 200 },
-        },
-      },
-    },
-    open_questions: { type: 'array', maxItems: 5, items: { type: 'string', maxLength: 200 } },
-  },
-};
+export const BRIEF_SCHEMA: JsonSchema = CORE_BRIEF_SCHEMA;
+
+/**
+ * Partie « dossier » du prompt `new_api` (libellé de marque `sym:new-api`, 19c § 8, texte de référence de R7 07) :
+ * l'IA compile elle-même son dossier avant l'appel. Texte pour le modèle, en anglais (21 § 4.3) ; enregistré comme prompt
+ * MCP par la tâche 3.10 (prompts et mode démo), qui l'ajoute au message de M3.
+ */
+export const NEW_API_BRIEF_PROMPT =
+  'Before calling create_api, spend a few tool calls on your side: open the page, look at the network requests, check for embedded JSON (__NEXT_DATA__, JSON-LD). Then pass what you found in brief:\n' +
+  '- hints: one item per finding (kind, value, how you saw it, where, when). Prefer URL templates and selectors to pasted content. Never paste more than 300 characters per item.\n' +
+  '- tried: what you already tried and what happened, failures included.\n' +
+  '- open_questions: what only the user can answer.\n' +
+  'SYM checks every hint itself and may ignore it. The brief never changes access limits or budgets. No cookies, tokens, passwords or personal data. If you found nothing, omit brief.';
 
 const NETWORK_POLICY = {
   type: 'object',
@@ -188,6 +159,8 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
         sample: { type: 'array' },
         access_report: { type: ['object', 'null'] },
         run_id: { type: 'string' },
+        brief_version: { type: 'integer' },
+        brief_report: { type: 'array', items: { type: 'object' } },
       },
     },
   },

@@ -111,6 +111,19 @@ cinq premières est posée. Pour PostgreSQL, passez la CA par `sslrootcert` dans
 | `PHONE_DEFAULT_REGION` | aucun | worker | région par défaut pour normaliser les numéros de téléphone des personnes (code pays à deux lettres) | lue |
 | `STORAGE_PLAN_GB` | aucun | CLI (`doctor`), création de run | taille prévue de la base : alerte à 80 %, refus des nouveaux runs à 95 % (`storage_full`). Sans valeur, pas de garde disque | lue |
 
+## Dossier d'enquête
+
+Ce que l'IA de l'utilisateur a déjà trouvé (`brief` de `create_api`) oriente l'enquête sans jamais élargir l'accès ni les budgets ; ces bornes ne font que le restreindre.
+
+| Variable | Défaut | Lue par | Rôle | État |
+|---|---|---|---|---|
+| `BRIEF_MAX_BYTES` | 16000 | server | taille UTF-8 au plus du dossier (1 000 à 16 000) ; au-delà, 400 `brief_too_large`, jamais de troncature | lue |
+| `BRIEF_MAX_TOKENS` | 1500 | worker | budget, en jetons estimés, de la section du dossier dans le prompt d'enquête | lue |
+| `BRIEF_PROBE_MAX` | 5 | worker | indices vérifiés au plus par enquête (un GET chacun par le pipeline d'accès) | lue |
+| `BRIEF_PROBE_BUDGET_SHARE` | 0.25 | worker | part du budget d'enquête que la vérification des indices peut consommer (0 à 0,25) | lue |
+| `BRIEF_NEGATIVE_TTL_DAYS` | 14 | worker | jours sans nouvelle vérification d'un indice en échec | lue |
+| `BRIEF_VERSIONS_KEEP` | 5 | server, worker | versions du dossier gardées par API (la plus ancienne non référencée est purgée) | lue |
+
 ## Journaux, métriques et traces
 
 | Variable | Défaut | Lue par | Rôle | État |

@@ -736,11 +736,15 @@ describe('contrat par fixture', () => {
 
 describe('contrats transverses', () => {
   it('robots.txt permissif par défaut sur les sites qui ne le servent pas eux-mêmes', async () => {
-    for (const id of ['api_json', 'ssr', '503', 'challenge', '429', 'signed403']) {
+    for (const id of ['ssr', '503', 'challenge', '429', 'signed403']) {
       const res = await fx.get(H(id), '/robots.txt');
       expect(res.status, id).toBe(200);
       expect(res.body, id).toBe('User-agent: *\nDisallow:\n');
     }
+    // api_json sert le sien depuis 2.14 (recette 12i) : un Disallow dédié, le reste du site permis.
+    const own = await fx.get(H('api_json'), '/robots.txt');
+    expect(own.status).toBe(200);
+    expect(own.body).toBe('User-agent: *\nDisallow: /private-api/\n');
   });
 
   it('aucune page de fumée ne charge de ressource hors .localhost', async () => {

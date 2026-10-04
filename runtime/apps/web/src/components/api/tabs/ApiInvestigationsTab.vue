@@ -5,12 +5,13 @@
  * @description « Enquêtes » (06 § 2) : replay des événements d'enquête d'une API. Les enquêtes et réparations viennent des
  * versions de stratégie (chaque version renvoie à l'enquête ou à la réparation qui l'a produite) et de l'enquête en cours.
  * Rétention par défaut : 30 jours pour les événements, 7 pour les captures. Captures désactivées par défaut en tunnel et
- * derrière une connexion ; aucun partage public du live.
+ * derrière une connexion ; aucun partage public du live. En bas : liste des indices du dossier d'enquête (2.14).
  * @component
  * @example <ApiInvestigationsTab :detail="detail" slug="zz-books" initial-run="..." />
  */
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import BriefHintsList from '@/components/api/BriefHintsList.vue';
 import ReplayPlayer from '@/components/api/ReplayPlayer.vue';
 import LoadingState from '@/components/LoadingState.vue';
 import type { ApiDetail } from '@/composables/useApiDetail';
@@ -76,5 +77,7 @@ watch(selected, (runId) => (runId ? replay.open(runId, { live: entries.value.fin
       </div>
       <ReplayPlayer :events="replay.events.value" :live="replay.status.value === 'live'" />
     </template>
+    <!-- Dossier d'enquête (2.14, 19c § 7) : indices, état, raison, coût, version ; propriétaire seulement. -->
+    <BriefHintsList :slug="slug" />
   </div>
 </template>

@@ -624,6 +624,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/apis/{slug}/brief": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Indices du dossier d'enquête de l'API (état, raison, coût, version ; 19c § 7) ; propriétaire seulement, aucun texte du dossier */
+        get: operations["getApiBrief"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/apis/{slug}/status-events": {
         parameters: {
             query?: never;
@@ -2197,6 +2214,84 @@ export interface components {
             visibility?: components["schemas"]["Visibility"];
             /** @description Avertissement A11 confirmé (site à compte, 06 § 2). */
             account_site_acknowledged?: boolean;
+            brief?: components["schemas"]["InvestigationBrief"];
+        };
+        /** @description Dossier d'enquête facultatif (19c § 9.1, objet fermé) : indices typés avec provenance, essais, notes, questions. SYM vérifie chaque indice et peut l'ignorer ; il n'élargit jamais l'accès ni les budgets. 16 000 octets au plus, jamais tronqué (400 brief_too_large) ; clé inconnue : 400 invalid_brief ; cookie, jeton ou URL signée : 400 secret_in_brief. */
+        InvestigationBrief: {
+            /** @constant */
+            v?: 1;
+            notes?: string;
+            hints?: {
+                id: string;
+                /** @enum {string} */
+                kind: "endpoint" | "embedded_data" | "selector" | "pagination" | "example_url" | "pitfall";
+                value: string;
+                /** @enum {string} */
+                seen?: "http_response" | "network_log" | "dom" | "user_said" | "guess";
+                /** Format: uri */
+                seen_on?: string;
+                /** Format: date-time */
+                seen_at?: string;
+                /** @enum {string} */
+                confidence?: "high" | "medium" | "low";
+                sample?: string;
+            }[];
+            tried?: {
+                /** @enum {string} */
+                approach: "fetch_json" | "fetch_html" | "embedded_data" | "dom_selector" | "browser" | "other";
+                target?: string;
+                /** @enum {string} */
+                outcome: "ok" | "empty" | "wrong_data" | "error" | "refused" | "unknown";
+                note?: string;
+            }[];
+            open_questions?: string[];
+        };
+        /** @description Fait du code sur un indice (19c § 7) ; jamais le texte du dossier (gabarit reconstruit par le code). */
+        BriefReportEntry: {
+            id: string;
+            /** @enum {string} */
+            kind: "endpoint" | "embedded_data" | "selector" | "pagination" | "example_url" | "pitfall";
+            /** @enum {string} */
+            state: "used" | "verified_unused" | "probe_failed" | "ignored" | "unverified";
+            reason: string | null;
+            /** @enum {string|null} */
+            provenance: "probe" | "traffic" | "dom" | null;
+            template: string | null;
+            stale: boolean;
+            cost_usd: number | null;
+        };
+        ApiBriefView: {
+            latest: {
+                version: number;
+                /** Format: date-time */
+                created_at: string;
+                hints: number;
+                tried: number;
+                open_questions: number;
+                erased: boolean;
+            } | null;
+            hints: {
+                identity_key: string;
+                hint_id: string;
+                kind: string;
+                /** @enum {string} */
+                state: "used" | "verified_unused" | "probe_failed" | "ignored";
+                reason: string | null;
+                cost_usd: number | null;
+                brief_version: number;
+                stale: boolean;
+                /** Format: date-time */
+                probed_at: string | null;
+                /** Format: date-time */
+                last_ok_at: string | null;
+            }[];
+            versions: {
+                strategy_version: number;
+                brief_version: number | null;
+                used: number;
+                ignored: number;
+            }[];
+            report: components["schemas"]["BriefReportEntry"][];
         };
         ApiCreated: {
             /** Format: uuid */
@@ -2212,6 +2307,11 @@ export interface components {
             access_report: components["schemas"]["AccessReport"] | null;
             /** Format: uuid */
             run_id?: string | null;
+            /** @description Version du dossier d'enquête enregistrée avec l'API (19c § 4). */
+            brief_version?: number;
+            brief_report?: components["schemas"]["BriefReportEntry"][];
+            /** @description Récit du dossier en gabarits fermés (narrative.brief.*), sans texte du dossier. */
+            brief_narrative?: string[];
             /** @description État réel du run d'enquête à la réponse (UX-07) : en cours, ou terminé (`failed` avec `error`). */
             run_state?: components["schemas"]["RunState"];
             status?: components["schemas"]["ApiStatus"];
@@ -2475,6 +2575,11 @@ export interface components {
         };
         /** @description Enveloppe commune des sorties d'exécution (05 § 4.1), identique en MCP et en REST. */
         RunResult: {
+            /** @description Dossier d'enquête enregistré à la création de l'API (réponse de create_api avec auto_validate seulement). */
+            brief_version?: number;
+            brief_report?: components["schemas"]["BriefReportEntry"][];
+            /** @description Récit du dossier en gabarits fermés (narrative.brief.*), sans texte du dossier. */
+            brief_narrative?: string[];
             /** Format: uuid */
             run_id: string;
             state: components["schemas"]["RunState"];
@@ -4739,6 +4844,31 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    getApiBrief: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dernière version du dossier (comptes), faits du code par indice, version du dossier lue par chaque version de stratégie. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiBriefView"];
+                };
+            };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];

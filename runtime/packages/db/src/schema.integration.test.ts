@@ -32,6 +32,7 @@ const BUSINESS_TABLES = [
   'apis', 'strategy_versions', 'runs', 'run_attempts', 'run_logs', 'run_artifacts', 'investigation_events',
   'status_events', 'datasets', 'dataset_items', 'dedup_keys', 'schedules', 'site_sessions', 'tunnels', 'tunnel_jobs',
   'webhook_subscriptions', 'webhook_deliveries', 'run_rejected_items', 'run_profiles', 'strategy_version_memory_refs',
+  'api_briefs', 'brief_hint_outcomes',
 ];
 
 async function expectRejected(sql: string, params: unknown[] = []): Promise<void> {

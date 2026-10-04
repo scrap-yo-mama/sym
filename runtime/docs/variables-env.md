@@ -58,6 +58,11 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 
 | Variable | Lue par | Statut | Défaut | Rôle |
 |---|---|---|---|---|
+| `BRIEF_MAX_BYTES` | server | facultative | 16000 | Taille UTF-8 au plus du dossier d’enquête transmis par l’IA de l’utilisateur (`brief` de `create_api`), entre 1 000 et 16 000 ; au-delà, 400 `brief_too_large`, jamais de troncature. |
+| `BRIEF_MAX_TOKENS` | worker | facultative | 1500 | Budget, en jetons estimés, de la section du dossier d’enquête dans le prompt d’enquête et de réparation ; au-delà, les indices les moins sûrs sont retirés. |
+| `BRIEF_PROBE_MAX` | worker | facultative | 5 | Indices du dossier vérifiés au plus par enquête (une requête GET chacun par le pipeline d’accès), entre 0 et 5. |
+| `BRIEF_PROBE_BUDGET_SHARE` | worker | facultative | 0.25 | Part du budget d’enquête que la vérification des indices peut consommer, entre 0 et 0,25. |
+| `BRIEF_NEGATIVE_TTL_DAYS` | worker | facultative | 14 | Jours pendant lesquels un indice dont la vérification a échoué n’est pas vérifié de nouveau (sauf indice revu plus récemment). |
 | `MAX_WAIT_SECONDS` | server | facultative | 25 | Plafond, en secondes, de l’attente synchrone d’un appel REST ou MCP (paramètre `wait`, 1 à 25) ; au-delà, l’appel rend un run à suivre (202). |
 | `MAX_CONCURRENT_RUNS` | server | facultative | 50 | Runs actifs (en file ou en cours) de l’instance au-delà desquels une création de run ou d’API répond 429 `queue_full` avec `Retry-After` (valeur à valider en recette). |
 | `MAX_ACTIVE_RUNS_PER_USER` | server | facultative | 20 | Runs actifs (en file ou en cours, hors pause) d’un même utilisateur au-delà desquels sa création de run ou d’API répond 429 `user_queue_full` avec `Retry-After` : un membre ne remplit pas la file des autres (valeur à valider en recette). |
@@ -121,6 +126,7 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 
 | Variable | Lue par | Statut | Défaut | Rôle |
 |---|---|---|---|---|
+| `BRIEF_VERSIONS_KEEP` | server, worker, CLI | facultative | 5 | Versions du dossier d’enquête gardées par API ; la plus ancienne non référencée par une version de stratégie est purgée. |
 | `RETENTION_DATASETS_DAYS` | worker, CLI | facultative | 90 | Conservation des jeux de données (valeur initiale, modifiable dans Réglages). |
 | `RETENTION_DATASETS_MAX_DAYS` | worker, CLI | facultative | 3650 | Plafond de conservation des jeux de données. |
 | `RETENTION_SAMPLES_DAYS` | worker, CLI | facultative | 14 | Conservation des échantillons d’enquête. |

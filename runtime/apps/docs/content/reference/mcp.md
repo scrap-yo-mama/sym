@@ -8,7 +8,7 @@ description: "Outils génériques, outils par API, enveloppe de résultat, modes
 Le serveur MCP est la porte d'entrée « pour votre IA » : on ajoute l'instance à son client MCP, puis on demande une donnée en langage naturel. L'IA appelle des outils ; derrière, l'agent enquête, enregistre une API au catalogue et la rejoue ensuite à coût de code. Le même catalogue est accessible par l'[API REST](./rest.md).
 
 ::: info Disponibilité
-Le serveur MCP (`/mcp`) est livré : outils génériques, outils par API, enveloppe de résultat, erreurs, contrôle de `Origin` et `Host`, métadonnées RFC 9728. Ne le sont pas encore : le récit détaillé de l'enquête, la progression, les prompts et l'élicitation (expérience MCP), ainsi que la lecture du dossier d'enquête `brief` (un dossier valide est refusé avec `brief_unavailable`, rien n'est créé). La suite de conformité MCP officielle est jouée en CI, avec ses écarts attendus commentés.
+Le serveur MCP (`/mcp`) est livré : outils génériques, outils par API, enveloppe de résultat, erreurs, contrôle de `Origin` et `Host`, métadonnées RFC 9728. Ne le sont pas encore : le récit détaillé de l'enquête, la progression, les prompts et l'élicitation (expérience MCP). Le dossier d'enquête `brief` de `create_api` est lu : contrôlé (schéma fermé, 16 000 octets, secrets refusés), masqué, enregistré avec l'API ; chaque indice est vérifié par SYM avant usage, et la réponse porte `brief_report` et le récit du dossier, sans recopier son texte. La suite de conformité MCP officielle est jouée en CI, avec ses écarts attendus commentés.
 :::
 
 ## Se connecter

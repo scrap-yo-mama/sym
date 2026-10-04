@@ -17,6 +17,17 @@ export type StrategySource = {
   readonly decisions: readonly string[];
   readonly rules: readonly { readonly name: string; readonly version: number; readonly sha256: string; readonly level: RuleLevel }[];
   readonly reason: StrategySourceReason;
+  /**
+   * Dossier d'enquête consulté (tâche 2.14, 19c § 4) : version et empreinte, clés d'identité des indices qui ont pesé,
+   * indices écartés et pourquoi. Hors du compilé : un indice utilisé n'y vit que sous forme de cible ou de gabarit. Type
+   * structurel (le module des règles n'importe pas le module du dossier).
+   */
+  readonly brief?: {
+    readonly ref: { readonly version: number; readonly sha256: string } | null;
+    readonly used: readonly string[];
+    readonly ignored: readonly { readonly id: string; readonly reason: string }[];
+    readonly not_transferred?: 'brief_not_transferred';
+  } | null;
 };
 
 /** Ligne de `strategy_version_rules`. */

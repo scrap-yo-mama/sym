@@ -6,6 +6,7 @@
 // Bac à sable des scripts E3 (1.5) : utilisateur dédié lu dans l'environnement (SANDBOX_UID, SANDBOX_GID,
 // SANDBOX_LAUNCHER) ; en production, la frontière de l'OS est éprouvée au démarrage (`probeIsolation`) et le worker
 // refuse de démarrer si l'enfant pourrait lire l'environnement du worker (D-30).
+import { briefConfigFromEnv } from '@runtime/core';
 import { costCapsFromEnv, DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
@@ -253,6 +254,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       secrets,
       logger,
       strategy,
+      // Dossier d'enquête (2.14) : bornes BRIEF_* (sondes, part du budget, mémoire négative, budget du prompt).
+      briefConfig: briefConfigFromEnv(process.env),
       // Session requise ou tunnel seul (04 §4) : étape 0 et reconnaissance par l'extension du propriétaire.
       tunnel,
       agentic: true,
