@@ -547,6 +547,8 @@ export type MessageKey =
   | 'errors.forbidden'
   | 'errors.generic'
   | 'errors.idp_unreachable'
+  | 'errors.instance_contact_missing'
+  | 'errors.instance_contact_missing_member'
   | 'errors.invalid_code'
   | 'errors.invalid_cursor'
   | 'errors.invalid_email'

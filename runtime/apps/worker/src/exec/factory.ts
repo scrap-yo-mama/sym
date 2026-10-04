@@ -9,7 +9,7 @@
 import { costCapsFromEnv, DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
-import { identityFromEnv, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
+import { identityFromEnv, instanceContactEnvInvalid, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
 import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
@@ -180,7 +180,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     // serveur ne voit pas : l'aperçu de la console est ce qui part sur le fil. Best-effort : un échec ne retient pas le démarrage.
     try {
       const fallbacks = identityFromEnv(env);
-      await publishRobotEngine(pool, { ...installedEngineIdentity(), productVersion: config.version, identifyInstanceEnv: fallbacks.identifyInstance, instanceContactEnv: fallbacks.instanceContact });
+      await publishRobotEngine(pool, { ...installedEngineIdentity(), productVersion: config.version, identifyInstanceEnv: fallbacks.identifyInstance, instanceContactEnv: fallbacks.instanceContact, instanceContactEnvInvalid: instanceContactEnvInvalid(env) });
     } catch (error) {
       logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'moteur embarqué : publication impossible');
     }

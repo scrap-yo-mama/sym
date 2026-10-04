@@ -178,3 +178,16 @@ export function identityFromEnv(env: Readonly<Record<string, string | undefined>
   }
   return { identifyInstance: readIdentifyFlag(env['IDENTIFY_INSTANCE']) ?? null, instanceContact };
 }
+
+/**
+ * `INSTANCE_CONTACT` posé mais illisible (UX-05) : `identityFromEnv` le ramène à `null` comme un contact absent, mais le worker,
+ * lui, refusera l'enquête pour contact invalide. Publié à part pour que le serveur dise « corrige le contact », pas « renseigne-le ».
+ */
+export function instanceContactEnvInvalid(env: Readonly<Record<string, string | undefined>>): boolean {
+  try {
+    resolveInstanceContact(undefined, env);
+    return false;
+  } catch {
+    return true;
+  }
+}
