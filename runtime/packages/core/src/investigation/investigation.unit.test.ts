@@ -30,6 +30,25 @@ describe('coût estimé (04 §3.3)', () => {
     expect(e4).toBeCloseTo(10_000 / 1e6 + (1_500 * 2) / 1e6 + 6 * 0.00005, 6);
     expect(estimateCostUsd('agent', 'direct', { bytes: 1, pages: 1, perGbUsd: 0, llmPrice: null })).toBeNull();
   });
+
+  test('E6 (agent) : borne prudente, étapes × jetons par étape ; ne sous-estime plus les cas réels Barnes et R09 ; E1-E5 inchangés', () => {
+    // Prix du rôle `agent` des deux cas (5 $ / 25 $ par million) : le plan estimait 0,303 $ ; l'essai a coûté 0,5108 $
+    // (Barnes) et 0,409 $ (R09).
+    const opus = { in: 5, out: 25 };
+    const e6 = estimateCostUsd('agent', 'direct', { bytes: 3_000_000, pages: 1, perGbUsd: 0, llmPrice: opus })!;
+    expect(e6).toBeGreaterThanOrEqual(0.5108);
+    expect(e6).toBeGreaterThanOrEqual(0.409);
+    // Toujours le plus cher des niveaux agentiques au même prix (jamais essayé avant E4 ni E5).
+    const e5 = estimateCostUsd('hybrid', 'direct', { bytes: 3_000_000, pages: 1, perGbUsd: 0, llmPrice: opus })!;
+    expect(e5).toBe(0.0665);
+    const e4 = estimateCostUsd('agent_fetch', 'direct', { bytes: 40_000, pages: 1, perGbUsd: 0, llmPrice: opus, tokensIn: 10_000 })!;
+    expect(e4).toBe(Math.round((10_000 * 5 + 1_500 * 25) / 1e6 * 1e6 + 6 * 0.00005 * 1e6) / 1e6);
+    expect(e6).toBeGreaterThan(e5);
+    // Borne, pas devinette : même au prix d'un modèle ouvert (GLM-5.3, 0,563 $ / 2,50 $), au-dessus de la médiane mesurée
+    // en 0.6a (90 runs E6 : 20 414 jetons d'entrée, 1 939 de sortie).
+    const glm = estimateCostUsd('agent', 'direct', { bytes: 1, pages: 1, perGbUsd: 0, llmPrice: { in: 0.563, out: 2.5 } })!;
+    expect(glm).toBeGreaterThan((20_414 * 0.563 + 1_939 * 2.5) / 1e6);
+  });
 });
 
 describe('ordre d’essai et élagage', () => {
