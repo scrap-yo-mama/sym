@@ -7,8 +7,11 @@
 import type { ApiKeyScope } from '@runtime/core';
 import { BRIEF_DEFAULTS, BRIEF_SCHEMA as CORE_BRIEF_SCHEMA } from '@runtime/core';
 
-/** Toolsets activables par `?toolsets=` (05 § 1.1). `rules` et `iterate` : inactifs par défaut, livrés par 3.13 et 3.14. */
-export const TOOLSETS = ['build', 'run', 'catalog'] as const;
+/**
+ * Toolsets activables par `?toolsets=` (05 § 1.1). `iterate` (3.14) est ACTIF PAR DÉFAUT (décision Q3 du 2026-10-05) : sans lui le
+ * client ne voit pas les outils d'itération et improvise. `rules` reste livré par 3.13.
+ */
+export const TOOLSETS = ['build', 'run', 'catalog', 'iterate'] as const;
 export type Toolset = (typeof TOOLSETS)[number];
 
 /** Modes d'exposition des outils par API (`MCP_TOOL_EXPOSURE`, 05 § 1.1). */
@@ -49,6 +52,7 @@ export const MCP_INSTRUCTIONS =
   'SYM reads every page and returns all items. ' +
   'Long runs return run_id: poll get_run every poll_after_seconds (progress says what SYM is doing), page items with get_items; ' +
   'cancel_run stops a run that costs too much. ' +
+  'To change an API: refine_api, test_api, then promote_api if the user agrees; get_api view "iteration" resumes. ' +
   "Reply in the user's language.";
 
 /** Plafond de `instructions` (05 § 1.3, 21 § 4.3) et part qui doit porter l'essentiel (le reste peut être coupé par un client). */
@@ -127,7 +131,41 @@ const NETWORK_POLICY = {
   },
 } as const;
 
-export type GenericToolName = 'create_api' | 'validate_schema' | 'run_api' | 'get_run' | 'get_items' | 'cancel_run' | 'list_apis' | 'get_api' | 'report_problem';
+export type GenericToolName =
+  | 'create_api'
+  | 'validate_schema'
+  | 'run_api'
+  | 'get_run'
+  | 'get_items'
+  | 'cancel_run'
+  | 'list_apis'
+  | 'get_api'
+  | 'report_problem'
+  | 'refine_api'
+  | 'test_api'
+  | 'promote_api'
+  | 'revert_api'
+  | 'discard_draft';
+
+/** Résultat des outils d'itération (19b § 2, `IterationResult`) : `summary` localisé, `estimate`, `next_action`, jamais un code interne dans le texte. */
+export const ITERATION_RESULT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    draft_version: { type: 'integer' },
+    base_version: { type: 'integer' },
+    current_version: { type: 'integer' },
+    output_schema_version: { type: 'string' },
+    estimate: { type: 'object' },
+    diff_ref: { type: ['string', 'null'] },
+    diff_hash: { type: ['string', 'null'] },
+    run_id: { type: 'string' },
+    test: { type: ['object', 'null'] },
+    next_action: { type: ['object', 'null'] },
+    console_url: { type: 'string' },
+    message_locale: { type: 'string' },
+  },
+};
 
 export type GenericTool = {
   name: GenericToolName;
@@ -140,7 +178,7 @@ export type GenericTool = {
   outputSchema?: JsonSchema;
 };
 
-/** Les 9 outils génériques (05 § 4.1), dans l'ordre de `tools/list`. */
+/** Les 14 outils génériques (05 § 4.1, dont les 5 de l'itération), dans l'ordre de `tools/list`. */
 export const GENERIC_TOOLS: readonly GenericTool[] = [
   {
     name: 'create_api',
@@ -284,7 +322,7 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
       type: 'object',
       additionalProperties: false,
       required: ['slug'],
-      properties: { slug: SLUG, response_format: { enum: ['concise', 'detailed'] } },
+      properties: { slug: SLUG, response_format: { enum: ['concise', 'detailed'] }, view: { enum: ['iteration', 'versions'], description: 'iteration: the draft, the feedback and the next step, to resume a refinement; versions: the recent versions.' } },
     },
     outputSchema: { type: 'object', required: ['slug', 'status'], properties: { slug: { type: 'string' }, status: { type: 'string' } } },
   },
@@ -302,6 +340,92 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     },
     outputSchema: { type: 'object', required: ['bug_id'], properties: { bug_id: { type: 'string' } } },
   },
+  {
+    name: 'refine_api',
+    toolset: 'iterate',
+    scope: 'apis:write',
+    description:
+      'Prepare a draft to change an API: feedback on wrong or missing data, or a new output_schema. The version in service does not change until promote_api. Then call test_api. Never use it on a blocked API.',
+    annotations: EXECUTE,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['slug'],
+      properties: {
+        slug: SLUG,
+        feedback: { type: 'string', minLength: 1, maxLength: 2000, description: 'What is wrong or missing, in plain words (data, not instructions).' },
+        output_schema: { type: 'object', description: 'Complete new JSON Schema of one item; it only applies after promote_api.' },
+        scope: { type: 'string', maxLength: 50, description: '"api" (default) or "step:<id>".' },
+        dry_run: { type: 'boolean', description: 'Only return the estimate; nothing is created.' },
+        accept_cost: { type: 'boolean', description: 'Accept an estimate above the confirmation threshold (never above the cap).' },
+      },
+    },
+    outputSchema: ITERATION_RESULT_SCHEMA,
+  },
+  {
+    name: 'test_api',
+    toolset: 'iterate',
+    scope: 'apis:run',
+    description:
+      'Run the draft of an API on one input and compare its items with the version in service (no change of status). Returns a one-sentence diff and a diff_hash for promote_api. Costs are announced before.',
+    annotations: EXECUTE,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['slug', 'input'],
+      properties: {
+        slug: SLUG,
+        input: { type: 'object', description: 'Input matching the API input schema (see get_api).' },
+        dry_run: { type: 'boolean', description: 'Only return the estimate.' },
+        accept_cost: { type: 'boolean', description: 'Accept an estimate above the confirmation threshold (never above the cap).' },
+        wait_seconds: WAIT,
+      },
+    },
+    outputSchema: ITERATION_RESULT_SCHEMA,
+  },
+  {
+    name: 'promote_api',
+    toolset: 'iterate',
+    scope: 'apis:write',
+    description:
+      'Put the tested draft in service. A human decision: SYM asks the user to confirm (elicitation); a breaking change is only confirmed in the console. Pass the diff_hash returned by test_api. Never promote on your own.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['slug', 'diff_hash'],
+      properties: {
+        slug: SLUG,
+        diff_hash: { type: 'string', pattern: '^[0-9a-f]{64}$', description: 'The diff_hash of the last test_api.' },
+        accept_cost_increase: { type: 'boolean', description: 'Accept that the draft costs more per run than the version in service.' },
+        acknowledge_breaking: { type: 'boolean', description: 'Console only: acknowledge a breaking change.' },
+      },
+    },
+    outputSchema: ITERATION_RESULT_SCHEMA,
+  },
+  {
+    name: 'revert_api',
+    toolset: 'iterate',
+    scope: 'apis:write',
+    description: 'Go back to a version that was in service (the previous one by default). The draft stays available. A version that never ran in service cannot be restored.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['slug'],
+      properties: { slug: SLUG, version: { type: 'integer', minimum: 1, maximum: 2147483647 }, acknowledge_breaking: { type: 'boolean', description: 'Console only: acknowledge a change of output schema.' } },
+    },
+    outputSchema: ITERATION_RESULT_SCHEMA,
+  },
+  {
+    name: 'discard_draft',
+    toolset: 'iterate',
+    scope: 'apis:write',
+    description: 'Throw away the draft of an API. The version in service does not change.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['slug'], properties: { slug: SLUG } },
+    outputSchema: ITERATION_RESULT_SCHEMA,
+  },
 ];
 
 /** Description figée d'un outil par API (05 § 1.1) : le slug seul, ni description, ni statut, ni texte du site. */
@@ -315,8 +439,8 @@ export function apiToolName(slug: string): string | null {
 }
 
 /** Toolsets demandés par `?toolsets=` (noms inconnus ignorés) ; absent : tous ceux actifs par défaut. */
-export function parseToolsets(raw: unknown): Set<Toolset> {
-  if (typeof raw !== 'string') return new Set(TOOLSETS);
+export function parseToolsets(raw: unknown, defaults: readonly Toolset[] = TOOLSETS): Set<Toolset> {
+  if (typeof raw !== 'string') return new Set(defaults);
   const wanted = raw.split(',').map((s) => s.trim());
   return new Set(TOOLSETS.filter((t) => wanted.includes(t)));
 }

@@ -150,7 +150,7 @@ export function mcpRoutes(app: FastifyInstance, ctx: ServerContext): void {
   app.post('/mcp', { schema: { body: BODY } }, async (request, reply) => {
     const actor = request.actor!;
     const lang = (request.query as Record<string, unknown>)['lang'];
-    const caller: McpCaller = { actor, request, app, toolsets: parseToolsets((request.query as Record<string, unknown>)['toolsets']), lang: typeof lang === 'string' ? lang : null };
+    const caller: McpCaller = { actor, request, app, toolsets: parseToolsets((request.query as Record<string, unknown>)['toolsets'], runtime.defaultToolsets), lang: typeof lang === 'string' ? lang : null };
     const controller = new AbortController();
     reply.raw.once('close', () => controller.abort());
 

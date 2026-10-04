@@ -7,15 +7,20 @@
     "instructions_brief_sentence": "Before create_api, put what you found in brief."
   },
   "sha256": {
-    "create_api": "17dd0c00c9b91b22e793144a4342f44233e11cb60ce1f621790a90eae9e681c0",
-    "validate_schema": "9d1854947f0aec3c29f6e1c18984d509ebba9ada847cf92d6cf73eb6e26fae5a",
-    "run_api": "4df5ae25f8c70e5719dcc01ec4ebcd97694d931fa9cadedadea6f9e9c897fc48",
-    "get_run": "2590a9c4f3b04103241ce683cfc8bc2da45c4a955592a517b8f23872a3b08b9e",
-    "get_items": "222ad92e89d067f70fe78b11816e8bab62a02669334d484d8947e97b01861648",
+    "api_<slug>": "02f7dcd171eced482dd1e03d2a0c4f7f82c54cab5dfd778b69458d4442db9183",
     "cancel_run": "bc564c1f39f60afefe55c628fad16eb26e14206c8fc93835a982a0e3e2138f50",
-    "list_apis": "2f3ebd652b4a124fd5831511d396831df7c89003dd493c578ca099900692ebaf",
+    "create_api": "17dd0c00c9b91b22e793144a4342f44233e11cb60ce1f621790a90eae9e681c0",
+    "discard_draft": "48f8904813bf6d565208bf44856fb15cc85e36e646fa8b0fcb3462cd27449be2",
     "get_api": "b84d4ce2e235752a452089143aa2ae61bf990596fd62e88e7155bc66617865f9",
+    "get_items": "222ad92e89d067f70fe78b11816e8bab62a02669334d484d8947e97b01861648",
+    "get_run": "2590a9c4f3b04103241ce683cfc8bc2da45c4a955592a517b8f23872a3b08b9e",
+    "list_apis": "2f3ebd652b4a124fd5831511d396831df7c89003dd493c578ca099900692ebaf",
+    "promote_api": "81e2893c56fe089dd6eced50bc75f4bc775b1db435c86a4d31a88c9869299ffc",
+    "refine_api": "bb0063c8724d28e922174c58c1b09d34b45b704931983cf4ea267156326e3629",
     "report_problem": "11757bf1649bf98daaddc87e6cf0654993a8439b33dee9926fd128b74142a7e7",
-    "api_<slug>": "02f7dcd171eced482dd1e03d2a0c4f7f82c54cab5dfd778b69458d4442db9183"
+    "revert_api": "e2eb5279df12295d53cd43c28832360dba09b03c552f6a7e05793a6a495b37c2",
+    "run_api": "4df5ae25f8c70e5719dcc01ec4ebcd97694d931fa9cadedadea6f9e9c897fc48",
+    "test_api": "03fb266c7c7cd001bc68a60c20b5b9768ac6509ac242670b36e04e7031b6a366",
+    "validate_schema": "9d1854947f0aec3c29f6e1c18984d509ebba9ada847cf92d6cf73eb6e26fae5a"
   }
 }

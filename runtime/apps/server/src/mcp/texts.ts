@@ -250,7 +250,7 @@ export const elicitationCatalog = (locale: McpLocale): ElicitationCatalog => (lo
 // Prompts : titres et descriptions (personne, menu du client) ; les corps sont en anglais (modèle, prompts.ts)
 // ---------------------------------------------------------------------------------------------------------------
 
-export const PROMPT_NAMES = ['new_api', 'fix_api', 'first_steps', 'review_catalog'] as const;
+export const PROMPT_NAMES = ['new_api', 'fix_api', 'first_steps', 'review_catalog', 'resume_api'] as const;
 export type PromptName = (typeof PROMPT_NAMES)[number];
 
 export const PROMPT_MENU: Record<McpLocale, Record<PromptName, { title: string; description: string }>> = {
@@ -259,12 +259,14 @@ export const PROMPT_MENU: Record<McpLocale, Record<PromptName, { title: string; 
     fix_api: { title: 'sym:fix-api', description: 'Understand why an API is not healthy and what to do about it.' },
     first_steps: { title: 'sym:first-steps', description: 'A guided first run: see SYM investigate a page and return clean data.' },
     review_catalog: { title: 'sym:review-catalog', description: 'Review the API catalog: statuses, costs, what needs attention.' },
+    resume_api: { title: 'sym:resume-api', description: 'Pick up the refinement of an API where a previous conversation left it.' },
   },
   fr: {
     new_api: { title: 'sym:new-api', description: 'Transformer une demande de données sur un site en API réutilisable.' },
     fix_api: { title: 'sym:fix-api', description: 'Comprendre pourquoi une API n’est pas saine et quoi faire.' },
     first_steps: { title: 'sym:first-steps', description: 'Un premier essai guidé : voir SYM enquêter sur une page et rendre des données propres.' },
     review_catalog: { title: 'sym:review-catalog', description: 'Passer le catalogue en revue : statuts, coûts, ce qui demande de l’attention.' },
+    resume_api: { title: 'sym:resume-api', description: 'Reprendre l’affinage d’une API là où une conversation précédente l’a laissé.' },
   },
 };
 

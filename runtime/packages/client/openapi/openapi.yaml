@@ -1043,6 +1043,204 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/apis/{slug}/refine:
+    post:
+      operationId: refineApi
+      tags: [apis]
+      summary: Affine l'API par un brouillon (retour, nouveau schéma de sortie) ; la version en service ne change pas (19 § 6, tâche 3.14)
+      description: >-
+        Crée le brouillon (ou remplace l'ancien, archivé `superseded`) à côté de la version en service. Propriétaire seul. Aucun
+        changement de statut ; un run `draft_refine` est tracé. API `bloquee` ou `action_requise` : `409 api_blocked`, aucune
+        requête. Un seul affinage à la fois par API : `409 refine_in_progress`. `dry_run` : l'estimation seule, rien n'est créé.
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Lang'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IterationRefineRequest'
+      responses:
+        '200':
+          description: Brouillon prêt (ou estimation seule en `dry_run`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IterationRefineResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/test:
+    post:
+      operationId: testDraft
+      tags: [apis]
+      summary: "Teste le brouillon sur une entrée : run `draft_test`, diff contre la version en service (19 § 6, tâche 3.14)"
+      description: >-
+        Rejoue la stratégie du brouillon contre SON schéma de sortie, avec les gardes d'un run, sans toucher au statut. Sans run
+        récent de la version en service pour cette entrée, un second run `draft_test` la rejoue pour comparer des sorties du même
+        moment. `202` tant que les runs ne sont pas finis (le test est enregistré dès qu'ils le sont, lisible par `GET
+        iteration`). Au-delà du plafond de l'API : `409 cost_above_cap` ; au-delà de 0,10 $ : `409 cost_confirmation_required`
+        sauf `accept_cost`.
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Lang'
+        - $ref: '#/components/parameters/Wait'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IterationTestRequest'
+      responses:
+        '200':
+          description: "Test fini (ou estimation seule en `dry_run`) : diff, coût, conformité, empreinte du diff."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IterationTestResult'
+        '202':
+          description: Runs de test en cours.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IterationTestResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/promote:
+    post:
+      operationId: promoteDraft
+      tags: [apis]
+      summary: "Met le brouillon en service : acte humain (19 § 6, tâche 3.14)"
+      description: >-
+        Porte « promotion ». Console : un changement `major` exige `acknowledge_breaking` (`409 breaking_change_requires_ack`).
+        Clé d'API : élicitation acceptée (canal MCP) ; sans élicitation, `minor` et `patch` par un appel explicite du propriétaire,
+        `major` : `403 human_confirmation_required`, `acknowledge_breaking` n'y change rien. `diff_hash` : celui du dernier test,
+        sinon `409 diff_hash_mismatch`. Pointeur déplacé et, depuis `erreur`, transition 22 (`promoted`) au même COMMIT.
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Lang'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IterationPromoteRequest'
+      responses:
+        '200':
+          description: Version en service.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IterationMoveResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/revert:
+    post:
+      operationId: revertApi
+      tags: [apis]
+      summary: Rétablit une version qui a été en service, par déplacement de pointeur (19 § 6, tâche 3.14)
+      description: >-
+        Sans `version` : la plus récente qui a été en service avant la courante. Une version jamais courante (brouillon écarté,
+        vN+1 de réparation non validée) : `400 version_not_revertable`. Une autre version de schéma : accusé `major` et porte de
+        promotion. Le brouillon reste, marqué périmé. Depuis `erreur` : transition 22 (`reverted`).
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Lang'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IterationRevertRequest'
+      responses:
+        '200':
+          description: Version rétablie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IterationMoveResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/draft:
+    delete:
+      operationId: discardDraft
+      tags: [apis]
+      summary: Jette le brouillon (archivé `discarded`) ; la version en service ne bouge pas (tâche 3.14)
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Lang'
+      responses:
+        '200':
+          description: Brouillon archivé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IterationDiscarded'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/apis/{slug}/iteration:
+    get:
+      operationId: getIteration
+      tags: [apis]
+      summary: "Reprise d'une itération : brouillon, retours, dernier test, prochaine étape ; propriétaire seul (19 § 6, tâche 3.14)"
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/Lang'
+      responses:
+        '200':
+          description: État de l'itération, versions récentes, plan de promotion s'il y a un brouillon.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IterationView'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/apis/{slug}/resolved-rules:
     get:
       operationId: getResolvedRules
@@ -3258,6 +3456,14 @@ components:
         type: integer
         minimum: 0
         maximum: 25
+    Lang:
+      name: lang
+      in: query
+      required: false
+      description: Langue des phrases de la réponse (`en`, `fr`) ; défaut, la langue du compte.
+      schema:
+        type: string
+        maxLength: 16
   responses:
     Error:
       description: "Erreur au format commun `{ error: { code, message } }` (le code est stable, jamais localisé)."
@@ -4143,6 +4349,151 @@ components:
         sha256:
           type: string
           pattern: '^[0-9a-f]{64}$'
+    IterationRefineRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        feedback:
+          description: Retour de l'utilisateur (texte non fiable, 2 000 caractères au plus) ; il n'entre que dans la source de sa propre API.
+          type: string
+          minLength: 1
+          maxLength: 2000
+        kind:
+          type: string
+          enum: [wrong_value, missing_field, extra_items, schema, step]
+        field:
+          type: [string, 'null']
+          maxLength: 100
+        output_schema:
+          description: Nouveau schéma de sortie complet ; il vit dans le brouillon jusqu'à la promotion (jamais modifié en place).
+          type: object
+        scope:
+          description: '`api` ou `step:<id>`.'
+          type: string
+          maxLength: 50
+        dry_run:
+          type: boolean
+        accept_cost:
+          type: boolean
+    IterationEstimate:
+      type: object
+      additionalProperties: false
+      required: [low_usd, high_usd, basis, confidence, replay_cost_delta_usd, cap_usd, needs_confirmation, above_cap]
+      properties:
+        low_usd: { type: number }
+        high_usd: { type: number }
+        basis: { type: string, enum: [history, strategy, none] }
+        confidence: { type: string, enum: [low, medium, high] }
+        replay_cost_delta_usd: { type: number }
+        cap_usd: { type: number }
+        needs_confirmation: { type: boolean }
+        above_cap: { type: boolean }
+    IterationRefineResult:
+      type: object
+      required: [estimate, summary, next_action]
+      properties:
+        dry_run: { type: boolean }
+        draft_version: { type: integer }
+        base_version: { type: integer }
+        replaced_version: { type: [integer, 'null'] }
+        output_schema_version: { type: string }
+        schema_level: { type: string, enum: [none, patch, minor, major] }
+        schema_changes: { type: array, items: { type: object } }
+        widening_warnings: { type: array, items: { type: object } }
+        estimate: { $ref: '#/components/schemas/IterationEstimate' }
+        diff_ref: { type: 'null' }
+        diff_hash: { type: 'null' }
+        run_id: { type: string, format: uuid }
+        expires_at: { type: string, format: date-time }
+        ttl_days: { type: integer }
+        summary: { type: string, description: 'Phrase localisée (langue du compte, ou `lang`).' }
+        next_action: { type: [object, 'null'] }
+        console_url: { type: string }
+        message_locale: { type: string }
+    IterationTestRequest:
+      type: object
+      additionalProperties: false
+      required: [input]
+      properties:
+        input: { type: object }
+        dry_run: { type: boolean }
+        accept_cost: { type: boolean }
+        wait_seconds: { type: integer, minimum: 0, maximum: 25 }
+    IterationTestResult:
+      type: object
+      required: [estimate, next_action]
+      properties:
+        dry_run: { type: boolean }
+        needs_reference: { type: boolean }
+        draft_version: { type: integer }
+        draft_run_id: { type: string, format: uuid }
+        reference_run_id: { type: [string, 'null'], format: uuid }
+        state: { type: string }
+        poll_after_seconds: { type: integer }
+        estimate: { $ref: '#/components/schemas/IterationEstimate' }
+        test:
+          description: "Test enregistré sur le brouillon : conformité, coût, rejeu sans modèle, diff par clé d'identité et son empreinte."
+          type: [object, 'null']
+        summary: { type: string }
+        next_action: { type: [object, 'null'] }
+        console_url: { type: string }
+        message_locale: { type: string }
+    IterationPromoteRequest:
+      type: object
+      additionalProperties: false
+      required: [diff_hash]
+      properties:
+        diff_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        accept_cost_increase: { type: boolean }
+        acknowledge_breaking: { type: boolean }
+        elicitation:
+          description: Réponse à l'élicitation de promotion ; honorée seulement pour une clé passée par le serveur MCP.
+          type: string
+          enum: [accepted, declined]
+    IterationRevertRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        version: { type: integer, minimum: 1 }
+        acknowledge_breaking: { type: boolean }
+        elicitation: { type: string, enum: [accepted, declined] }
+    IterationMoveResult:
+      type: object
+      required: [current_version, previous_version, status, transition, output_schema_version, summary]
+      properties:
+        current_version: { type: integer }
+        previous_version: { type: integer }
+        status: { type: string }
+        transition: { type: [integer, 'null'], description: '22 depuis `erreur`, sinon null (pas une transition).' }
+        reason: { type: string }
+        output_schema_version: { type: string }
+        summary: { type: string }
+        next_action: { type: [object, 'null'] }
+        console_url: { type: string }
+        message_locale: { type: string }
+    IterationDiscarded:
+      type: object
+      required: [archived_version, summary]
+      properties:
+        archived_version: { type: integer }
+        summary: { type: string }
+        message_locale: { type: string }
+    IterationView:
+      type: object
+      required: [slug, status, current_version, output_schema_version, draft, versions, next_step, summary]
+      properties:
+        slug: { type: string }
+        status: { type: string }
+        current_version: { type: [integer, 'null'] }
+        output_schema_version: { type: string }
+        draft: { type: [object, 'null'], description: 'Brouillon, retours (propriétaire seul), dernier test, base périmée.' }
+        versions: { type: array, items: { type: object } }
+        next_step: { type: string, enum: [refine, test, promote, retest, blocked] }
+        promotion: { type: [object, 'null'] }
+        summary: { type: string }
+        next_action: { type: [object, 'null'] }
+        console_url: { type: string }
+        message_locale: { type: string }
     InstructedModeWrite:
       type: object
       additionalProperties: false

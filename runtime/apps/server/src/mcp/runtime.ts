@@ -8,13 +8,15 @@
 // reconnecte le serveur »).
 import { randomBytes } from 'node:crypto';
 import type pg from 'pg';
-import type { ToolExposure } from './tools.js';
+import type { Toolset, ToolExposure } from './tools.js';
 
 export type McpConfig = {
   /** `DISABLE_MCP=true` : aucune route /mcp (14 § 2). */
   disabled: boolean;
   /** `MCP_TOOL_EXPOSURE` : generic, pinned (défaut) ou all. */
   exposure: ToolExposure;
+  /** `MCP_DEFAULT_TOOLSETS` (3.14, Q3) : toolsets actifs quand le client ne demande rien par `?toolsets=` ; défaut : tous, `iterate` compris. */
+  defaultToolsets?: readonly Toolset[];
   /** Hôtes admis dans l'en-tête Host (sans port) : celui de PUBLIC_URL, plus `MCP_ALLOWED_HOSTS`. */
   allowedHosts: string[];
   /** Origines admises, comparées en entier (schéma, hôte, port) : celle de PUBLIC_URL, plus les origines de `MCP_ALLOWED_ORIGINS`. */

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Prompts MCP (tâche 3.10, 05 § 1.3) : `new_api`, `fix_api`, `first_steps`, `review_catalog` (le cinquième, `resume_api`, vient
-// avec l'itération par MCP, 3.14). Noms stables et titres de marque `sym:`, localisés dans le menu du client (21 § 4.3) ; corps
+// Prompts MCP (tâche 3.10, 05 § 1.3) : `new_api`, `fix_api`, `first_steps`, `review_catalog`, et `resume_api` (itération par MCP, 3.14). Noms stables et titres de marque `sym:`, localisés dans le menu du client (21 § 4.3) ; corps
 // en ANGLAIS (texte pour le modèle), terminés par « Answer the user in <langue>. ». Un argument saisi par la personne est cité
 // en JSON dans le corps : jamais exécuté comme consigne, jamais un texte du site (aucun contenu scrapé n'entre dans un prompt).
 //
@@ -54,6 +53,12 @@ const BODIES: Record<PromptName, (args: Args) => string> = {
     '2. Group the APIs by status: sain, warning, reparation, erreur, action_requise, bloquee, enquete. Mention stale APIs and average costs.\n' +
     '3. For each API that needs attention, say why in one sentence (get_api gives the reason) and what the user can do. Never retry a bloquee API.\n' +
     '4. End with a short list of next actions.',
+  resume_api: (args) =>
+    `Pick up the refinement of a SYM API where a previous conversation left it.${quoted(args, ['slug'])}\n` +
+    '1. Call get_api with the slug and view: "iteration": it returns the draft, the feedback already given, the last test and next_action.\n' +
+    '2. Tell the user in one sentence where things stand (version in service, draft, tested or not), then follow next_action: refine_api, test_api, or promote_api.\n' +
+    '3. A draft never changes what runs. Promote only when the user agrees with the diff; a breaking change is confirmed in the console, by the user.\n' +
+    '4. If the draft is stale (the version in service changed), run test_api again before promoting it. If the API is blocked, tell the user and stop.',
 };
 
 /** Corps d'un `prompts/get` : consigne en anglais puis la langue de la réponse à la personne. */
@@ -71,4 +76,5 @@ export const PROMPT_ARG_SCHEMAS: Record<PromptName, Record<string, unknown> | nu
   fix_api: { type: 'object', additionalProperties: false, properties: { slug: { type: 'string', maxLength: 63 } } },
   first_steps: null,
   review_catalog: null,
+  resume_api: { type: 'object', additionalProperties: false, properties: { slug: { type: 'string', maxLength: 63 } } },
 };

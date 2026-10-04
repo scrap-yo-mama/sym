@@ -828,3 +828,43 @@ export async function readPromotionGate(pool: pg.Pool, userId: string): Promise<
   const { rows } = await pool.query<{ promotion_gate: string }>('SELECT promotion_gate FROM users WHERE id = $1', [userId]);
   return rows[0]?.promotion_gate === 'all_in_console' ? 'all_in_console' : 'major_in_console';
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Test lancé, résultat à enregistrer : une conversation qui revient plus tard retrouve le diff
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * Enregistre le test du brouillon quand les runs de test lancés pour lui sont finis (sans que l'appelant ait attendu) :
+ * `null` si aucun test n'a été lancé, `pending` s'il reste un run en cours, sinon le test enregistré (déjà ou à l'instant).
+ * La référence est le run de la version en service lancé avec l'essai (même entrée, même instant), sinon le plus récent.
+ */
+export async function settleDraftTest(pool: pg.Pool, args: { apiId: string; ownerId: string; now?: Date }): Promise<LastTest | 'pending' | null> {
+  const found = await withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
+    const apiRow = await readApi(tx, { apiId: args.apiId, ownerId: args.ownerId });
+    if (apiRow.current_strategy_version === null) return null;
+    const draft = await readDraftRow(tx, apiRow, args.now ?? new Date());
+    if (draft === null) return null;
+    const { rows } = await tx.query<{ id: string; state: string; input: unknown; created_at: Date }>(
+      "SELECT id, state, input, created_at FROM runs WHERE api_id = $1 AND strategy_version = $2 AND trigger = 'draft_test' ORDER BY created_at DESC LIMIT 1",
+      [apiRow.id, draft.version],
+    );
+    const run = rows[0];
+    if (run === undefined) return null;
+    if (draft.last_test !== null && draft.last_test.run_id === run.id) return { kind: 'done' as const, test: draft.last_test };
+    const terminal = (s: string) => ['succeeded', 'failed', 'cancelled'].includes(s) || s.startsWith('skipped');
+    if (!terminal(run.state)) return 'pending' as const;
+    const base = apiRow.current_strategy_version;
+    const sibling = await tx.query<{ id: string; state: string }>(
+      `SELECT id, state FROM runs WHERE api_id = $1 AND strategy_version = $2 AND trigger = 'draft_test' AND input IS NOT DISTINCT FROM $3::jsonb
+         AND created_at BETWEEN $4::timestamptz - interval '60 seconds' AND $4::timestamptz + interval '60 seconds' ORDER BY created_at DESC LIMIT 1`,
+      [apiRow.id, base, run.input === null ? null : JSON.stringify(run.input), run.created_at],
+    );
+    if (sibling.rows[0] !== undefined && !terminal(sibling.rows[0].state)) return 'pending' as const;
+    const reference = sibling.rows[0]?.id ?? (await findReferenceRun(tx, apiRow.id, base, run.input));
+    return { kind: 'record' as const, run: run.id, reference };
+  });
+  if (found === null) return null;
+  if (found === 'pending') return 'pending';
+  if (found.kind === 'done') return found.test;
+  return recordDraftTest(pool, { apiId: args.apiId, ownerId: args.ownerId, draftRunId: found.run, referenceRunId: found.reference });
+}

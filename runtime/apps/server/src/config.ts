@@ -22,7 +22,7 @@ import { briefConfigFromEnv, type BriefConfig } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { supportedLocales } from './i18n.js';
 import type { McpConfig } from './mcp/runtime.js';
-import { TOOL_EXPOSURES, type ToolExposure } from './mcp/tools.js';
+import { TOOL_EXPOSURES, TOOLSETS, type ToolExposure, type Toolset } from './mcp/tools.js';
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -120,11 +120,16 @@ function loadMcpConfig(env: NodeJS.ProcessEnv, publicUrl: string): McpConfig {
   if (!['', 'true', 'false'].includes(disabledRaw)) throw new ConfigError('DISABLE_MCP invalide : true ou false.');
   const exposure = (env['MCP_TOOL_EXPOSURE'] ?? '').trim() || 'pinned';
   if (!(TOOL_EXPOSURES as readonly string[]).includes(exposure)) throw new ConfigError(`MCP_TOOL_EXPOSURE invalide : ${TOOL_EXPOSURES.join(', ')}.`);
+  const toolsetsRaw = (env['MCP_DEFAULT_TOOLSETS'] ?? '').trim();
+  const defaultToolsets = toolsetsRaw === '' ? [...TOOLSETS] : toolsetsRaw.split(',').map((t) => t.trim()).filter((t) => t !== '');
+  const unknown = defaultToolsets.filter((t) => !(TOOLSETS as readonly string[]).includes(t));
+  if (unknown.length > 0 || defaultToolsets.length === 0) throw new ConfigError(`MCP_DEFAULT_TOOLSETS invalide : liste de ${TOOLSETS.join(', ')} séparés par des virgules.`);
   const own = new URL(publicUrl).hostname.toLowerCase();
   const origins = originList(env);
   return {
     disabled: disabledRaw === 'true',
     exposure: exposure as ToolExposure,
+    defaultToolsets: defaultToolsets as Toolset[],
     allowedHosts: [...new Set([own, ...hostnameList(env, 'MCP_ALLOWED_HOSTS')])],
     allowedOrigins: [...new Set([new URL(publicUrl).origin, ...origins.origins])],
     allowedOriginHosts: [...new Set(origins.hosts)],

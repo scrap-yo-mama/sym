@@ -10,6 +10,7 @@ import type { ServerContext } from './context.js';
 import { localizeErrors } from './i18n.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { apiRoutes } from './routes/apis.js';
+import { iterationRoutes } from './routes/iteration.js';
 import { datasetRoutes } from './routes/datasets.js';
 import { eventRoutes } from './routes/events.js';
 import { openapiRoutes } from './routes/openapi.js';
@@ -127,6 +128,7 @@ export function buildServer(
   ssoRoutes(app, ctx);
   // API REST (tâche 3.1, 05 § 4.2).
   apiRoutes(app, ctx);
+  iterationRoutes(app, ctx);
   // Portabilité (tâche 3.12, 16 § 6).
   portabilityRoutes(app, ctx);
   runRoutes(app, ctx);

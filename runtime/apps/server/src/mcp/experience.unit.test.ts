@@ -404,8 +404,8 @@ describe('instructions et prompts (05 § 1.3, 19c § 8, 21 § 4.3)', () => {
     expect(MCP_INSTRUCTIONS).not.toMatch(BYPASS);
   });
 
-  test('4 prompts : noms stables, un titre et une description par langue, arguments décrits dans chaque langue', () => {
-    expect([...PROMPT_NAMES]).toEqual(['new_api', 'fix_api', 'first_steps', 'review_catalog']);
+  test('5 prompts : noms stables, un titre et une description par langue, arguments décrits dans chaque langue', () => {
+    expect([...PROMPT_NAMES]).toEqual(['new_api', 'fix_api', 'first_steps', 'review_catalog', 'resume_api']);
     for (const locale of MCP_LOCALES) {
       for (const name of PROMPT_NAMES) {
         const menu = PROMPT_MENU[locale][name];
