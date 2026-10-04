@@ -50,6 +50,8 @@ const KNOWN_CODES = new Set([
   'idp_unreachable',
   'invalid_status',
   'invalid_cursor',
+  // UX-04 : contact du robot absent ou invalide, refus avant toute création (variante membre : useInvestigation).
+  'instance_contact_missing',
 ]);
 
 /** Code stable d'une erreur `{ error: { code } }`, sinon null. */

@@ -17,7 +17,7 @@ import {
 } from '@/lib/investigation';
 import { EventStreamClient, type SseEvent } from '@/lib/sse';
 import { useEventStream } from '@/composables/useEventStream';
-import { markExpired } from '@/composables/useSession';
+import { can, markExpired } from '@/composables/useSession';
 
 type Schemas = components['schemas'];
 export type ApiCreateBody = Schemas['ApiCreate'];
@@ -33,6 +33,15 @@ export interface InvestigationOptions {
 
 /** Au plus autant d'événements gardés avant que l'identifiant du run soit connu (course entre la réponse et le flux). */
 const BUFFER_LIMIT = 500;
+
+/**
+ * Message d'un refus : `instance_contact_missing` (UX-04) dit quoi faire selon les droits, renseigner le contact du robot
+ * (admin, owner) ou le demander à un admin (membre, qui ne voit pas le bandeau) ; les autres codes gardent leur message.
+ */
+function contactAwareKey(result: { code: string | null; messageKey: string }): string {
+  if (result.code !== 'instance_contact_missing') return result.messageKey;
+  return can('settings:identity:write') ? 'errors.instance_contact_missing' : 'errors.instance_contact_missing_member';
+}
 
 export function useInvestigation(options: InvestigationOptions = {}) {
   const now = options.now ?? Date.now;
@@ -109,8 +118,9 @@ export function useInvestigation(options: InvestigationOptions = {}) {
     busy.value = null;
     if (!result.ok) {
       waitingForRun = false;
-      failure.value = result.messageKey;
-      return result;
+      const refused = { ...result, messageKey: contactAwareKey(result) };
+      failure.value = refused.messageKey;
+      return refused;
     }
     const data = result.data;
     const record = typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
@@ -223,7 +233,7 @@ export function useInvestigation(options: InvestigationOptions = {}) {
     const result = await call<unknown>(() => getApi().POST('/api/apis/{slug}/investigate', { params: { path: { slug } }, body: {} }));
     busy.value = null;
     if (!result.ok) {
-      failure.value = result.messageKey;
+      failure.value = contactAwareKey(result);
       return false;
     }
     const record = typeof result.data === 'object' && result.data !== null ? (result.data as Record<string, unknown>) : {};

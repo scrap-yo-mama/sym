@@ -493,6 +493,20 @@ describe('fins d’enquête : phase close et récit fermé', () => {
     expect((await runRow(run.id)).error_detail ?? '').not.toContain('zz_stderr_marker');
   });
 
+  test('UX-05 — contact posé mais invalide → action_requise (instance_contact_missing, détail instance_contact_invalid), jamais « budget épuisé » ni code_error', async () => {
+    instanceContact = 'ops @zz-test.example';
+    try {
+      const apiId = await insertApi('zz_test_fix_bad_contact');
+      const run = await investigate(apiId, { url: site.url(TUN, '/'), description: 'liste', auto_validate: true });
+      expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: null, error_detail: 'instance_contact_invalid' });
+      await apiStatusSettled(apiId, { status: 'action_requise', status_reason: 'instance_contact_missing', investigation_phase: 'done' });
+      expect(site.hits).toEqual([]);
+      expect(fake.requests).toBe(0);
+    } finally {
+      instanceContact = 'mailto:ops@zz-test.example';
+    }
+  });
+
   test('investigation_timeout_s tenu dès l’étape 0 (page lente) : erreur, investigation_timeout_s, sans attendre la page ni appeler le LLM', async () => {
     fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
     const apiId = await insertApi('zz_test_fix_timeout');

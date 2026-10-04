@@ -145,6 +145,8 @@
     "forbidden": "You are not allowed to do this. Ask an admin of your instance.",
     "not_found": "This item no longer exists.",
     "conflict": "This action is not possible in the current state.",
+    "instance_contact_missing": "The robot contact is missing or invalid: it is required before any investigation. Set it in Settings > Robot identity, then try again (nothing was created or spent).",
+    "instance_contact_missing_member": "The robot contact is missing or invalid: it is required before any investigation. Ask an admin to set the robot contact (Settings > Robot identity), then try again.",
     "rate_limited": "Too many requests. Try again in a moment.",
     "queue_full": "The queue is full. Try again shortly.",
     "invalid_input": "Some values are not valid. Check the form and try again.",

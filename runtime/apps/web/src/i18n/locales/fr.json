@@ -145,6 +145,8 @@
     "forbidden": "Tu n'as pas le droit de faire cela. Demande à un admin de ton instance.",
     "not_found": "Cet élément n'existe plus.",
     "conflict": "Cette action n'est pas possible dans l'état actuel.",
+    "instance_contact_missing": "Le contact du robot n'est pas renseigné ou n'est pas valide : il est requis avant toute enquête. Renseigne-le dans Réglages > Identité du robot, puis relance (rien n'a été créé ni dépensé).",
+    "instance_contact_missing_member": "Le contact du robot n'est pas renseigné ou n'est pas valide : il est requis avant toute enquête. Demande à un admin de renseigner le contact du robot (Réglages > Identité du robot), puis relance.",
     "rate_limited": "Trop de requêtes. Réessaie dans un instant.",
     "queue_full": "La file est pleine. Réessaie dans un instant.",
     "invalid_input": "Certaines valeurs ne sont pas valides. Vérifie le formulaire et réessaie.",
