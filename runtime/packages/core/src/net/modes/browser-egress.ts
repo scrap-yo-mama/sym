@@ -9,6 +9,7 @@
 // (`onDomainBlocked`, E3 en script : guet du bac à sable). Plafond `max_cost_usd` (`costCeiling`) : nouveau tunnel
 // refusé quand le coût projeté dépasserait le plafond ; en cours de tunnel (prix au Go), le budget d'octets restant est
 // contrôlé à chaque bloc reçu (marge d'un bloc de lecture) et tout est coupé avant de le dépasser.
+import type { StaticAssetAllowance } from '../domain-lock.js';
 import { startEgressProxy, type EgressTarget } from '../egress-proxy.js';
 import type { SsrfDenyDetail } from '../guard.js';
 import type { NetworkMode } from './definitions.js';
@@ -38,6 +39,8 @@ export type BrowserEgressOptions = NetworkSessionOptions & {
   readonly idleTimeoutMs?: number;
   /** Période du contrôle de secours du coût en cours de tunnel (prix au Go), en ms (défaut 250). */
   readonly costWatchMs?: number;
+  /** Sous-ressources statiques d'hôtes tiers admises (reconnaissance seulement, `createStaticAssetAllowance`). */
+  readonly staticAssets?: Pick<StaticAssetAllowance, 'has'>;
 };
 
 export async function openBrowserEgress(options: BrowserEgressOptions): Promise<BrowserEgress> {
@@ -90,6 +93,7 @@ export async function openBrowserEgress(options: BrowserEgressOptions): Promise<
       : {
           allowHosts: options.allowedHosts,
           ...(options.allowedHostSuffixes === undefined ? {} : { allowHostSuffixes: options.allowedHostSuffixes }),
+          ...(options.staticAssets === undefined ? {} : { allowExtraHost: (host: string) => options.staticAssets!.has(host) }),
           onDomainBlocked: (t: EgressTarget) => {
             domainBlockedTotal += 1;
             if (domainBlocked.length < 100) domainBlocked.push(t);

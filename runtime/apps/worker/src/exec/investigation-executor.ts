@@ -113,6 +113,7 @@ import {
 import {
   buildNetworkRungs,
   checkSiteDomain,
+  createStaticAssetAllowance,
   loadProxyCredentials,
   openBrowserEgress,
   openNetworkSession,
@@ -902,6 +903,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           })),
           document_bytes: capture.document?.bytes ?? 0,
           total_bytes: capture.totalBytes,
+          ...(capture.assets === undefined || capture.assets.requests === 0 ? {} : { third_party_assets: capture.assets }),
           ...(recon.requests === undefined ? {} : { requests: recon.requests }),
           budget: budgetView(),
         });
@@ -1780,10 +1782,13 @@ async function browserRecon(
     pacer?: RequestPacer;
   },
 ): Promise<ReconOutcome> {
+  // Code et styles d'un CDN tiers admis pour le rendu (banc R05), bornés ; le même objet tient le proxy d'egress et la page.
+  const staticAssets = createStaticAssetAllowance();
   const egress = await openBrowserEgress({
     ...args.sessionBase,
     allowedHosts: [args.host],
     allowedHostSuffixes: [args.scope],
+    staticAssets,
     costCeiling: { maxUsd: args.ceiling, otherUsd: args.otherUsd },
   });
   try {
@@ -1794,6 +1799,7 @@ async function browserRecon(
       url: args.url,
       allowedHosts: [args.host],
       allowedHostSuffixes: [args.scope],
+      staticAssets,
       signal: args.signal,
       userAgent: args.userAgent,
       ...(args.pacer === undefined ? {} : { pacer: args.pacer }),
