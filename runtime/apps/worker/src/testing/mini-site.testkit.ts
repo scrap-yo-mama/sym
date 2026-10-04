@@ -6,7 +6,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import type { TunnelOutcome, TunnelPort } from '../tunnel/client.js';
 
-export type MiniRequest = { readonly host: string; readonly path: string; readonly query: URLSearchParams; readonly method: string; readonly body: string; readonly n: number };
+/** `cookie` : en-tête Cookie reçu (requêtes http seulement ; site à session, banc réel R13). */
+export type MiniRequest = { readonly host: string; readonly path: string; readonly query: URLSearchParams; readonly method: string; readonly body: string; readonly n: number; readonly cookie?: string };
 export type MiniResponse = { readonly status?: number; readonly headers?: Record<string, string>; readonly body?: string; readonly delayMs?: number };
 export type MiniHandler = (req: MiniRequest) => MiniResponse | undefined | Promise<MiniResponse | undefined>;
 
@@ -16,7 +17,7 @@ export type MiniSite = {
   readonly hits: { readonly host: string; readonly path: string; readonly via: 'http' | 'tunnel'; readonly userAgent?: string; readonly from?: string }[];
   url(host: string, path?: string): string;
   /** Réponse du site à une requête (partagée par le serveur http et l'extension simulée). */
-  answer(url: string, method: string, body: string, via: 'http' | 'tunnel', headers?: { userAgent?: string; from?: string }): Promise<{ status: number; headers: Record<string, string>; body: string }>;
+  answer(url: string, method: string, body: string, via: 'http' | 'tunnel', headers?: { userAgent?: string; from?: string; cookie?: string }): Promise<{ status: number; headers: Record<string, string>; body: string }>;
   reset(): void;
   close(): Promise<void>;
 };
@@ -25,15 +26,16 @@ export async function startMiniSite(handler: MiniHandler): Promise<MiniSite> {
   const hits: { host: string; path: string; via: 'http' | 'tunnel'; userAgent?: string; from?: string }[] = [];
   const counts = new Map<string, number>();
   let port = 0;
-  const answer = async (url: string, method: string, body: string, via: 'http' | 'tunnel', headers: { userAgent?: string; from?: string } = {}) => {
+  const answer = async (url: string, method: string, body: string, via: 'http' | 'tunnel', headers: { userAgent?: string; from?: string; cookie?: string } = {}) => {
     const u = new URL(url);
     const host = u.hostname.toLowerCase();
     // En-têtes d'identité reçus (requêtes http seulement) : User-Agent et `From`.
-    hits.push({ host, path: u.pathname, via, ...headers });
+    const { cookie, ...identity } = headers;
+    hits.push({ host, path: u.pathname, via, ...identity });
     const key = `${host}${u.pathname}`;
     const n = (counts.get(key) ?? 0) + 1;
     counts.set(key, n);
-    const res = (await handler({ host, path: u.pathname, query: u.searchParams, method, body, n })) ?? { status: 404, body: 'not found' };
+    const res = (await handler({ host, path: u.pathname, query: u.searchParams, method, body, n, ...(cookie === undefined ? {} : { cookie }) })) ?? { status: 404, body: 'not found' };
     if (res.delayMs !== undefined) await new Promise((r) => setTimeout(r, res.delayMs));
     return { status: res.status ?? 200, headers: { 'content-type': 'text/html; charset=utf-8', ...res.headers }, body: res.body ?? '' };
   };
@@ -42,7 +44,7 @@ export async function startMiniSite(handler: MiniHandler): Promise<MiniSite> {
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
       const host = (req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '');
-      const identity = { ...(req.headers['user-agent'] === undefined ? {} : { userAgent: req.headers['user-agent'] }), ...(typeof req.headers.from === 'string' ? { from: req.headers.from } : {}) };
+      const identity = { ...(req.headers['user-agent'] === undefined ? {} : { userAgent: req.headers['user-agent'] }), ...(typeof req.headers.from === 'string' ? { from: req.headers.from } : {}), ...(typeof req.headers.cookie === 'string' ? { cookie: req.headers.cookie } : {}) };
       answer(`http://${host}:${port}${req.url ?? '/'}`, req.method ?? 'GET', Buffer.concat(chunks).toString('utf8'), 'http', identity)
         .then((out) => {
           res.writeHead(out.status, out.headers);

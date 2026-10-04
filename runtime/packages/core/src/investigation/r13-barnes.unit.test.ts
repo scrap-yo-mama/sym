@@ -17,6 +17,7 @@ import { runDeclarative } from '../exec/declarative.js';
 import { analyzeDom, analyzeDomBlocks, detectLoadMore, detectResultCounter } from './dom.js';
 import { buildFromProposal, type InvestigationProposal, type ProposalField } from './proposal.js';
 import { analyzeCapture, type DataCandidate, type ReconCapture } from './recon.js';
+import { sourceViews } from './sources.js';
 
 const HOST = 'zz_test_prestige.localhost';
 const PAGE = `https://${HOST}/fr/vente/france.html`;
@@ -251,5 +252,31 @@ describe('R13 : exécution de la pagination « charger plus » (next_url), avec 
   it('next_url hors allowed_hosts : refusé à l’enregistrement', () => {
     const bad = { ...spec, pagination: { ...spec.pagination!, next_url: 'https://zz_test_ailleurs.localhost/x?begin=0' } };
     expect(validateDeclarativeSpec(bad).ok).toBe(false);
+  });
+});
+
+describe('R13, D-124 : sources candidates montrées au client', () => {
+  it('carrousel servi et liste rendue : deux sources DOM, rôle, compteur, aperçu de 3 éléments, pagination', () => {
+    const capture: ReconCapture = { mode: 'browser', pageUrl: PAGE, document: { url: PAGE, status: 200, html: carouselPage(false), renderedHtml: carouselPage(true), bytes: 50_000 }, exchanges: [], totalBytes: 500_000 };
+    const candidates = analyzeCapture(capture, [HOST]);
+    const views = sourceViews(candidates, capture);
+    expect(views.map((v) => [v.type, v.count, v.role, v.counter])).toEqual([
+      ['dom', 20, 'results', 1234],
+      ['dom', 24, 'carousel', null],
+    ]);
+    expect(views[0]!.preview).toHaveLength(3);
+    expect(Object.values(views[0]!.preview[0]!).join(' ')).toContain('à vendre Zztest 1');
+    expect(views.map((v) => v.source_id)).toEqual(candidates.map((c) => c.id));
+  });
+
+  it('Barnes : la liste porte la pagination XHR (`begin`, pas de 24) et le compteur', () => {
+    const capture: ReconCapture = {
+      mode: 'browser', pageUrl: PAGE, document: { url: PAGE, status: 200, html: prestigePage(), renderedHtml: null, bytes: 200_000 },
+      exchanges: [{ url: XHR, method: 'GET', requestBody: null, requestContentType: null, status: 200, contentType: 'text/html', body: prestigeFragment(24), bytes: 120_000 }],
+      totalBytes: 3_000_000, loadMore: { clicked: true, selector: '#button_annonces_suivantes' },
+    };
+    const [view] = sourceViews(analyzeCapture(capture, [HOST]), capture);
+    expect(view).toMatchObject({ type: 'dom', count: 24, counter: 6197, role: 'results', pagination: { type: 'offset', param: 'url.query.begin', step: 24 } });
+    expect(view!.preview).toHaveLength(3);
   });
 });

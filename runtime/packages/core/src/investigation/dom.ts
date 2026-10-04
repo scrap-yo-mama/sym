@@ -921,12 +921,12 @@ function inCarousel(el: Element): boolean {
   return false;
 }
 
-/** Le bloc est dans un conteneur de résultats, ou un ancêtre proche (3 niveaux) porte la pagination ou le bouton « charger plus ». */
+/** Le bloc est dans un conteneur de résultats, ou un ancêtre proche (2 niveaux, hors body et main) porte la pagination ou le bouton « charger plus ». */
 function inResults(el: Element): boolean {
   let node: Element | null = parentElement(el);
   for (let up = 1; node !== null && up <= 6; up += 1) {
     if (tokensOf(node).some((t) => RESULTS_TOKEN.test(t))) return true;
-    if (up <= 3 && (trySelect('a, button', node, 2_000) ?? []).some((a) => isNextAnchor(a) || loadMoreLabel(a) !== null)) return true;
+    if (up <= 2 && node.name !== 'body' && node.name !== 'main' && (trySelect('a, button', node, 2_000) ?? []).some((a) => isNextAnchor(a) || loadMoreLabel(a) !== null)) return true;
     node = parentElement(node);
   }
   return false;

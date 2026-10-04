@@ -118,6 +118,8 @@ import {
   relaxRequired,
   relaxSpecRequired,
   type FidelityIssue,
+  hardMaxPagesFor,
+  sourceViews,
 } from '@runtime/core/investigation';
 import {
   buildNetworkRungs,
@@ -317,10 +319,28 @@ function hardMaxPagesOf(spec: unknown): number {
 /**
  * Entrée d'une exécution d'essai : les N exécutions d'échantillon lisent au plus 2 pages (la page 2 est exigée, 04 §4) ;
  * l'exécution de vérification de la règle d'arrêt va jusqu'au plafond dur de pages de la spécification (tâche 2.2 ; 200
- * pour une liste HTML, dont la dernière page est souvent au-delà de 50).
+ * pour une liste HTML, dont la dernière page est souvent au-delà de 50), borné à `STOP_CHECK_MAX_PAGES` (R13 : 259 pages au
+ * rythme du domaine dépassent l'échéance de l'enquête ; au-delà, la règle d'arrêt est dite « non vérifiée », 04 §4).
  */
+const STOP_CHECK_MAX_PAGES = 60;
 const trialInput = (paginated: boolean, purpose: TrialPurpose, hardMaxPages: number = PROPOSAL_HARD_MAX_PAGES): Record<string, unknown> =>
-  paginated ? { max_pages: purpose === 'stop_check' ? hardMaxPages : 2 } : {};
+  paginated ? { max_pages: purpose === 'stop_check' ? Math.min(hardMaxPages, STOP_CHECK_MAX_PAGES) : 2 } : {};
+
+/** Fins de liste naturelles d'une exécution (règle d'arrêt atteinte, pas un plafond). */
+const NATURAL_STOPS = new Set(['records_empty', 'path_equals', 'path_missing', 'no_next', 'repeated_cursor', 'no_pagination']);
+/**
+ * Complétude contre le compteur affiché (R13 : « 6197 annonces », 24 livrées, statut « sain ») : une liste lue jusqu'à sa
+ * fin naturelle qui livre moins de 80 % du compteur (et au moins 10 de moins) n'est pas conforme ; SYM essaie le niveau
+ * suivant (navigateur, cookies du site).
+ */
+const COMPLETENESS_MIN_SHARE = 0.8;
+export function incompleteVsCounter(counter: number | undefined, runs: readonly { readonly records: number; readonly stop: string | null }[]): { counter: number; delivered: number } | null {
+  if (counter === undefined) return null;
+  const natural = runs.filter((r) => r.stop !== null && NATURAL_STOPS.has(r.stop));
+  if (natural.length === 0) return null;
+  const delivered = Math.max(...natural.map((r) => r.records));
+  return delivered < counter * COMPLETENESS_MIN_SHARE && counter - delivered >= 10 ? { counter, delivered } : null;
+}
 
 /** Récit de la vérification de la règle d'arrêt (codes et nombres, aucune valeur du site). */
 const stopCheckView = (o: PairOutcome) => (o.stop_check === null ? undefined : { verified: o.stop_check.verified, stop: o.stop_check.stop, pages: o.stop_check.pages, ...(o.stop_check.reason === undefined ? {} : { reason: o.stop_check.reason }) });
@@ -898,10 +918,13 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             await save(phase, { brief: { version: briefRead.brief.version, sha256: briefRead.brief.sha256, confirmed: (briefProbes?.results ?? []).filter((r) => r.outcome === 'verified').map((r) => r.id) } });
           }
         }
+        const views = sourceViews(candidates, capture);
         await event(EV.reconnaissance, {
           mode: capture.mode,
           ...(recon.failure === null ? {} : { failure_class: recon.failure.failure_class, detail: recon.failure.detail }),
-          candidates: candidates.map((c) => ({
+          // Sources candidates (D-124) : type, compteur, aperçu de 3 éléments (pour le client, jamais pour le LLM), pagination.
+          candidates: candidates.map((c, i) => ({
+            ...views[i],
             id: c.id,
             from: c.from,
             request: { method: c.request.method, url: narrativeUrl(c.request.url) },
@@ -1119,6 +1142,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const lastRecords = new Map<TrialPair, Record<string, unknown>[]>();
       /** Sorties des N exécutions d'échantillon de chaque couple (contenu minimal, r4 R5). */
       const sampleOutputs = new Map<TrialPair, Record<string, unknown>[][]>();
+      /** Toutes les exécutions conformes d'un couple (échantillon et règle d'arrêt) : éléments lus et raison d'arrêt (complétude, R13). */
+      const runsFor = new Map<TrialPair, { records: number; stop: string | null }[]>();
+      /** Écart au compteur d'un couple refusé (`incomplete_vs_counter`) : paramètres du motif de l'essai. */
+      const incompleteFor = new Map<TrialPair, { counter: number; delivered: number }>();
       /** Trace E6 compilée en E5 par la dernière exécution conforme du couple (04 §3.1). */
       const compiledFor = new Map<TrialPair, unknown>();
       /** Contexte de la compilation au grain de l'étape (2.13) : trace de l'E6 conforme, modèle, date. */
@@ -1558,6 +1585,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
                 pageFor.set(pair, { html: page.html, url: page.url, items: trial.outcome.result.ok ? trial.outcome.result.records : r.records });
               }
               lastRecords.set(pair, r.records);
+              runsFor.set(pair, [...(runsFor.get(pair) ?? []), { records: r.records.length, stop: r.stop }]);
               if (purpose === 'sample') sampleOutputs.set(pair, [...(sampleOutputs.get(pair) ?? []), r.records]);
               return { ...execution(true, null, null, r.pages, cost, trial.ms, r.stop), records: r.records.length };
             },
@@ -1578,7 +1606,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               await decide(EV.attemptFinished, {
                 attempt: { execution: o.pair.execution, network: o.pair.network, est_cost_usd: o.pair.est_cost_usd, result: o.result, cost_usd: o.cost_usd, ms: o.ms },
                 source: o.pair.source,
-                ...(o.detail === null ? {} : { why: { code: o.detail, params: o.detail === 'agent_request_blocked' ? blockedParams(blockedFor.get(o.pair)) : {} } }),
+                ...(o.detail === null ? {} : { why: { code: o.detail, params: o.detail === 'agent_request_blocked' ? blockedParams(blockedFor.get(o.pair)) : o.detail === 'incomplete_vs_counter' ? { ...incompleteFor.get(o.pair) } : {} } }),
                 executions: o.executions.map((e) => ({ ok: e.ok, records: e.records, pages: e.pages, stop: e.stop, cost_usd: e.cost_usd, ms: e.ms })),
                 ...(stopCheckView(o) === undefined ? {} : { pagination: stopCheckView(o) }),
                 budget: budgetView(),
@@ -1596,6 +1624,15 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               if (!check.ok) return { failure_class: check.failure_class, detail: check.detail };
               // Stratégie déclarative née d'un gisement : contrôle de fidélité, puis une nouvelle carte au plus (banc réel).
               const entry = entries.get(pair)!;
+              // Complétude contre le compteur affiché par la page (R13) : une liste finie bien en deçà n'est pas conforme.
+              if (declarativeExecutions.has(entry.execution)) {
+                const gap = incompleteVsCounter(reconCandidates.find((c) => c.id === entry.source)?.counter, runsFor.get(pair) ?? []);
+                if (gap !== null) {
+                  incompleteFor.set(pair, gap);
+                  await ctx.log('warn', 'completeness_check', { source: entry.source, execution: entry.execution, counter: gap.counter, delivered: gap.delivered });
+                  return { failure_class: 'extraction', detail: 'incomplete_vs_counter' };
+                }
+              }
               if (!declarativeExecutions.has(entry.execution) || (entry.spec as { kind?: unknown }).kind !== 'declarative' || !reconCandidates.some((c) => c.id === entry.source)) return null;
               const records = (sampleOutputs.get(pair) ?? []).flat();
               const verdict = await fidelityOf(entry.spec as unknown as DeclarativeSpec, entry.source, records);
@@ -1654,6 +1691,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           const retained = html === null ? { execution: kept.execution, network: kept.network, spec: kept.spec, estCostUsd: kept.estCostUsd } : { execution: 'fetch' as const, network: kept.network, spec: html.spec, estCostUsd: html.estCostUsd };
           // Stratégie retenue paginée : la sienne (déclarative), ou la compilée d'E4 vérifiée en page 2.
           const retainedPaginated = html === null ? entry.paginated : html.paginated;
+          // Liste dont la page affiche un compteur (R13 : 6197 biens à 24 par page) : le plafond de requêtes d'un run suit le
+          // nombre de pages annoncé (borné par le format, 1000), sinon le run serait tronqué à 200 pages. La cadence reste.
+          const sourceCandidate = reconCandidates.find((c) => c.id === entry.source);
+          const requestsPerRun = retainedPaginated && sourceCandidate?.counter !== undefined ? hardMaxPagesFor(sourceCandidate.counter, sourceCandidate.count) + 2 : undefined;
           // Source (18 §4.6) : règles injectées et skills lus ; règles embarquées si le compilé porte un prompt (E4) ou vient
           // d'une trace E6 (E5 : `compiled_with` par étape, 19 §4).
           const agentic = entry.execution === 'agent_fetch' || entry.execution === 'agent';
@@ -1694,6 +1735,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             }),
             rules: rows,
             ...(html === null ? {} : { compiled: { execution: retained.execution, spec: retained.spec, estCostUsd: retained.estCostUsd } }),
+            ...(requestsPerRun === undefined ? {} : { minRequestsPerRun: requestsPerRun }),
           });
           if (briefRef !== null && briefFinals !== null) await recordBriefOutcome(deps.pool, ctx, briefRef.version, briefFinals.filter((h) => !briefCarried.has(h.id)), now, event);
           phase = 'done';
@@ -1738,6 +1780,11 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             },
             items: records.length,
             ...(stopCheckView(outcome.outcome) === undefined ? {} : { pagination: stopCheckView(outcome.outcome) }),
+            // Complétude contre le compteur affiché (R13) : éléments lus par la vérification de la règle d'arrêt (ou la dernière
+            // exécution) ; `verified: false` : la liste dépasse la vérification bornée, le rejeu dira le reste.
+            ...(sourceCandidate?.counter === undefined
+              ? {}
+              : { completeness: { counter: sourceCandidate.counter, read: outcome.outcome.stop_check?.records ?? records.length, verified: outcome.outcome.stop_check?.verified ?? null, ...(requestsPerRun === undefined ? {} : { requests_per_run: requestsPerRun }) } }),
             budget: budgetView(),
           });
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: records.length, dataset_id: dataset.datasetId, strategy_version: saved.version };

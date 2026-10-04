@@ -366,7 +366,7 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
     }
     // Blocs répétés du DOM (04b §2, troisième source) : document servi d'abord (E1 le lit tel quel), puis les blocs du DOM
     // RENDU absents du document servi (E2, E3), au plus 3 (R13 : un carrousel « Nouveautés » servi et la liste de résultats
-    // rendue après un XHR). Liste de résultats avant carrousel ; compteur de résultats affiché et pagination par bouton
+    // rendue après un XHR). Carrousel en dernier (ordre du score sinon) ; compteur de résultats affiché et pagination par bouton
     // « charger plus » (fragment HTML capturé après le clic) portés par chaque bloc qui n'est pas un carrousel.
     const served = analyzeDomBlocks(doc.html, doc.url, limits);
     const rendered = doc.renderedHtml !== null && doc.renderedHtml !== doc.html ? analyzeDomBlocks(doc.renderedHtml, doc.url, limits) : null;
@@ -375,7 +375,7 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
       ...(served?.blocks ?? []).map((b) => ({ b, rendered: false })),
       ...(rendered?.blocks ?? []).filter((b) => !(served?.blocks ?? []).some((s) => s.records === b.records)).map((b) => ({ b, rendered: true })),
     ]
-      .sort((x, y) => Number(x.b.hints?.carousel === true) - Number(y.b.hints?.carousel === true) || Number(y.b.hints?.results === true) - Number(x.b.hints?.results === true))
+      .sort((x, y) => Number(x.b.hints?.carousel === true) - Number(y.b.hints?.carousel === true))
       .slice(0, 3);
     for (const { b, rendered: fromRendered } of blocks) {
       const carousel = b.hints?.carousel === true;

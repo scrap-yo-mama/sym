@@ -375,6 +375,11 @@ export async function saveInvestigationStrategy(
      * transaction. Rend alors la version compilée et `fallbackVersion`, la version E4.
      */
     compiled?: { execution: Execution; spec: unknown; estCostUsd: number | null };
+    /**
+     * Plafond de requêtes d'un run à garantir (R13 : liste de 259 pages annoncée par le compteur de la page) : relève
+     * `domain_pacing.max_requests_per_run` s'il est plus bas, jamais ne l'abaisse ; la cadence du domaine est inchangée.
+     */
+    minRequestsPerRun?: number;
   },
 ): Promise<{ version: number; fallbackVersion?: number }> {
   // Schéma d'entrée (04 §1) : chaque champ a une description (500 caractères au plus), sinon refus, avant toute écriture.
@@ -418,6 +423,13 @@ export async function saveInvestigationStrategy(
        WHERE id = $1`,
       [args.apiId, version, JSON.stringify(args.outputSchema), JSON.stringify(args.inputSchema), JSON.stringify(args.state), args.outputColumns ?? schemaColumns(args.outputSchema)],
     );
+    if (args.minRequestsPerRun !== undefined && Number.isInteger(args.minRequestsPerRun) && args.minRequestsPerRun > 0) {
+      await tx.query(
+        `UPDATE apis SET domain_pacing = jsonb_set(domain_pacing, '{max_requests_per_run}', to_jsonb($2::int))
+         WHERE id = $1 AND COALESCE((domain_pacing->>'max_requests_per_run')::int, 0) < $2`,
+        [args.apiId, args.minRequestsPerRun],
+      );
+    }
     if (args.compiled === undefined) return { version };
     const compiledVersion = version + 1;
     await tx.query(
