@@ -40,7 +40,7 @@ import type pg from 'pg';
 import { appendAudit } from './audit.js';
 import { notifyStatusChange, toStatusTransitions } from './notify.js';
 import { withActor } from './rls.js';
-import { createRun, userBudgetCommittedUsd, type BudgetCaps } from './runs.js';
+import { createRun, lockRunSlots, userBudgetCommittedUsd, type BudgetCaps } from './runs.js';
 import { applyStatusTransitionInTx } from './status.js';
 import { emitWebhookEvent } from './webhooks.js';
 
@@ -440,6 +440,9 @@ async function dailySpentUsd(db: Queryable, apiId: string, now: Date): Promise<n
 export async function runPersistenceAttempt(pool: pg.Pool, ctx: PersistenceContext, apiId: string): Promise<PersistenceTick> {
   const r = resolve(ctx);
   return inTransaction(pool, async (tx) => {
+    // Budget USD du jour (AF-01) : même verrou que `reserve_run_slot`, pris AVANT tout verrou de ligne (ordre commun avec REST
+    // et la planification) et tenu jusqu'à la création du run : deux créations ne lisent jamais le même engagé.
+    if (ctx.costCaps !== undefined) await lockRunSlots(tx);
     const cycle = await loadCycle(tx, 'api_id', apiId);
     if (cycle === null) return { kind: 'idle', reason: 'no_cycle' };
     if (cycle.ended !== null) return { kind: 'idle', reason: `ended_${cycle.ended}` };

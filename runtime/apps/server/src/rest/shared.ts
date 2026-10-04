@@ -2,7 +2,7 @@
 // Briques communes de l'API REST (tâche 3.1, 05 § 2 et § 4.3), réutilisables par le serveur MCP (3.2) : montants,
 // codes de raison, file pleine, attente synchrone bornée, déclencheur, case « j'ai lu » (17 § 11).
 import { ACTIVE_RUN_STATES, personalFieldPaths, schemaHasPersonalFields, type RunKind, type RunTrigger } from '@runtime/core';
-import { runEnvelopeUsd, userBudgetCommittedUsd } from '@runtime/db';
+import { budgetAdmitsRun } from '@runtime/db';
 import type { FastifyReply } from 'fastify';
 import type pg from 'pg';
 import type { ServerContext } from '../context.js';
@@ -93,9 +93,7 @@ export async function reserveRunSlot(tx: Queryable, ctx: ServerContext, target: 
   // Fermé par défaut : sans acteur dans la transaction, jamais de contrôle sauté en silence.
   if (!userId) throw new Error('reserveRunSlot : aucun acteur (app.user_id vide) dans la transaction');
   const caps = { userBudgetDailyUsd: ctx.rest.userBudgetDailyUsd, maxCostUsdPerRun: ctx.rest.maxCostUsdPerRun };
-  const committed = await userBudgetCommittedUsd(tx, userId, caps);
-  const envelope = await runEnvelopeUsd(tx, target, caps);
-  if (committed >= caps.userBudgetDailyUsd || committed + envelope > caps.userBudgetDailyUsd + 1e-9) throw new RunSlotError('budget_exceeded');
+  if (!(await budgetAdmitsRun(tx, userId, caps, target))) throw new RunSlotError('budget_exceeded');
 }
 
 /** Réponse 429 d'un plafond atteint (`RunSlotError`). */
