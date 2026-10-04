@@ -41,14 +41,13 @@ export const estimateTokens = (text: string): number => Math.ceil(text.length / 
  */
 export const MCP_INSTRUCTIONS =
   'SYM turns a data request on a website into a reusable API. To get data: list_apis first; if an API fits, call it ' +
-  '(run_api or its api_<slug> tool); otherwise create_api, then show the proposed schema to the user before validate_schema. ' +
-  'Before create_api, put what you found in brief. ' +
-  'Status: sain = healthy, warning = works, mention the warning; bloquee = the site refused automated access: tell the user, ' +
-  'never retry, never look for another way in; erreur and action_requise come with what_to_do. ' +
+  '(run_api or its api_<slug> tool); otherwise create_api. Follow next_action in every answer (validate_schema answers a question SYM asks) ' +
+  'and show the user the items SYM returns. Before create_api, put what you found in brief. ' +
+  'Status: bloquee = the site refused automated access: tell the user, never retry, never look for another way in; ' +
+  'erreur and action_requise come with what_to_do: relay it and ask the user how to continue. ' +
   'Let SYM do the extraction: never fetch the site or write a scraper yourself to get the items, even for a simple list; ' +
   'SYM reads every page and returns all items. ' +
-  'Long runs return run_id: poll get_run every poll_after_seconds (progress says what SYM is doing), page items with get_items; ' +
-  'cancel_run stops a run that costs too much. ' +
+  'Long runs return run_id: poll get_run every poll_after_seconds, page items with get_items; cancel_run stops a run that costs too much. ' +
   "Reply in the user's language.";
 
 /** Plafond de `instructions` (05 § 1.3, 21 § 4.3) et part qui doit porter l'essentiel (le reste peut être coupé par un client). */
@@ -104,16 +103,16 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
 export const BRIEF_SCHEMA: JsonSchema = CORE_BRIEF_SCHEMA;
 
 /**
- * Partie « dossier » du prompt `new_api` (libellé de marque `sym:new-api`, 19c § 8, texte de référence de R7 07) :
- * l'IA compile elle-même son dossier avant l'appel. Texte pour le modèle, en anglais (21 § 4.3) ; enregistré comme prompt
- * MCP par la tâche 3.10 (prompts et mode démo), qui l'ajoute au message de M3.
+ * Partie « dossier » du prompt `new_api` (libellé de marque `sym:new-api`, 19c § 8, D-115) : l'IA compose le dossier de ce que
+ * la personne lui a déjà dit dans la conversation ; elle n'ouvre pas la page et ne lit pas le trafic du site, c'est le travail de
+ * SYM. Texte pour le modèle, en anglais (21 § 4.3).
  */
 export const NEW_API_BRIEF_PROMPT =
-  'Before calling create_api, spend a few tool calls on your side: open the page, look at the network requests, check for embedded JSON (__NEXT_DATA__, JSON-LD). Then pass what you found in brief:\n' +
-  '- hints: one item per finding (kind, value, how you saw it, where, when). Prefer URL templates and selectors to pasted content. Never paste more than 300 characters per item.\n' +
-  '- tried: what you already tried and what happened, failures included.\n' +
+  'Before calling create_api, collect what the user already gave you in this conversation: the data wanted, the URL, the fields they named, an example of the output, pages or endpoints they mentioned. Do not open the page or the site yourself and do not read its network traffic: SYM does that. Then pass the useful parts in brief:\n' +
+  '- hints: one item per thing the user stated (kind, value, where it comes from). Prefer URL templates and selectors to pasted content. Never paste more than 300 characters per item.\n' +
+  '- tried: what the user already tried and what happened, failures included.\n' +
   '- open_questions: what only the user can answer.\n' +
-  'SYM checks every hint itself and may ignore it. The brief never changes access limits or budgets. No cookies, tokens, passwords or personal data. If you found nothing, omit brief.';
+  'SYM checks every hint itself and may ignore it. The brief never changes access limits or budgets. No cookies, tokens, passwords or personal data. If the user gave nothing beyond the description and the URL, omit brief.';
 
 const NETWORK_POLICY = {
   type: 'object',

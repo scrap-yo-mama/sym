@@ -400,6 +400,8 @@ describe('instructions et prompts (05 § 1.3, 19c § 8, 21 § 4.3)', () => {
     for (const needle of ['list_apis', 'create_api', 'validate_schema', 'bloquee', 'never retry', 'never look for another way in']) expect(vital, needle).toContain(needle);
     expect(MCP_INSTRUCTIONS).toContain('Before create_api, put what you found in brief.');
     expect(MCP_INSTRUCTIONS).toContain('what_to_do');
+    // U1.6 : SYM extrait lui-même, le client montre ses éléments, suit next_action et relaie l'échec.
+    for (const needle of ['next_action', 'items SYM returns', 'relay']) expect(MCP_INSTRUCTIONS, needle).toContain(needle);
     expect(MCP_INSTRUCTIONS.endsWith("Reply in the user's language.")).toBe(true);
     expect(MCP_INSTRUCTIONS).not.toMatch(BYPASS);
   });
@@ -423,12 +425,13 @@ describe('instructions et prompts (05 § 1.3, 19c § 8, 21 § 4.3)', () => {
     }
   });
 
-  test('new_api : consigne de compilation du dossier (sources, essais, questions ; ni cookie ni donnée personnelle), rien trouvé : pas de brief', () => {
+  test('new_api : recueille la description, l’URL et les champs, compose le dossier de ce que la personne a déjà dit (D-115), ne demande aucune navigation', () => {
     const body = promptBody('new_api', {}, 'en');
     expect(body).toContain(BRIEF_INSTRUCTION);
-    for (const needle of ['__NEXT_DATA__', 'JSON-LD', 'hints', 'tried', 'open_questions', 'No cookies, tokens, passwords or personal data', 'omit `brief`', 'never retry', 'validate_schema']) expect(body, needle).toContain(needle);
-    expect(BRIEF_INSTRUCTION.length).toBeGreaterThan(600);
-    expect(BRIEF_INSTRUCTION.length).toBeLessThan(1_000);
+    for (const needle of ['hints', 'tried', 'open_questions', 'No cookies, tokens, passwords or personal data', 'omit brief', 'never retry', 'next_action', 'create_api']) expect(body, needle).toContain(needle);
+    expect(BRIEF_INSTRUCTION).toMatch(/already (gave|told|provided)/);
+    expect(BRIEF_INSTRUCTION.length).toBeGreaterThan(500);
+    expect(BRIEF_INSTRUCTION.length).toBeLessThan(1_100);
     expect(body).not.toMatch(BYPASS);
   });
 
@@ -453,6 +456,44 @@ describe('instructions et prompts (05 § 1.3, 19c § 8, 21 § 4.3)', () => {
     expect(parseLang('de')).toBeNull();
     expect(parseLang(undefined)).toBeNull();
     expect(parseLang(['fr'])).toBeNull();
+  });
+});
+
+/** Phrases d'un texte pour le modèle qui ne sont pas des interdictions : seules elles peuvent envoyer le client hors de SYM. */
+const instructionsOf = (text: string): string[] =>
+  text
+    .split(/(?<=[.!?:])\s+|\n/)
+    .filter((sentence) => !/\b(never|do not|don't|not|without|instead of)\b/i.test(sentence));
+
+/** Verbes qui envoient le client lire le site ou ouvrir la page lui-même (D-112, D-115). */
+const LEAVES_SYM = /\b(open|visit|browse|navigate to|fetch|curl|download|view the source of|look at the network)\b[^.]{0,40}\b(page|site|website|url|network|source|html)\b|\bwrite (a|your own) scraper\b/i;
+
+describe('assert_client_stays_on_sym : les consignes gardent le client sur SYM (U1.6)', () => {
+  const served = (): Record<string, string> => ({
+    instructions: MCP_INSTRUCTIONS,
+    brief: BRIEF_INSTRUCTION,
+    ...Object.fromEntries(PROMPT_NAMES.flatMap((name) => (['en', 'fr'] as const).map((locale) => [`prompt ${name} ${locale}`, promptBody(name, {}, locale)]))),
+    ...Object.fromEntries(GENERIC_TOOLS.map((t) => [`tool ${t.name}`, t.description])),
+  });
+
+  test('aucun texte servi à l’IA ne lui demande d’ouvrir la page, de lire le réseau du site ou d’écrire un extracteur', () => {
+    for (const [name, text] of Object.entries(served())) {
+      for (const sentence of instructionsOf(text)) expect(sentence, name).not.toMatch(LEAVES_SYM);
+    }
+  });
+
+  test('sym:new-api ne demande aucune navigation et renvoie vers create_api puis next_action', () => {
+    const body = promptBody('new_api', { description: 'les offres', url: 'https://zz-jobs.example/' }, 'en');
+    expect(body).not.toMatch(/__NEXT_DATA__|JSON-LD|spend a few tool calls/i);
+    for (const sentence of instructionsOf(body)) expect(sentence).not.toMatch(LEAVES_SYM);
+    expect(body.indexOf('create_api')).toBeGreaterThan(-1);
+    expect(body).toMatch(/Do not open the page/);
+    expect(body).toContain('next_action');
+  });
+
+  test('les instructions disent que SYM lit chaque page lui-même et que le client montre ce que SYM rend', () => {
+    expect(MCP_INSTRUCTIONS).toMatch(/SYM reads every page/);
+    expect(MCP_INSTRUCTIONS).toMatch(/never fetch the site/i);
   });
 });
 
