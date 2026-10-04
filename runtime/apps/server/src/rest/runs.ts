@@ -12,6 +12,7 @@ import type { ServerContext } from '../context.js';
 import type { Actor } from '../routes/guard.js';
 import { runErrorOf, runNotStarted } from './run-error.js';
 import { iso, reasonMessage, usd, usdOrNull } from './shared.js';
+import { investigationTimeline } from './timeline.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -308,7 +309,8 @@ export async function buildRunResult(ctx: ServerContext, actor: Actor, r: RunRow
     ...errorField(r),
     next_action: nextAction,
     poll_after_seconds: active && r.paused_at === null ? 5 : null,
-    timeline: [],
+    // Chronologie d'une enquête (05 § 1.2, tâche 3.10) : dérivée de `investigation_events`, la source unique du récit.
+    timeline: r.kind === 'investigation' ? await investigationTimeline(ctx, actor, r.id, r.api_slug ?? '') : [],
     cost: cost(r),
     console_url: `${ctx.publicUrl}/runs/${r.id}`,
   };

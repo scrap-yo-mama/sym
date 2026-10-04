@@ -1,0 +1,21 @@
+{
+  "description": "Empreintes SHA-256 des descriptions d’outils MCP servies (05 § 3 : descriptions figées, comparées au CDC par un test). Une description ne change qu’avec le CDC : régénérer ce fichier dans la même tâche.",
+  "fingerprint_policy": "05 § 3 (« descriptions figées, comparées au CDC par un test ») et 05 § 4.4 n’écrivent aucune description d’outil en toutes lettres : le CDC fixe des règles (anglais, aucun contenu scrapé, aucun statut, contenu vital repris des instructions), pas un texte. L’empreinte SHA-256 ci-dessous tient donc lieu de texte de référence : relue contre ces règles à la tâche qui la régénère, elle fige le texte servi, et toute retouche d’une description fait échouer le test tant que ce fichier n’est pas régénéré dans la même tâche.",
+  "cdc_literal": {
+    "source": "19c § 8 (« Faire compiler le dossier par l’IA ») : seuls textes du MCP que le CDC écrit en toutes lettres, recopiés tels quels ; le texte servi doit leur être identique.",
+    "brief_description": "Optional. What you already found about this site, as typed hints and what you tried. SYM checks each hint and may ignore it. It never widens access or budgets. No cookies, tokens or personal data. Keep it under 6 KB.",
+    "instructions_brief_sentence": "Before create_api, put what you found in brief."
+  },
+  "sha256": {
+    "create_api": "90c63c6a8dedfe2673c36dbd9a2c2d96e530d298c865ad172a377f1088899001",
+    "validate_schema": "9d1854947f0aec3c29f6e1c18984d509ebba9ada847cf92d6cf73eb6e26fae5a",
+    "run_api": "4df5ae25f8c70e5719dcc01ec4ebcd97694d931fa9cadedadea6f9e9c897fc48",
+    "get_run": "81f41a613421cd5cb48872c2431da5051a54a7fb15bcd24f96240acab350ca11",
+    "get_items": "222ad92e89d067f70fe78b11816e8bab62a02669334d484d8947e97b01861648",
+    "cancel_run": "bc564c1f39f60afefe55c628fad16eb26e14206c8fc93835a982a0e3e2138f50",
+    "list_apis": "2f3ebd652b4a124fd5831511d396831df7c89003dd493c578ca099900692ebaf",
+    "get_api": "b84d4ce2e235752a452089143aa2ae61bf990596fd62e88e7155bc66617865f9",
+    "report_problem": "11757bf1649bf98daaddc87e6cf0654993a8439b33dee9926fd128b74142a7e7",
+    "api_<slug>": "02f7dcd171eced482dd1e03d2a0c4f7f82c54cab5dfd778b69458d4442db9183"
+  }
+}

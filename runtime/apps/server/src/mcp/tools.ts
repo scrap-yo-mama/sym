@@ -34,15 +34,23 @@ export const TOOL_DEFINITIONS_BUDGET_TOKENS = 5_000;
 export const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
 
 /**
- * `instructions` du serveur (05 § 1.3) : l'essentiel dans les 512 premiers caractères, 1 000 au plus
- * (`assert_instructions_length`, complété par 3.10 : prompts, reprise, langue).
+ * `instructions` du serveur (05 § 1.3, 19c § 8, 21 § 4.3) : l'essentiel dans les 512 premiers caractères (quoi faire d'abord,
+ * lire un statut, ne jamais réessayer une API `bloquee`), 1 000 au plus (`assert_instructions_length`), la consigne du dossier
+ * d'enquête (« Before create_api, put what you found in brief. ») et la langue de la réponse en dernier. La phrase de reprise
+ * d'une API (`get_api` avec `view: "iteration"`) vient avec l'itération par MCP (3.14).
  */
 export const MCP_INSTRUCTIONS =
   'SYM turns a data request on a website into a reusable API. To get data: list_apis first; if an API fits, call it ' +
-  '(run_api or its api_<slug> tool), otherwise create_api, then show the proposed schema to the user before validate_schema. ' +
-  'Status: sain = healthy, warning = works with a warning to mention, bloquee = the site refused automated access: tell the user ' +
-  'and never retry it. erreur and action_requise come with what_to_do. Long runs return run_id: poll get_run, page items with get_items. ' +
-  'Before create_api, put what you found in brief.';
+  '(run_api or its api_<slug> tool); otherwise create_api, then show the proposed schema to the user before validate_schema. ' +
+  'Before create_api, put what you found in brief. ' +
+  'Status: sain = healthy, warning = works, mention the warning; bloquee = the site refused automated access: tell the user, ' +
+  'never retry, never look for another way in; erreur and action_requise come with what_to_do. ' +
+  'Long runs return run_id: poll get_run every poll_after_seconds, page items with get_items; cancel_run stops a run that costs too much. ' +
+  "Reply in the user's language.";
+
+/** Plafond de `instructions` (05 § 1.3, 21 § 4.3) et part qui doit porter l'essentiel (le reste peut être coupé par un client). */
+export const INSTRUCTIONS_MAX_CHARS = 1_000;
+export const INSTRUCTIONS_VITAL_CHARS = 512;
 
 type JsonSchema = Record<string, unknown>;
 
@@ -80,8 +88,10 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
     next_action: { type: ['object', 'null'] },
     poll_after_seconds: { type: ['integer', 'null'] },
     timeline: { type: 'array' },
+    attempts: { type: 'array' },
     cost: { type: 'object' },
     console_url: { type: 'string' },
+    message_locale: { type: 'string' },
     metadata_only: { type: 'boolean' },
   },
 };
@@ -161,6 +171,13 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
         run_id: { type: 'string' },
         brief_version: { type: 'integer' },
         brief_report: { type: 'array', items: { type: 'object' } },
+        // Récit en données (05 § 1.2) : les mêmes faits que le texte de `content`.
+        timeline: { type: 'array' },
+        attempts: { type: 'array' },
+        cost: { type: 'object' },
+        console_url: { type: 'string' },
+        next_action: { type: ['object', 'null'] },
+        message_locale: { type: 'string' },
       },
     },
   },

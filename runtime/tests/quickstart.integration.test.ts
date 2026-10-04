@@ -16,8 +16,8 @@
 // - assert_quickstart_pending_steps_declared : les étapes décrites mais non rejouées (D0, première API) attendent une
 //   fonction qui n'est pas livrée ; dès qu'elle l'est, ce test échoue pour obliger à les rejouer. Le critère de 16 § 8
 //   « D0 s'affiche, une première API est créée » n'est donc PAS atteint par 4.8 : il est repris par 3.1 (première API),
-//   3.2 (serveur MCP, livré) et 3.10 (mode démo et prompt first_steps de D0), et vérifié en recette (4.4) ; voir le
-//   test.todo assert_quickstart_d0_first_api.
+//   3.2 (serveur MCP, livré), 3.10 (prompts MCP dont first_steps, livrés) et 3.11 (mode démo sans clé de D0, 10-taches),
+//   et vérifié en recette (4.4) ; voir le test.todo assert_quickstart_d0_first_api.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import net, { type AddressInfo } from 'node:net';
@@ -368,15 +368,19 @@ describe('assert_quickstart_pending_steps_declared : ce que le tutoriel décrit 
     for (const step of pending) expect(step.pending, step.id).toBeTruthy();
   });
 
-  test('D0 attend le mode démo (3.10) : sinon, il faut la rejouer ; /mcp (3.2) et la création d’API (3.1) sont livrés', () => {
+  test('D0 attend le mode démo sans clé (3.11) : sinon, il faut la rejouer ; /mcp (3.2), ses prompts (3.10) et la création d’API (3.1) sont livrés', () => {
     const delivered = (method: string, url: string): boolean => ROUTES.some((r) => r.method === method && r.url === url);
     expect(delivered('POST', '/api/apis'), 'POST /api/apis (3.1) : l’étape « first-api » est rejouée').toBe(true);
     expect(delivered('POST', '/mcp'), '/mcp (3.2) est livré').toBe(true);
     expect(pending.find((s) => s.id === 'd0')?.pending ?? '', 'D0 attend encore 3.10, plus 3.2').not.toContain('3.2');
-    // Le mode démo et le prompt first_steps de D0 (3.10) se reconnaissent à un prompt MCP enregistré.
+    // Les prompts MCP de D0, dont first_steps (3.10), sont livrés : un prompt MCP est enregistré.
     const mcpDir = join(runtimeDir, 'apps/server/src/mcp');
     const prompts = readdirSync(mcpDir).filter((f) => f.endsWith('.ts') && !f.includes('.test.')).some((f) => readFileSync(join(mcpDir, f), 'utf8').includes('registerPrompt('));
-    expect(prompts, 'prompts MCP livrés (3.10) : passez « d0 » en mode run et remplacez le test.todo assert_quickstart_d0_first_api').toBe(false);
+    expect(prompts, 'prompts MCP (3.10) livrés').toBe(true);
+    expect(pending.find((s) => s.id === 'd0')?.pending ?? '', 'D0 attend le mode démo de 3.11, plus les prompts de 3.10').not.toContain('3.10');
+    // Le mode démo sans clé de D0 (3.11) se reconnaît à son test nommé (critère de 3.11 : assert_demo_keyless_no_outbound).
+    const invariants = JSON.parse(readFileSync(join(runtimeDir, 'tests/invariants.json'), 'utf8')) as { test: string }[];
+    expect(invariants.some((t) => t.test === 'assert_demo_keyless_no_outbound'), 'mode démo livré (3.11) : passez « d0 » en mode run et remplacez le test.todo assert_quickstart_d0_first_api').toBe(false);
     const openapi = readFileSync(join(runtimeDir, 'packages/client/openapi/openapi.yaml'), 'utf8').split('\n');
     const at = openapi.findIndex((line) => line.trim() === 'operationId: createApi');
     expect(at).toBeGreaterThan(0);

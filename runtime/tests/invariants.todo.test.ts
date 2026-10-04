@@ -67,7 +67,7 @@ describe("invariants (à implémenter)", () => {
   // 4.8 livrée partiellement (16 § 8, 17 § 11) : la première API est rejouée par le quickstart depuis 3.1 (étape first-api) ; D0
   // reste décrit (mode pending) et gardé par assert_quickstart_pending_steps_declared ; /mcp est livré (3.2), il échoue à la
   // livraison des prompts MCP et du mode démo (3.10).
-  test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (serveur MCP), 3.10 (D0 en mode démo), vérifié en 4.4
+  test.todo("assert_quickstart_d0_first_api"); // 16 § 8, reprise : 3.1 (première API sur fixture), 3.2 (serveur MCP), 3.10 (prompts MCP, livrés), 3.11 (D0 en mode démo sans clé), vérifié en 4.4
   // Case « j'ai lu » (responsible_use_acks) et refus d'une API x-personal sans elle : livrés par 3.1 (assert_responsible_use_ack,
   // apps/server/src/rest.integration.test.ts). L'affichage de la page au premier lancement de la console reste à faire (console).
   // INV6 (revue de 1.7), câblage livré par 2.3 : le worker porte le run échoué au statut de l'API (10 puis 15 dans le même
