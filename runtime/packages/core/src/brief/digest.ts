@@ -5,6 +5,7 @@
 // la sonde. Les décisions de garde ne viennent pas d'ici : l'hôte hors portée est écarté AVANT toute requête, mais la sonde
 // elle-même repasse par la portée de l'API, la garde SSRF, la cadence et le classifieur de l'API.
 import { createHash } from 'node:crypto';
+import { compileSelector } from '../dsl/css.js';
 import { wideningWarnings, type WideningGuard } from '../rules/widening.js';
 import { BRIEF_DEFAULTS, BRIEF_STALE_DAYS, DEFAULT_BRIEF_CONFIG, type BriefConfig, type BriefHint, type BriefHintKind, type BriefHintState, type BriefReason, type InvestigationBrief } from './schema.js';
 import { isIpLiteral, matchTemplate, parseHintUrl, templatePath } from './url.js';
@@ -31,7 +32,11 @@ export type ParsedHint =
   | { readonly kind: 'endpoint'; readonly method: string; readonly url: URL; readonly host: string; readonly templated: boolean }
   | { readonly kind: 'example_url'; readonly url: URL; readonly host: string; readonly templated: boolean }
   | { readonly kind: 'embedded_data'; readonly blob: string; readonly path: string }
-  | { readonly kind: 'pagination'; readonly family: string; readonly param: string | null }
+  /**
+   * `param` : nom ou emplacement du paramètre (`page`, `url.query.page`) ; `pattern` : motif de chemin ou d'URL des pages
+   * (`/annonces/page/{page}/`, `?page={page}`) ; `selector` : sélecteur CSS du lien « suivant ». Au plus un des trois.
+   */
+  | { readonly kind: 'pagination'; readonly family: string; readonly param: string | null; readonly pattern?: string; readonly selector?: string }
   | { readonly kind: 'selector'; readonly selector: string }
   | { readonly kind: 'pitfall' };
 
@@ -56,16 +61,55 @@ export function parseHintValue(hint: Pick<BriefHint, 'kind' | 'value'>, pageUrl:
       const blob = m === null ? undefined : BLOB_ALIASES[m[1]!.toLowerCase()];
       return blob === undefined ? null : { kind: 'embedded_data', blob, path: m![2] ?? '$' };
     }
-    case 'pagination': {
-      const m = /^([a-z_]{3,20})(?:\s+([A-Za-z0-9_.[\]-]{1,64}))?$/.exec(value);
-      if (m === null || !(BRIEF_PAGINATION_FAMILIES as readonly string[]).includes(m[1]!)) return null;
-      return { kind: 'pagination', family: m[1]!, param: m[2] ?? null };
-    }
+    case 'pagination':
+      return parsePaginationHint(value);
     case 'selector':
-      return value === '' || /[<>{}]/.test(value) || value.length > 300 ? null : { kind: 'selector', selector: value };
+      return validSelector(value) ? { kind: 'selector', selector: value } : null;
     case 'pitfall':
       return { kind: 'pitfall' };
   }
+}
+
+/** Sélecteur CSS accepté par le MÊME analyseur que l'interpréteur (combinateurs, attributs, `:nth-child`…), borné. */
+function validSelector(value: string): boolean {
+  if (value === '' || value.length > 300 || value.includes('<')) return false;
+  try {
+    compileSelector(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Numéro de page d'un motif : `{page}`, `{n}`, `{N}` ou un `N` seul comme segment ou valeur de paramètre. */
+const PAGE_TOKEN = /\{(?:page|n|N|p)\}|(?<=\/|=)N(?=\/|&|$)/;
+
+/**
+ * Indice de pagination (19c § 9.1, élargi par le constat Janssens) : famille de 04 § 4 suivie d'un paramètre (`page_param
+ * page`), d'un MOTIF d'URL des pages (`page_param /nos-maisons/page/{page}/`, `?page=N`) ou du SÉLECTEUR du lien suivant
+ * (`next_link a.next`) ; ou le motif, ou le sélecteur, seul. Le motif est ramené à son chemin et à sa requête (`{page}`) :
+ * l'hôte n'en est jamais retenu.
+ */
+function parsePaginationHint(value: string): ParsedHint | null {
+  const m = /^([a-z_]{3,20})(?:\s+(.+))?$/s.exec(value);
+  const family = m !== null && (BRIEF_PAGINATION_FAMILIES as readonly string[]).includes(m[1]!) ? m[1]! : null;
+  const rest = (family === null ? value : (m![2] ?? '')).trim();
+  if (rest === '') return family === null ? null : { kind: 'pagination', family, param: null };
+  if (family !== null && family !== 'next_link' && /^[A-Za-z0-9_.[\]-]{1,64}$/.test(rest) && !/^N$/.test(rest)) return { kind: 'pagination', family, param: rest };
+  if (PAGE_TOKEN.test(rest) && rest.length <= 500 && !/\s/.test(rest)) {
+    let url: URL;
+    try {
+      url = new URL(rest.replace(PAGE_TOKEN, '987654321'), 'https://brief.invalid/');
+    } catch {
+      return null;
+    }
+    const pattern = `${url.pathname}${url.search}`.replace('987654321', '{page}');
+    if (!pattern.includes('{page}')) return null;
+    return { kind: 'pagination', family: family ?? 'page_param', param: null, pattern };
+  }
+  // Sélecteur du lien suivant : au moins une classe, un identifiant, un attribut ou une pseudo-classe (une phrase n'en est pas un).
+  if (/[.#[:]/.test(rest) && validSelector(rest)) return { kind: 'pagination', family: family ?? 'next_link', param: null, selector: rest };
+  return null;
 }
 
 /** Valeur canonique d'un indice (identité) : gabarit pour une URL, forme normalisée sinon. */
@@ -79,7 +123,7 @@ function canonicalValue(parsed: ParsedHint | null, hint: Pick<BriefHint, 'value'
     case 'embedded_data':
       return `${parsed.blob} ${parsed.path}`;
     case 'pagination':
-      return `${parsed.family} ${parsed.param ?? ''}`.trim();
+      return `${parsed.family} ${parsed.param ?? parsed.pattern ?? parsed.selector ?? ''}`.trim();
     case 'selector':
       return parsed.selector.replace(/\s+/g, ' ');
     case 'pitfall':
