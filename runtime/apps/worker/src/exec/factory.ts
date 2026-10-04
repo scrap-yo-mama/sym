@@ -15,6 +15,7 @@ import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readIns
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
 import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { createLocalProvider } from '../browser/provider-local.js';
+import type { RunEgress } from '../browser/run-egress.js';
 import { detectProvider } from '../browser/provider-detect.js';
 import type { BrowserProvider } from '@sym/contracts/browser';
 import { installedEngineIdentity } from '../browser/engine-identity.js';
@@ -241,6 +242,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       guard,
       pacer,
       browsers,
+      ...(provider === undefined ? {} : { openEgress: (egressOptions) => provider.openEgress(egressOptions) as Promise<RunEgress> }),
       secrets,
       logger,
       tunnel,
@@ -260,6 +262,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       guard,
       pacer,
       browsers,
+      ...(provider === undefined ? {} : { openEgress: (egressOptions) => provider.openEgress(egressOptions) as Promise<RunEgress> }),
       secrets,
       logger,
       strategy,

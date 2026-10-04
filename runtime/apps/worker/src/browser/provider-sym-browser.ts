@@ -6,13 +6,16 @@
 // - `launchDedicated` : session `dedicated` (User-Agent, arguments, egress, métadonnées), `connectOverCDP` ; `cdpUrl` est l'URL
 //   de la passerelle, transmise à Stagehand ;
 // - `engineIdentity` : `GET /v1/version` ;
-// - `openEgress` : politique d'egress de la session distante, tâche 4.3 (refus explicite d'ici là).
+// - `openEgress` : politique d'egress de la session distante (tâche 4.3, provider-sym-browser-egress.ts) : `attach(browser)` la
+//   pose sur la session du navigateur ouvert ici (pas de proxy local : `server: null`).
 // Le worker lit `/v1/version` à chaque ouverture de session : SYM Browser pas encore démarré => attente (1 s puis doublement
 // jusqu'à 30 s) bornée, puis erreur `retryable` (04g §2, démarrage indépendant). Une version de Playwright de majeure.mineure
 // différente n'est jamais attendue : erreur fermée (AD2). L'origine des URL WebSocket rendues est ramenée à `BROWSER_URL`.
+import type { BrowserEgressOptions } from '@runtime/core/net';
 import type { BrowserProvider, EngineIdentity, LaunchedBrowser, LaunchedDedicated, ProviderCapabilities, VersionInfo } from '@sym/contracts/browser';
 import type { SymBrowser } from '@sym-browser/sdk';
 import type { CreateSessionRequest, Session } from '@sym/contracts/browser';
+import { openRemoteEgress, type RemoteEgress, type RemoteEgressClient } from './provider-sym-browser-egress.js';
 
 /** SYM Browser tient toutes les capacités côté navigateur (04g §1). */
 const SYM_BROWSER_CAPABILITIES: ProviderCapabilities = Object.freeze({
@@ -26,7 +29,7 @@ const SYM_BROWSER_CAPABILITIES: ProviderCapabilities = Object.freeze({
 });
 
 /** Part du client SDK que le fournisseur utilise (les tests en fournissent une doublure). */
-export type SymBrowserLike = Pick<SymBrowser, 'version' | 'connect' | 'connectCDP'> & { sessions: Pick<SymBrowser['sessions'], 'create' | 'release'> };
+export type SymBrowserLike = Pick<SymBrowser, 'version' | 'connect' | 'connectCDP'> & { sessions: Pick<SymBrowser['sessions'], 'create' | 'release'> & RemoteEgressClient['sessions'] } & Pick<RemoteEgressClient, 'events'>;
 
 /** Configuration refusée ou version incompatible : arrêt du démarrage, jamais réessayé. */
 export class BrowserProviderError extends Error {
@@ -85,7 +88,7 @@ function rewritten(session: Session, base: URL): Session {
   });
 }
 
-export function createSymBrowserProvider(options: SymBrowserProviderOptions): BrowserProvider {
+export function createSymBrowserProvider(options: SymBrowserProviderOptions): BrowserProvider<BrowserEgressOptions, RemoteEgress> {
   const { client, url } = options;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? Date.now;
@@ -108,11 +111,16 @@ export function createSymBrowserProvider(options: SymBrowserProviderOptions): Br
     }
   }
 
+  /** Session de chaque navigateur ouvert ici : `attach` de l'egress y pose la politique de l'essai. */
+  const sessionIds = new WeakMap<LaunchedBrowser['browser'], string>();
+
   async function open(request: CreateSessionRequest, connect: (session: Session) => Promise<LaunchedBrowserLike>): Promise<{ session: Session; browser: LaunchedBrowserLike }> {
     await readVersion();
     const session = await client.sessions.create(request);
     try {
-      return { session, browser: await connect(rewritten(session, url)) };
+      const browser = await connect(rewritten(session, url));
+      sessionIds.set(browser, session.id);
+      return { session, browser };
     } catch (error) {
       await client.sessions.release(session.id).catch(() => undefined);
       throw error;
@@ -151,6 +159,6 @@ export function createSymBrowserProvider(options: SymBrowserProviderOptions): Br
       const info = await readVersion();
       return { version: info.chromium, platform: info.platform };
     },
-    openEgress: () => Promise.reject(new BrowserProviderError("fournisseur sym-browser : openEgress distant livré par la tâche 4.3 (politique d'egress de la session).")),
+    openEgress: (egressOptions) => openRemoteEgress({ client, sessionOf: (browser) => sessionIds.get(browser) }, egressOptions),
   };
 }

@@ -35,6 +35,7 @@
 // Journal du script (`ctx.log`) et éléments émis : rendus à l'appelant, en mémoire. Les éléments sont inscrits au registre
 // de masquage du run, que l'essai réussisse ou non ; le texte du journal n'est jamais écrit (ni `run_logs` ni journal du
 // worker : seuls le nombre de lignes et les octets le sont, 17 §6).
+import type { RunEgress } from '../browser/run-egress.js';
 import type { FailureClass, SandboxEngine, SandboxLimits, SandboxViolation } from '@runtime/core';
 import {
   classifyExchange,
@@ -45,7 +46,7 @@ import {
   type HttpExchange,
   type RequestPacer,
 } from '@runtime/core/exec';
-import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
+import { DomainNotAllowedError, guardedGoto, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
 import type { Logger } from 'pino';
 import type { CDPSession, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
@@ -104,7 +105,7 @@ export async function loadInlineScript(scriptRef: string, spec: unknown): Promis
 
 export type ScriptExecutorOptions = {
   readonly pool: BrowserPool;
-  readonly egress: BrowserEgress;
+  readonly egress: RunEgress;
   readonly guard: SsrfGuard;
   /** Session réseau de l'essai (même barreau que l'egress) : transport de `ctx.fetch`. */
   readonly session: Pick<NetworkSession, 'fetch'>;
@@ -332,6 +333,7 @@ export function runScriptExecutor(options: ScriptExecutorOptions): Promise<Scrip
     };
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
+      egress: options.egress,
       allowedHosts: options.allowedHosts,
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
       ...(options.steps?.gate === undefined ? {} : { checkRequest: (hop) => (options.steps!.gate!.isAgentActive() ? options.steps!.gate!.check(hop) : Promise.resolve(true)) }),

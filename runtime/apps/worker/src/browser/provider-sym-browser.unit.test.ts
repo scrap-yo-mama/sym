@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Fournisseur `sym-browser` (tâche 4.2 ; cdc/sym-browser 04e §2.2, 04g §1) : sessions SYM Browser derrière `BrowserProvider`.
 import type { Browser } from 'playwright-core';
+import { SsrfGuard } from '@runtime/core/net';
 import { describe, expect, it, vi } from 'vitest';
 import { createSymBrowserProvider, type SymBrowserLike } from './provider-sym-browser.js';
 
@@ -20,8 +21,11 @@ function fakeClient(over: Partial<{ version: () => Promise<unknown> }> = {}) {
   );
   const connect = vi.fn().mockResolvedValue(browser);
   const connectCDP = vi.fn().mockResolvedValue(browser);
-  const client = { version: over.version ?? (() => Promise.resolve(VERSION)), sessions: { create, release }, connect, connectCDP } as unknown as SymBrowserLike;
-  return { client, create, release, connect, connectCDP, browser };
+  const put = vi.fn().mockResolvedValue({ epoch: 1, requests: 0, blocked: 0, bytesIn: 0, bytesOut: 0, budgetExceeded: false });
+  const get = vi.fn().mockResolvedValue({ epoch: 1, requests: 0, blocked: 0, bytesIn: 0, bytesOut: 0, budgetExceeded: false });
+  const events = vi.fn(() => (async function* () {})());
+  const client = { version: over.version ?? (() => Promise.resolve(VERSION)), sessions: { create, release, egress: { put, get } }, events, connect, connectCDP } as unknown as SymBrowserLike;
+  return { client, create, release, connect, connectCDP, browser, put, get };
 }
 
 const provider = (client: SymBrowserLike) => createSymBrowserProvider({ url: new URL('http://sym-browser:3000'), client, workerId: 'w1', playwrightVersion: '1.63.0', sleep: () => Promise.resolve() });
@@ -79,7 +83,25 @@ describe('fournisseur sym-browser', () => {
     await expect(provider(fakeClient().client).engineIdentity()).resolves.toEqual({ version: '153.0.8010.12', platform: 'linux' });
   });
 
-  it('openEgress distant : pas dans cette tâche (4.3), refus explicite plutôt qu’un proxy local injoignable du nœud', async () => {
-    await expect(provider(fakeClient().client).openEgress({})).rejects.toThrow(/4\.3/);
+  it('openEgress distant : server null, politique de l’essai posée sur la session du navigateur partagé (attach)', async () => {
+    const f = fakeClient();
+    const p = provider(f.client);
+    const egress = await p.openEgress({ rung: { mode: 'direct' }, guard: new SsrfGuard(), allowedHosts: ['site-a.example'] });
+    expect(egress.server).toBeNull();
+    const launched = await p.launchShared();
+    await egress.attach!(launched.browser);
+    expect(f.put).toHaveBeenCalledWith('sess_1', { allowedHosts: ['site-a.example'], ports: [80, 443] });
+    await egress.close();
+    expect(f.put).toHaveBeenLastCalledWith('sess_1', { allowedHosts: [] });
+  });
+
+  it('openEgress distant : attach sur le navigateur dedicated d’un essai agentique', async () => {
+    const f = fakeClient();
+    const p = provider(f.client);
+    const egress = await p.openEgress({ rung: { mode: 'direct' }, guard: new SsrfGuard(), allowedHosts: ['a.example'] });
+    const launched = await p.launchDedicated({ userAgent: 'zz', egress: (egress as unknown as { policy: never }).policy, egressServer: null, launchArgs: [] });
+    await egress.attach!(launched.browser);
+    expect(f.put).toHaveBeenCalledWith('sess_1', { allowedHosts: ['a.example'], ports: [80, 443] });
+    await egress.close();
   });
 });

@@ -57,6 +57,11 @@ export type RunContextOptions = {
   readonly neutralizeLaunchFeatures?: boolean;
   /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT) ; `null` : le nœud distant impose son egress (aucun `proxy`). */
   readonly egressServer: string | null;
+  /**
+   * Egress de l'essai : avec `egressServer: null` (fournisseur distant), `egress.attach(browser)` pose la politique de l'essai
+   * sur la session du navigateur AVANT tout contexte (tâche 4.3, 04e §3) ; un refus du nœud arrête l'ouverture.
+   */
+  readonly egress?: { attach?(browser: Browser): Promise<void> };
   /** Domaines de l'API (`allowed_hosts`) : toute autre requête du navigateur est coupée. */
   readonly allowedHosts: readonly string[];
   /** Portées de site admises en plus (domaine et sous-domaines) : reconnaissance de l'enquête seulement (2.1, 04b §2). */
@@ -139,6 +144,8 @@ export function hostAllowed(url: string, allowedHosts: readonly string[], suffix
 }
 
 export async function openRunContext(browser: Browser, options: RunContextOptions): Promise<RunContext> {
+  // Politique de l'essai sur la session distante avant tout autre appel : rien ne sort du navigateur sous une politique antérieure.
+  if (options.egressServer === null) await options.egress?.attach?.(browser);
   const checkRequest: RequestCheck = options.checkRequest ?? (async () => true);
   const violations: string[] = [];
   const note = (url: string, request?: Request) => {

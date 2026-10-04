@@ -27,6 +27,7 @@
 // Garde des contextes de run : chaque Chromium de ces exécuteurs — contexte du pool (E4 par le navigateur, E5 sans
 // délégation, rejeux de compilation E6) comme Chromium dédié piloté par Stagehand (E5 délégué, E6) — reçoit la garde des
 // contextes de run d'E1-E3 (`openRunContext` : verrou de domaines à chaque saut, WebSocket, workers).
+import type { RunEgress } from '../browser/run-egress.js';
 import {
   compileAgentTrace,
   hybridUsesLlm,
@@ -66,7 +67,7 @@ import {
   type HttpExchange,
   type RequestPacer,
 } from '@runtime/core/exec';
-import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
+import { DomainNotAllowedError, guardedGoto, type NetworkSession, type SsrfGuard } from '@runtime/core/net';
 import { LlmError, toFailureClass, type LlmClient, type RunUsage } from '@runtime/llm';
 import type { Browser, BrowserContext, Page, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
@@ -232,7 +233,7 @@ export type AgentFetchOptions = AgentPolicyOptions & {
   readonly modelId: string | null;
   readonly signal: AbortSignal;
   readonly session?: Pick<NetworkSession, 'fetch'>;
-  readonly browser?: { readonly pool: BrowserPool; readonly egress: BrowserEgress; readonly guard: SsrfGuard; readonly userAgent?: string };
+  readonly browser?: { readonly pool: BrowserPool; readonly egress: RunEgress; readonly guard: SsrfGuard; readonly userAgent?: string };
   readonly pacer?: RequestPacer;
   readonly classify?: ClassifyFn;
   /** Plafond de coût de l'essai (proxy + LLM). */
@@ -262,7 +263,7 @@ async function fetchPage(options: AgentFetchOptions, gate: AgentRequestGate): Pr
   return b.pool.run(options.signal, async (browser) => {
     // E4 n'a ni agent ni outil : seule la requête DÉCLARÉE est contrôlée (ci-dessus). Le trafic de la page (POST, navigation par
     // script, XHR) garde le régime d'avant la garde ; le verrou de domaines du contexte le borne toujours.
-    const rc = await openRunContext(browser, { egressServer: b.egress.server, allowedHosts: options.spec.request.allowed_hosts, ...(b.userAgent === undefined ? {} : { userAgent: b.userAgent }) });
+    const rc = await openRunContext(browser, { egressServer: b.egress.server, egress: b.egress, allowedHosts: options.spec.request.allowed_hosts, ...(b.userAgent === undefined ? {} : { userAgent: b.userAgent }) });
     const strategy = trackStrategyRequests(rc.context, options.spec.request.allowed_hosts);
     try {
       const response = await strategy
@@ -352,7 +353,7 @@ export type HybridOptions = AgentPolicyOptions & {
   readonly itemPolicy?: ItemPolicy;
   readonly signal: AbortSignal;
   readonly guard: SsrfGuard;
-  readonly egress: BrowserEgress;
+  readonly egress: RunEgress;
   /** Pool du worker : E5 sans délégation (aucun LLM) et slot du Chromium dédié (E5 avec délégation). */
   readonly pool: BrowserPool | null;
   /** Chromium dédié (E5 avec étapes `agent`) et moteur ; client du rôle `extract` (extraction déléguée). */
@@ -512,7 +513,7 @@ async function runHybridWithoutLlm(options: HybridOptions, onPage?: (page: Page)
   const spec = options.spec;
   const borrow = <T>(fn: (browser: Browser) => Promise<T>): Promise<T> => (lease !== undefined ? lease.run(fn) : pool!.run(options.signal, fn));
   return borrow(async (browser) => {
-    const rc = await openRunContext(browser, { egressServer: options.egress.server, allowedHosts: spec.allowed_hosts, admit: navigationAdmission(options), ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }) });
+    const rc = await openRunContext(browser, { egressServer: options.egress.server, egress: options.egress, allowedHosts: spec.allowed_hosts, admit: navigationAdmission(options), ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }) });
     const strategy = trackStrategyRequests(rc.context, spec.allowed_hosts);
     const stop = new AbortController();
     const watch = watchDocuments(rc.context, options.classify, () => stop.abort(), await decodedSizes(rc.context, rc.page));
@@ -698,7 +699,7 @@ export type AgentOptions = AgentPolicyOptions & {
   readonly itemPolicy?: ItemPolicy;
   readonly signal: AbortSignal;
   readonly guard: SsrfGuard;
-  readonly egress: BrowserEgress;
+  readonly egress: RunEgress;
   readonly agentBrowser: (options: Omit<AgentBrowserOptions, 'egressServer'>) => Promise<AgentBrowser>;
   readonly engineFor: EngineFactory;
   /**

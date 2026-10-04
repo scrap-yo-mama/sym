@@ -31,6 +31,7 @@ import { buildUserAgent } from '@runtime/core/access';
 import type { BrowserProvider } from '@sym/contracts/browser';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { createLocalProvider } from './provider-local.js';
+import type { RunEgress } from './run-egress.js';
 import type { RequestCheck } from './request-guard.js';
 import { openRunContext, type RunContext } from './run-context.js';
 
@@ -42,6 +43,8 @@ export { agentChromiumArgs, ChromiumLaunchError } from './provider-local.js';
 export type AgentBrowserOptions = {
   /** `BrowserEgress.server` de l'essai (http://127.0.0.1:PORT) ; `null` : le nœud distant impose son egress. */
   readonly egressServer: string | null;
+  /** Egress de l'essai : `policy` posée à la création d'une session distante `dedicated`, `attach` après la connexion (tâche 4.3). */
+  readonly egress?: Pick<RunEgress, 'attach' | 'policy'>;
   readonly allowedHosts: readonly string[];
   readonly allowWriteActions: boolean;
   readonly pacer?: RequestPacer;
@@ -232,7 +235,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
   const provider = options.provider ?? createLocalProvider({ launchProxyUrl: '', env, ...(options.executablePath === undefined ? {} : { executablePath: options.executablePath }) });
   const launched = await provider.launchDedicated({
     userAgent: options.userAgent ?? buildUserAgent({ engine: await provider.engineIdentity() }),
-    egress: { allowedHosts: [...options.allowedHosts] },
+    egress: options.egress?.policy ?? { allowedHosts: [...options.allowedHosts] },
     egressServer: options.egressServer,
     launchArgs: [],
     ...(options.launchTimeoutMs === undefined ? {} : { launchTimeoutMs: options.launchTimeoutMs }),
@@ -280,6 +283,7 @@ export async function launchAgentBrowser(options: AgentBrowserOptions): Promise<
     rc = await openRunContext(browser, {
       dedicated: true,
       egressServer: options.egressServer,
+      ...(options.egress === undefined ? {} : { egress: options.egress }),
       allowedHosts: options.allowedHosts,
       onViolation: (_host, request) => {
         if (request !== undefined && isWrite(request.method())) writes.route += 1;

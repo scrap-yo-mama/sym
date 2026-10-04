@@ -116,6 +116,7 @@ import {
   parseNetworkPolicy,
   parseProxyDefinitions,
   policyAllowsTunnel,
+  type BrowserEgressOptions,
   type NetworkRung,
   type NetworkSession,
   type ProxyCredentials,
@@ -123,6 +124,7 @@ import {
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
+import type { RunEgress } from '../browser/run-egress.js';
 import {
   applyRulePlan,
   buildInputSchema,
@@ -223,6 +225,8 @@ export type InvestigationExecutorDeps = {
   readonly pacer?: DomainPacer;
   /** Pool Chromium ; `null` : `DISABLE_BROWSER` (reconnaissance statique, ni E2 ni E3 ni E6). */
   readonly browsers: BrowserPool | null;
+  /** Egress de l'essai du fournisseur de navigateur (`provider.openEgress`, tâche 4.3) ; défaut : proxy d'egress local. */
+  readonly openEgress?: (options: BrowserEgressOptions) => Promise<RunEgress>;
   readonly secrets?: SecretReader;
   readonly proxyResolver?: Resolver;
   /** Exécuteur de stratégie : chaque exécution d'un couple candidat passe par lui (mêmes gardes qu'un run). */
@@ -1558,7 +1562,8 @@ async function browserRecon(
     pacer?: RequestPacer;
   },
 ): Promise<ReconOutcome> {
-  const egress = await openBrowserEgress({
+  const openEgress: (options: BrowserEgressOptions) => Promise<RunEgress> = deps.openEgress ?? openBrowserEgress;
+  const egress = await openEgress({
     ...args.sessionBase,
     allowedHosts: [args.host],
     allowedHostSuffixes: [args.scope],
@@ -1576,6 +1581,7 @@ async function browserRecon(
       userAgent: args.userAgent,
       ...(args.pacer === undefined ? {} : { pacer: args.pacer }),
     });
+    await egress.settle?.();
     return { capture: pass.capture, failure: pass.result.ok ? null : pass.result.failure, proxyUsd: egress.usage().costUsd };
   } finally {
     await egress.close().catch(() => undefined);

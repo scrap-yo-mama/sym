@@ -19,6 +19,7 @@
 // Attendre ne franchit donc jamais un défi. Limite assumée (INV6) : une redirection JS ou un meta refresh d'un site SAIN
 // (langue, URL canonique) arrête aussi l'essai, sans réparation ; le détail `self_navigation` le dit, et la stratégie
 // doit viser l'URL finale.
+import type { RunEgress } from '../browser/run-egress.js';
 import {
   boundedEvidence,
   classifyExchange,
@@ -36,7 +37,7 @@ import {
 } from '@runtime/core/exec';
 import { DslError } from '@runtime/core';
 import type { CapturedExchange, ReconCapture } from '@runtime/core/investigation';
-import { DomainNotAllowedError, guardedGoto, type BrowserEgress, type SsrfGuard } from '@runtime/core/net';
+import { DomainNotAllowedError, guardedGoto, type SsrfGuard } from '@runtime/core/net';
 import type { Page, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, boundedRawBody, countMatching, scrollStep, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
@@ -50,7 +51,7 @@ const BROWSER_SCROLL_WAIT_MS = 5_000;
 
 export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport'> & {
   readonly pool: BrowserPool;
-  readonly egress: BrowserEgress;
+  readonly egress: RunEgress;
   readonly guard: SsrfGuard;
   readonly navigationTimeoutMs?: number;
   readonly renderWaitMs?: number;
@@ -72,7 +73,7 @@ function capped(body: string | typeof TOO_LARGE): string {
 }
 
 /** Affine un échec quand le proxy d'egress ou la politique de domaines ont refusé une requête DE LA STRATÉGIE. */
-function refine(result: DeclarativeRunResult, egress: BrowserEgress, strategy: StrategyRequests): DeclarativeRunResult {
+function refine(result: DeclarativeRunResult, egress: RunEgress, strategy: StrategyRequests): DeclarativeRunResult {
   if (result.ok) return result;
   const { failure_class: cls } = result.failure;
   // Le proxy d'egress répond 403 `ssrf_blocked` (http) ou refuse le CONNECT (https, ws) : Chromium voit un 403 ou une
@@ -177,6 +178,7 @@ async function withRunContext(
     const nav = navigationGuard();
     const rc = await openRunContext(browser, {
       egressServer: options.egress.server,
+      egress: options.egress,
       allowedHosts: options.spec.request.allowed_hosts,
       ...(options.allowedHostSuffixes === undefined ? {} : { allowedHostSuffixes: options.allowedHostSuffixes }),
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),

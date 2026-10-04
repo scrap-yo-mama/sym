@@ -96,7 +96,7 @@ import {
   parseNetworkPolicy,
   policyAllowsTunnel,
   parseProxyDefinitions,
-  type BrowserEgress,
+  type BrowserEgressOptions,
   type NetworkRung,
   type NetworkSession,
   type NetworkSessionOptions,
@@ -109,6 +109,7 @@ import {
 import { archivedRepairExists, countSucceededRuns, deleteRejectedItems, inputHash, loadRunTarget, markStrategyCompilable, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
 import { degradedQualitySignals, profileItems, type CostCaps } from '@runtime/core';
+import type { RunEgress } from '../browser/run-egress.js';
 import type { QualityPorts } from './quality-job.js';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -146,6 +147,8 @@ export type StrategyExecutorDeps = {
   readonly pacer?: DomainPacer;
   /** Pool Chromium ; `null` : `DISABLE_BROWSER` (E2 et E3 refusés). */
   readonly browsers: BrowserPool | null;
+  /** Egress de l'essai du fournisseur de navigateur (`provider.openEgress`, tâche 4.3) ; défaut : proxy d'egress local. */
+  readonly openEgress?: (options: BrowserEgressOptions) => Promise<RunEgress>;
   /** Dépôt de secrets (identifiants des proxys BYO). */
   readonly secrets?: SecretReader;
   /** Résolveur de la garde des proxys (tests). */
@@ -329,7 +332,7 @@ function addUsage(a: NetworkUsage, b: NetworkUsage): NetworkUsage {
  * pas déduit ici des compteurs globaux du proxy (les sous-ressources tierces du site y passent aussi) : l'exécuteur
  * qualifie lui-même `domain_not_allowed` sur les seules requêtes de la stratégie (script-executor.ts).
  */
-function refineEgress(result: DeclarativeRunResult, egress: BrowserEgress): DeclarativeRunResult {
+function refineEgress(result: DeclarativeRunResult, egress: RunEgress): DeclarativeRunResult {
   if (result.ok || result.failure.detail === 'sandbox_violation') return result;
   const cls = result.failure.failure_class;
   if (egress.blocked.length > 0 && (cls === 'network' || cls === 'transient' || cls === 'code_error' || cls === 'forbidden')) {
@@ -424,6 +427,7 @@ function agentEachRun(strategy: NonNullable<RunTarget['strategy']>): boolean {
 }
 
 export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRuntime {
+  const openEgress: (options: BrowserEgressOptions) => Promise<RunEgress> = deps.openEgress ?? openBrowserEgress;
   const now = deps.now ?? Date.now;
 
   const rungFor = async (target: RunTarget, network: string): Promise<{ rung: NetworkRung; credentials?: ProxyCredentials }> => {
@@ -486,7 +490,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     ctx: RunCtx,
     target: RunTarget,
     scriptRef: string,
-    base: { pool: BrowserPool; egress: BrowserEgress; session: NetworkSession; pacer?: RequestPacer; allowedHosts: readonly string[]; startUrl: string; userAgent: string; itemPolicy: ItemPolicy },
+    base: { pool: BrowserPool; egress: RunEgress; session: NetworkSession; pacer?: RequestPacer; allowedHosts: readonly string[]; startUrl: string; userAgent: string; itemPolicy: ItemPolicy },
   ): Promise<Outcome> => {
     const port = deps.script;
     if (port === undefined) return { result: { ok: false, failure: { failure_class: 'code_error', retryable: false, detail: 'sandbox_unavailable' }, pages: 0, requests: 0 }, usage: null };
@@ -664,7 +668,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     const source = validateStepsSource(strategy.sourceSteps ?? [], stepsSpec);
     if (!source.ok) return refuse('code_error', 'invalid_steps_source');
     const host = new StepsHost({ spec: stepsSpec, source: source.steps, runInput: ctx.input, stopBefore: args.extras?.stopBefore ?? null, allowWriteActions: target.api.allowWriteActions });
-    const egress = await openBrowserEgress(sessionOptions('egress'));
+    const egress = await openEgress(sessionOptions('egress'));
     args.setOther({ egress: () => egress.usage().costUsd });
     const session = openNetworkSession(sessionOptions('session'));
     args.setOther({ session: () => session.usage().costUsd });
@@ -696,6 +700,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       if (result.ok && host.info.paused === null && (itemPolicy === 'quarantine' ? !result.records.some(conforming) : result.records.some((r) => !conforming(r)))) {
         result = { ok: false, failure: { failure_class: 'extraction', retryable: false, detail: 'schema_mismatch' }, pages: result.pages, requests: result.requests };
       }
+      await egress.settle?.();
       const exceeded = egress.budgetExceeded() || session.budgetExceeded();
       return {
         result: budgetChecked(refineEgress(result, egress), exceeded),
@@ -726,7 +731,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       case 'fetch_in_page':
       case 'playwright': {
         if (deps.browsers === null) return refuse('code_error', 'browser_disabled');
-        const egress = await openBrowserEgress(sessionOptions('egress'));
+        const egress = await openEgress(sessionOptions('egress'));
         args.setOther({ egress: () => egress.usage().costUsd });
         try {
           if (script !== undefined) {
@@ -734,6 +739,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
             args.setOther({ session: () => session.usage().costUsd });
             try {
               const out = await runScript(ctx, target, strategy.scriptRef!, { pool: deps.browsers, egress, session, ...(pacer === undefined ? {} : { pacer }), ...script, userAgent, itemPolicy: common.itemPolicy ?? 'strict' });
+              await egress.settle?.();
               const exceeded = egress.budgetExceeded() || session.budgetExceeded();
               return { ...out, result: budgetChecked(refineEgress(out.result, egress), exceeded), usage: addUsage(egress.usage(), session.usage()) };
             } finally {
@@ -742,6 +748,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
           }
           const base = { ...common, pool: deps.browsers, egress, guard: deps.guard, spec: spec!, userAgent };
           const result = strategy.execution === 'fetch_in_page' ? await runFetchInPageExecutor(base) : await runPlaywrightExecutor(base);
+          await egress.settle?.();
           return { result: budgetChecked(result, egress.budgetExceeded()), usage: egress.usage() };
         } finally {
           await egress.close().catch(() => undefined);
@@ -766,13 +773,13 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
         // UN compteur de coût pour l'essai : proxy (egress, session) et LLM (rôle extract, moteur) sous `max_cost_usd`.
         const cost = new AttemptCost(target.api.maxCostUsd);
         args.setLlmSpent(() => cost.llmUsd());
-        const egress = agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch' ? undefined : await openBrowserEgress(sessionOptions('egress'));
+        const egress = agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch' ? undefined : await openEgress(sessionOptions('egress'));
         if (egress !== undefined) cost.addProxy(() => egress.usage().costUsd);
         if (egress !== undefined) args.setOther({ egress: () => egress.usage().costUsd });
         const session = agentic.kind === 'agent_fetch' && agentic.spec.via === 'fetch' ? openNetworkSession(sessionOptions('session')) : undefined;
         if (session !== undefined) args.setOther({ session: () => session.usage().costUsd });
         if (session !== undefined) cost.addProxy(() => session.usage().costUsd);
-        const agentBrowser = (o: Omit<AgentBrowserOptions, 'egressServer'>) => ports.agentBrowser({ ...o, egressServer: egress!.server, userAgent });
+        const agentBrowser = (o: Omit<AgentBrowserOptions, 'egressServer'>) => ports.agentBrowser({ ...o, egressServer: egress!.server, egress: egress!, userAgent });
         // Client du seul rôle `extract` (un client par essai : compteur de coût de l'essai) ; configuration refusée → `llm_not_configured`.
         const extractClient = (): LlmClient | null => {
           const role = config?.roles.extract;
@@ -871,6 +878,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
           }
           const skillReads = embedded?.reader.reads ?? [];
           for (const read of skillReads) await ctx.log('info', 'skill_read', { ref: read.ref, sha256: read.sha256 });
+          await egress?.settle?.();
           const exceeded = (egress?.budgetExceeded() ?? false) || (session?.budgetExceeded() ?? false);
           const usage = egress !== undefined && session !== undefined ? addUsage(egress.usage(), session.usage()) : (egress?.usage() ?? session?.usage() ?? null);
           const { result, ...agent } = out;
