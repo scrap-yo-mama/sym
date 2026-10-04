@@ -60,11 +60,11 @@ describe('migration 0023 (reprise par étape, agent instruit)', () => {
     await expect(pool.query("UPDATE strategy_versions SET compilable = 'peut-être' WHERE api_id = $1", [api])).rejects.toThrow();
   });
 
-  test('down puis up : la migration se défait proprement', async () => {
+  test('down puis up : 0024 puis 0023 se défont proprement', async () => {
     const other = await createTestDatabase('steps_down');
     try {
       await migrateUp({ connectionString: other.url });
-      await migrateDown({ connectionString: other.url, steps: 1 });
+      await migrateDown({ connectionString: other.url, steps: 2 });
       const c = new pg.Client({ connectionString: other.url });
       await c.connect();
       const { rows } = await c.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'apis' AND column_name = 'instructed_mode'");
