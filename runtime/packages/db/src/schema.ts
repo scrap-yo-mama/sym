@@ -380,7 +380,8 @@ export const apis = pgTable(
     legalBasis: text('legal_basis'),
     containsPersonalData: boolean('contains_personal_data').notNull().default(false),
     allowWriteActions: boolean('allow_write_actions').notNull().default(false),
-    maxCostUsd: usd('max_cost_usd').notNull().default('0.5'),
+    // 0026_no_run_cap (D-123) : NULL = aucun plafond par run (défaut) ; le budget du jour de l'utilisateur reste le filet.
+    maxCostUsd: usd('max_cost_usd'),
     budgetDailyUsd: usd('budget_daily_usd').notNull().default('5'),
     mcpExposed: boolean('mcp_exposed').notNull().default(true),
     pinned: boolean('pinned').notNull().default(false),

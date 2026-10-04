@@ -7,7 +7,7 @@ import { buildTrialPlan } from './candidates.js';
 import { estimateCostUsd, firstCostInversion, orderTrials, pruneAfter, type TrialPair } from './plan.js';
 import { buildFromProposal, outputSchemaOf, type InvestigationProposal } from './proposal.js';
 import { analyzeCapture, discoverScriptEndpoints, findRecordArrays, hasClientSignature, recordSkeleton, type ReconCapture } from './recon.js';
-import { runTrials, type PairOutcome, type TrialExecution, type TrialPorts } from './trials.js';
+import { INVESTIGATION_DEFAULTS, runTrials, type PairOutcome, type TrialExecution, type TrialPorts } from './trials.js';
 
 const pair = (execution: TrialPair['execution'], network: TrialPair['network'], est: number | null, source = 'c1'): TrialPair => ({ execution, network, source, est_cost_usd: est });
 
@@ -29,6 +29,25 @@ describe('coût estimé (04 §3.3)', () => {
     const e4 = estimateCostUsd('agent_fetch', 'direct', { bytes: 40_000, pages: 1, perGbUsd: 0, llmPrice: { in: 1, out: 2 }, tokensIn: 10_000 })!;
     expect(e4).toBeCloseTo(10_000 / 1e6 + (1_500 * 2) / 1e6 + 6 * 0.00005, 6);
     expect(estimateCostUsd('agent', 'direct', { bytes: 1, pages: 1, perGbUsd: 0, llmPrice: null })).toBeNull();
+  });
+
+  test('E6 (agent) : borne prudente, étapes × jetons par étape ; ne sous-estime plus les cas réels Barnes et R09 ; E1-E5 inchangés', () => {
+    // Prix du rôle `agent` des deux cas (5 $ / 25 $ par million) : le plan estimait 0,303 $ ; l'essai a coûté 0,5108 $
+    // (Barnes) et 0,409 $ (R09).
+    const opus = { in: 5, out: 25 };
+    const e6 = estimateCostUsd('agent', 'direct', { bytes: 3_000_000, pages: 1, perGbUsd: 0, llmPrice: opus })!;
+    expect(e6).toBeGreaterThanOrEqual(0.5108);
+    expect(e6).toBeGreaterThanOrEqual(0.409);
+    // Toujours le plus cher des niveaux agentiques au même prix (jamais essayé avant E4 ni E5).
+    const e5 = estimateCostUsd('hybrid', 'direct', { bytes: 3_000_000, pages: 1, perGbUsd: 0, llmPrice: opus })!;
+    expect(e5).toBe(0.0665);
+    const e4 = estimateCostUsd('agent_fetch', 'direct', { bytes: 40_000, pages: 1, perGbUsd: 0, llmPrice: opus, tokensIn: 10_000 })!;
+    expect(e4).toBe(Math.round((10_000 * 5 + 1_500 * 25) / 1e6 * 1e6 + 6 * 0.00005 * 1e6) / 1e6);
+    expect(e6).toBeGreaterThan(e5);
+    // Borne, pas devinette : même au prix d'un modèle ouvert (GLM-5.3, 0,563 $ / 2,50 $), au-dessus de la médiane mesurée
+    // en 0.6a (90 runs E6 : 20 414 jetons d'entrée, 1 939 de sortie).
+    const glm = estimateCostUsd('agent', 'direct', { bytes: 1, pages: 1, perGbUsd: 0, llmPrice: { in: 0.563, out: 2.5 } })!;
+    expect(glm).toBeGreaterThan((20_414 * 0.563 + 1_939 * 2.5) / 1e6);
   });
 });
 
@@ -169,6 +188,27 @@ describe('runTrials : du moins cher au plus cher, N = 3', () => {
     const ports = fakePorts((p) => (p.execution === 'fetch' ? failRun('run_budget_exceeded', 'max_cost_usd') : okRun()));
     const out = await runTrials(plan, ports, { ...budget, maxUsd: 10, maxCostPerRunUsd: 0.5 });
     expect(out.kind).toBe('conformant');
+  });
+
+  test('D-123 : sans plafond par run (null), chaque exécution tourne sous le seul budget d’enquête restant ; aucun couple écarté « trop cher pour un run »', async () => {
+    const ceilings: number[] = [];
+    const ports = fakePorts(() => okRun(1, 0.6));
+    const execute = ports.execute;
+    ports.execute = async (p, i, limits) => {
+      ceilings.push(limits.ceilingUsd);
+      return execute(p, i, limits);
+    };
+    // Un essai à 0,6 $ (au-delà de l'ancien défaut de 0,5 $) passe : le budget d'enquête (3 $) est la seule borne.
+    const out = await runTrials([pair('agent', 'direct', 0.5, 'page')], ports, { ...budget, maxUsd: 3, maxCostPerRunUsd: null });
+    expect(out.kind).toBe('conformant');
+    expect(ceilings).toEqual([3, 2.4, 1.8]);
+    // Coupé par la borne sans plafond par run : c'est le budget d'enquête qui l'arrête, jamais `max_cost_usd`.
+    const cut = await runTrials([pair('agent', 'direct', 0.5, 'page')], fakePorts(() => failRun('run_budget_exceeded', 'max_cost_usd', 1)), { ...budget, maxUsd: 1, maxCostPerRunUsd: null });
+    expect(cut).toMatchObject({ kind: 'budget_exhausted', reason: 'investigation_budget_usd' });
+  });
+
+  test('D-123 : budget d’enquête par défaut 3 $', () => {
+    expect(INVESTIGATION_DEFAULTS.budgetUsd).toBe(3);
   });
 });
 

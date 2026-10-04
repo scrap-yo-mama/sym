@@ -19,6 +19,16 @@ import { EXECUTIONS, NETWORKS, type Execution, type FailureClass, type Network }
 export const COMPUTE_USD_PER_S = 0.00005;
 
 /**
+ * Modèle de l'estimation E6 (`agent`) : étapes × jetons par étape, en borne prudente plutôt qu'en médiane. Le moteur
+ * renvoie à chaque étape la vue de la page, l'historique et les outils : l'entrée croît avec le nombre d'étapes. Mesures :
+ * spike 0.6a (90 runs E6 : médiane 4 étapes, 2 700 jetons d'entrée et 450 de sortie par étape ; pages lourdes jusqu'à
+ * 87 000 par étape) ; constats réels Barnes (estimé 0,303 $ avec 40 000 / 4 000 jetons, réel 0,5108 $) et R09 (0,409 $),
+ * au prix 5 $ / 25 $ par million. 8 étapes × (12 000 entrée, 1 000 sortie) : 0,683 $ à ce prix, au-dessus des deux cas ;
+ * le plafond par essai (budget d'enquête restant, ou `max_cost_usd` s'il est fixé) reste la borne dure.
+ */
+const AGENT_ESTIMATE = Object.freeze({ steps: 8, tokensInPerStep: 12_000, tokensOutPerStep: 1_000 });
+
+/**
  * Durées et volumes de référence par niveau d'exécution, faute de mesure (à valider en recette, 11) : secondes d'un
  * run, facteur d'octets d'un navigateur (sous-ressources) et jetons d'un essai agentique.
  */
@@ -28,7 +38,7 @@ export const EXECUTION_PROFILE: Readonly<Record<Execution, { readonly seconds: n
   playwright: { seconds: 8, llm: null, tokensIn: 0, tokensOut: 0 },
   agent_fetch: { seconds: 6, llm: 'extract', tokensIn: 0, tokensOut: 1_500 },
   hybrid: { seconds: 30, llm: 'agent', tokensIn: 8_000, tokensOut: 1_000 },
-  agent: { seconds: 60, llm: 'agent', tokensIn: 40_000, tokensOut: 4_000 },
+  agent: { seconds: 60, llm: 'agent', tokensIn: AGENT_ESTIMATE.steps * AGENT_ESTIMATE.tokensInPerStep, tokensOut: AGENT_ESTIMATE.steps * AGENT_ESTIMATE.tokensOutPerStep },
 });
 
 /** Prix d'un modèle en USD par million de jetons (forme de `ModelPrice` de la couche LLM). */

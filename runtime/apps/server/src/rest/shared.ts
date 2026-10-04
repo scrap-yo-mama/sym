@@ -96,10 +96,17 @@ export async function reserveRunSlot(tx: Queryable, ctx: ServerContext, target: 
   if (!(await budgetAdmitsRun(tx, userId, caps, target))) throw new RunSlotError('budget_exceeded');
 }
 
+/**
+ * Budget du jour atteint (D-123 : seul filet quand l'API n'a pas de plafond par run) : ce qui est atteint, quand il se
+ * réinitialise, et qui peut le relever.
+ */
+const BUDGET_EXCEEDED_MESSAGE =
+  'budget du jour atteint pour ce compte (coûts LLM et proxy) : il se réinitialise à minuit UTC ; un admin peut le relever (USER_BUDGET_DAILY_USD)';
+
 /** Réponse 429 d'un plafond atteint (`RunSlotError`). */
 export async function sendRunSlotError(reply: FastifyReply, error: RunSlotError): Promise<FastifyReply> {
   // Budget du jour : non réessayable avant la réinitialisation (minuit UTC), donc pas de Retry-After.
-  if (error.code === 'budget_exceeded') return sendError(reply, 429, 'budget_exceeded', 'budget du jour atteint pour ce compte (coûts LLM et proxy) : il se réinitialise à minuit UTC');
+  if (error.code === 'budget_exceeded') return sendError(reply, 429, 'budget_exceeded', BUDGET_EXCEEDED_MESSAGE);
   reply.header('retry-after', '30');
   return error.code === 'user_queue_full'
     ? sendError(reply, 429, 'user_queue_full', 'trop de runs en cours pour ce compte : réessayez après le délai indiqué (Retry-After)')

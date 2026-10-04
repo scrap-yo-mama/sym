@@ -2159,6 +2159,7 @@ export interface components {
             legal_basis?: string | null;
             contains_personal_data?: boolean;
             allow_write_actions?: boolean;
+            /** @description Plafond de coût d'un run ; `null` = aucun plafond par run (D-123). */
             max_cost_usd?: number | null;
             budget_daily_usd?: number | null;
             domain_pacing?: components["schemas"]["DomainPacing"];
@@ -2370,7 +2371,7 @@ export interface components {
             purpose?: string | null;
             legal_basis?: string | null;
             contains_personal_data?: boolean;
-            /** @description Plafond de coût d'un run ; `null` revient au défaut de l'instance (0,5 $). */
+            /** @description Plafond de coût d'un run, facultatif ; `null` retire le plafond (D-123 : aucun plafond par run par défaut, le budget du jour de l'utilisateur `USER_BUDGET_DAILY_USD` reste le filet). Borné par `MAX_COST_USD_PER_RUN` (400 `cost_cap_exceeded` au-delà). */
             max_cost_usd?: number | null;
             /** @description Budget quotidien de l'API ; `null` revient au défaut de l'instance (5 $). */
             budget_daily_usd?: number | null;
@@ -2439,7 +2440,8 @@ export interface components {
             purpose?: string | null;
             legal_basis?: string | null;
             contains_personal_data?: boolean;
-            max_cost_usd?: number;
+            /** @description Plafond de coût d'un run ; absent ou `null` = aucun plafond par run (D-123). */
+            max_cost_usd?: number | null;
             budget_daily_usd?: number;
             /** @description Niveaux réseau exportables seulement (jamais le tunnel ni un identifiant de proxy). */
             network_policy?: {
@@ -3764,7 +3766,7 @@ export interface components {
                 "application/json": components["schemas"]["RunAccepted"];
             };
         };
-        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. Exception : `budget_exceeded` (budget USD du jour de l'appelant, `USER_BUDGET_DAILY_USD` : dépense du jour, enveloppes maximales des runs actifs et enveloppe du nouveau run, 08b § 3) n'a PAS de `Retry-After` et n'est pas réessayable avant minuit UTC. */
+        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. Exception : `budget_exceeded` (budget USD du jour de l'appelant, `USER_BUDGET_DAILY_USD` : dépense du jour, enveloppes maximales des runs actifs et enveloppe du nouveau run, 08b § 3 ; une API sans plafond par run ne réserve aucune enveloppe, D-123) n'a PAS de `Retry-After` et n'est pas réessayable avant minuit UTC ; un admin peut relever `USER_BUDGET_DAILY_USD`. */
         QueueFull: {
             headers: {
                 "Retry-After"?: number;

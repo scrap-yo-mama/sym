@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import {
   ACTIVE_RUN_STATES,
   boundErrorDetail,
+  COST_CAPS_DEFAULTS,
   currentTraceparent,
   maxRunRequeues,
   RUN_LOST_DETAIL,
@@ -657,34 +658,40 @@ export async function removeWorkerBeat(db: Queryable, workerId: string): Promise
 
 /** Plafonds d'instance qui bornent l'enveloppe d'un run (`MAX_COST_USD_PER_RUN`, `USER_BUDGET_DAILY_USD`, 08b § 3). */
 export type BudgetCaps = { readonly userBudgetDailyUsd: number; readonly maxCostUsdPerRun: number };
-const NO_CAPS: BudgetCaps = { userBudgetDailyUsd: 1e9, maxCostUsdPerRun: 1e9 };
 
 /**
  * Enveloppe maximale d'un run (SQL, alias `r` pour le run et `a` pour son API) : `apis.max_cost_usd` pour un run,
  * `request.budget_usd` de l'enquête (défaut `INVESTIGATION_DEFAULTS.budgetUsd`) pour une enquête, chacune bornée par le
  * plafond d'instance. `$1` : budget quotidien, `$2` : plafond par run, `$3` : budget d'enquête par défaut.
+ * D-123 : un run d'une API SANS plafond (`max_cost_usd` NULL) ne réserve aucune enveloppe (NULL ici) : il est admis tant
+ * qu'il reste du budget du jour, et le worker le borne à ce reste à son ouverture (`loadRunTarget`). Sa dépense réelle est
+ * comptée au fil des tentatives (`recordAttempt`).
  */
 const ENVELOPE_SQL = `CASE WHEN r.kind = 'investigation'
     THEN least(coalesce((a.investigation->'request'->>'budget_usd')::numeric, $3::numeric), $1::numeric)
+    WHEN a.max_cost_usd IS NULL THEN NULL
     ELSE least(a.max_cost_usd, $2::numeric) END`;
 
 /**
  * Chiffres du budget d'un utilisateur : `spent` = dépense du jour (UTC) de TOUS ses runs créés depuis minuit (runs,
  * enquêtes, validations, planifications ; les coûts des essais en cours y sont déjà versés, `recordAttempt`), un coût LLM
- * inconnu (NULL) comptant l'enveloppe du run (jamais 0 : il garde au moins son coût proxy connu) ; `reserved` = ce que les
+ * inconnu (NULL) comptant l'enveloppe du run (sans enveloppe, D-123 : le plafond d'instance ; jamais 0 : il garde au moins
+ * son coût proxy connu) ; `reserved` = ce que les
  * runs actifs (hors pause, créés un autre jour compris) peuvent encore dépenser jusqu'à leur enveloppe maximale.
  * Sous `withActor`, la RLS limite déjà aux runs de l'acteur ; le filtre `owner_id` reste explicite (planificateur).
  */
 async function budgetFigures(tx: Queryable, userId: string, now: Date, caps: BudgetCaps): Promise<{ spent: number; reserved: number }> {
   const { rows } = await tx.query<{ spent: string; reserved: string }>(
     `WITH figures AS (
-       SELECT r.created_at, r.state, r.paused_at, r.cost_llm_usd, coalesce(r.cost_proxy_usd, 0) AS proxy, coalesce(${ENVELOPE_SQL}, 0) AS envelope
+       SELECT r.created_at, r.state, r.paused_at, r.cost_llm_usd, coalesce(r.cost_proxy_usd, 0) AS proxy, coalesce(${ENVELOPE_SQL}, 0) AS envelope,
+              -- Coût LLM inconnu d'un run sans enveloppe (D-123) : compté au plafond d'instance, jamais 0.
+              coalesce(${ENVELOPE_SQL}, least($2::numeric, $1::numeric)) AS unknown_cost
        FROM runs r LEFT JOIN apis a ON a.id = r.api_id
        WHERE r.owner_id = $4
      )
      SELECT
        coalesce(sum(CASE WHEN created_at >= date_trunc('day', $5::timestamptz AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-                         THEN CASE WHEN cost_llm_usd IS NULL THEN greatest(envelope, proxy) ELSE cost_llm_usd + proxy END ELSE 0 END), 0)::text AS spent,
+                         THEN CASE WHEN cost_llm_usd IS NULL THEN greatest(unknown_cost, proxy) ELSE cost_llm_usd + proxy END ELSE 0 END), 0)::text AS spent,
        coalesce(sum(CASE WHEN state = ANY($6::text[]) AND paused_at IS NULL AND cost_llm_usd IS NOT NULL
                          THEN greatest(envelope - cost_llm_usd - proxy, 0) ELSE 0 END), 0)::text AS reserved
      FROM figures`,
@@ -694,7 +701,7 @@ async function budgetFigures(tx: Queryable, userId: string, now: Date, caps: Bud
 }
 
 /** Dépense du jour (UTC) d'un utilisateur : base du budget USD par utilisateur et par jour (08b § 3, `assert_budget_usd_daily`). */
-export async function userSpentTodayUsd(tx: Queryable, userId: string, now: Date = new Date(), caps: BudgetCaps = NO_CAPS): Promise<number> {
+export async function userSpentTodayUsd(tx: Queryable, userId: string, now: Date = new Date(), caps: BudgetCaps = COST_CAPS_DEFAULTS): Promise<number> {
   return (await budgetFigures(tx, userId, now, caps)).spent;
 }
 

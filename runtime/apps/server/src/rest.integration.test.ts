@@ -273,14 +273,16 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect((await api(a, 'PATCH', `/api/apis/${session.slug}`, '/api/apis/{slug}', { visibility: 'instance' })).body).toMatchObject({ error: { code: 'session_api_private' } });
   });
 
-  test('PATCH : `max_cost_usd: null` et `budget_daily_usd: null` reviennent au défaut de l’instance (jamais un 200 sans effet)', async () => {
+  test('PATCH : `max_cost_usd: null` retire le plafond par run (D-123) et `budget_daily_usd: null` revient au défaut (jamais un 200 sans effet)', async () => {
     const api1 = await seedApi(srv.db.url, a.user.id);
+    // D-123 : une API neuve n'a pas de plafond par run (null, jamais 0 ni 0,5).
+    expect((await api(a, 'GET', `/api/apis/${api1.slug}`, '/api/apis/{slug}')).body).toMatchObject({ max_cost_usd: null });
     expect((await api(a, 'PATCH', `/api/apis/${api1.slug}`, '/api/apis/{slug}', { max_cost_usd: 2, budget_daily_usd: 7 })).body).toMatchObject({ max_cost_usd: 2, budget_daily_usd: 7 });
     const reset = await api(a, 'PATCH', `/api/apis/${api1.slug}`, '/api/apis/{slug}', { max_cost_usd: null, budget_daily_usd: null });
     expect(reset.status).toBe(200);
-    // Défauts de l'instance : ceux de la colonne (0,5 $ par run, 5 $ par jour).
-    expect(reset.body).toMatchObject({ max_cost_usd: 0.5, budget_daily_usd: 5 });
-    expect(await count('SELECT max_cost_usd::float FROM apis WHERE id = $1', [api1.id])).toBe(0.5);
+    // Plus de plafond par run (D-123) ; budget du jour de l'API au défaut de la colonne (5 $ par jour).
+    expect(reset.body).toMatchObject({ max_cost_usd: null, budget_daily_usd: 5 });
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND max_cost_usd IS NULL', [api1.id])).toBe(1);
   });
 
   test('fiche d’une API `instance` d’autrui : de quoi la lancer (schémas, statut, exécution, réseau, coût), jamais la politique du propriétaire', async () => {

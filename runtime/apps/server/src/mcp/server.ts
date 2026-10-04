@@ -102,7 +102,7 @@ const GUIDES: Record<string, ErrorGuide> = {
   not_awaiting_validation: { what_to_do: 'This API is not waiting for a schema validation: read its state with get_api.', retryable: false },
   queue_full: { what_to_do: 'The instance queue is full: wait about 30 seconds, then call again.', retryable: true },
   user_queue_full: { what_to_do: 'Too many of your runs are active: wait for them (get_run) or cancel one (cancel_run), then call again.', retryable: true },
-  budget_exceeded: { what_to_do: 'The daily USD budget of this account is spent (LLM and proxy costs): do not retry today; tell the user it resets at 00:00 UTC.', retryable: false },
+  budget_exceeded: { what_to_do: 'The daily USD budget of this account is spent (LLM and proxy costs): do not retry today; tell the user it resets at 00:00 UTC and that an admin can raise it (USER_BUDGET_DAILY_USD).', retryable: false },
   key_rate_limited: { what_to_do: 'Too many runs started with this key in the last minute: wait one minute, then call again.', retryable: true },
   responsible_use_ack_required: { what_to_do: 'Ask the user to read the Responsible use page in the console and tick that they read it, then call again.', retryable: false },
   run_not_active: { what_to_do: 'This run is already finished: read its result with get_run.', retryable: false },

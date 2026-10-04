@@ -784,6 +784,31 @@ describe('enquête (tâche 2.1)', () => {
     expect(await detailOf(run.id)).toBe('investigation_budget_usd');
   });
 
+  test('D-123 — API sans plafond par run : l’essai tourne sous le budget d’enquête restant, jamais sous le reste du budget du jour (qui compte déjà la réservation de l’enquête)', async () => {
+    withExtract = true;
+    price = { in: 0.001, out: 0.001 };
+    fake.setScenario(MODEL, [scripted.json({ fields: [{ name: 'title', type: 'string', required: true, personal: false, description: 'Titre' }], sources: [] })]);
+    const items = { items: [{ title: 'Lampe Zztest 0001' }] };
+    fake.setScenario(EXTRACT_MODEL, [scripted.json(items), scripted.json(items), scripted.json(items)]);
+    const apiId = await insertApi('zz_test_inv_no_run_cap');
+    expect((await pool.query<{ cap: string | null }>('SELECT max_cost_usd AS cap FROM apis WHERE id = $1', [apiId])).rows[0]!.cap).toBeNull();
+    // Dépense du jour presque au budget du jour par défaut (50 $) : le reste du jour, réservation de l'enquête déduite, vaut 0.
+    const spent = await pool.query<{ id: string }>(
+      "INSERT INTO runs (api_id, owner_id, api_owner_id, trigger, state, outcome, kind, cost_llm_usd, cost_proxy_usd, input) VALUES ($1, $2, $2, 'rest', 'succeeded', 'clean', 'run', 49.9999, 0, '{}') RETURNING id",
+      [apiId, A],
+    );
+    try {
+      const run = await investigate(apiId, { url: `${base(SSR_HOST)}/`, description: 'liste des produits du catalogue', auto_validate: true, budget_usd: 0.0002 });
+      expect(run).toMatchObject({ state: 'failed' });
+      const attempt = (await eventsOf(run.id)).find((e) => e.kind === 'attempt.finished')!.payload as { attempt: { result: string }; why?: { code: string } };
+      expect(attempt.why).toMatchObject({ code: 'investigation_budget_usd' });
+      // Jamais « trial_cost_over_cap » ni « max_cost_usd » : aucun plafond par run n'est fixé.
+      expect(await detailOf(run.id)).toBe('investigation_budget_usd');
+    } finally {
+      await pool.query('DELETE FROM runs WHERE id = $1', [spent.rows[0]!.id]);
+    }
+  });
+
   test('page HTML statique, compilation refusée (valeurs divergentes deux fois) : E4 gardé tel quel, raison dans le récit', async () => {
     withExtract = true;
     const op = (name: string) => ({ op: name, pattern: null, group: null, decimal: null, format: null });

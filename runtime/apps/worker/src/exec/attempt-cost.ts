@@ -9,6 +9,9 @@
 // Le contrôle se fait avant l'envoi, avec le coût PRÉVU de l'appel (entrée de la requête, sortie du dernier appel) : l'appel
 // qui franchirait le plafond ne part pas (constat UX-32 : 0,534 $ facturés pour 0,50 $ quand seule la dépense passée était
 // comparée). Un appel parti est imputé tel quel ; seul l'écart entre le coût prévu et le coût réel peut encore dépasser.
+// D-123 : sans plafond par run fixé, ce plafond est la borne effective du run (budget du jour restant, ou d'enquête restant
+// pendant un essai d'enquête) : toujours finie, connue avant le premier appel.
+import type { RunResult } from '@runtime/core';
 
 /** Plafond atteint (ou intenable, `unpriced`) : aucun appel de plus. */
 export class AttemptBudgetExceededError extends Error {
@@ -116,4 +119,14 @@ export class AttemptCost {
       },
     };
   }
+}
+
+/**
+ * Motif d'un run coupé par sa borne de coût (D-123) : sans plafond par run fixé (`costCapUsd` null), la borne était le
+ * budget du jour restant de l'utilisateur ; le run le dit (`user_budget_daily_usd`, message « budget du jour atteint »),
+ * jamais `max_cost_usd`, qui inviterait à monter un plafond que personne n'a fixé.
+ */
+export function relabelRunBudget<R extends RunResult>(result: R, costCapUsd: number | null): R {
+  if (costCapUsd !== null || result.state !== 'failed' || result.failure_class !== 'run_budget_exceeded' || result.error_detail !== 'max_cost_usd') return result;
+  return { ...result, error_detail: 'user_budget_daily_usd' };
 }

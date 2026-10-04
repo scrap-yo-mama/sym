@@ -40,6 +40,8 @@ describe('templates/ (16 § 6)', () => {
     // Aucun planning actif ni cible d'alerte dans un modèle : le propriétaire les choisit après l'import.
     expect(doc.schedules.every((s) => !s.enabled)).toBe(true);
     expect(doc.api.alert_targets).toEqual([]);
+    // D-123 : aucun plafond par run par défaut ; un modèle n'en impose pas (le membre en fixe un s'il le veut).
+    expect(doc.api.max_cost_usd ?? null).toBeNull();
     expect(text).not.toMatch(/"(?:cookies?|session\w*|secret\w*|password|token|proxy_ids|credentials?)"\s*:/i);
     expect(text).not.toMatch(/stealth|undetect|ind[ée]tectable|bypass|contourn|captcha|furtif|fingerprint/i);
   });
