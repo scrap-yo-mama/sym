@@ -47,6 +47,8 @@ export type BrowserRequestCheck = {
   readonly mainFrame: boolean;
   /** Méthode HTTP de la requête (`GET` pour la poignée de main d'un WebSocket). */
   readonly method: string;
+  /** Corps de l'écriture (POST, XHR, beacon), décodé en texte ; absent pour une lecture ou un corps binaire. */
+  readonly body?: string;
 };
 
 export type RequestCheck = (request: BrowserRequestCheck) => Promise<boolean>;
@@ -61,6 +63,8 @@ export type Channel = {
 
 /** Racines des chaînes (identifiant réseau → URL initiale), bornées. */
 const MAX_ROOTS = 2000;
+/** Longueur lue d'un corps d'écriture pour le contrôle des valeurs sensibles. */
+const MAX_BODY_CHARS = 1_000_000;
 
 /** Canal de la session Playwright. */
 export function sessionChannel(session: CDPSession): Channel {
@@ -187,6 +191,15 @@ export async function requestVerdict(url: string, inScope: (url: string) => bool
   return check({ url, ...hop }).catch(() => false);
 }
 
+/** Corps d'une écriture, en texte (`postData`, ou entrées binaires décodées en UTF-8) : le contrôle des valeurs sensibles y lit aussi. Borné. */
+function postBodyOf(request: { postData?: unknown; postDataEntries?: unknown } | undefined): string | undefined {
+  if (request === undefined) return undefined;
+  if (typeof request.postData === 'string') return request.postData.slice(0, MAX_BODY_CHARS);
+  if (!Array.isArray(request.postDataEntries)) return undefined;
+  const parts = request.postDataEntries.flatMap((e: unknown) => (typeof e === 'object' && e !== null && typeof (e as { bytes?: unknown }).bytes === 'string' ? [Buffer.from((e as { bytes: string }).bytes, 'base64').toString('utf8')] : []));
+  return parts.length === 0 ? undefined : parts.join('').slice(0, MAX_BODY_CHARS);
+}
+
 /**
  * Pose le contrôle de chaque requête sur `page` (et ses cibles enfants) AVANT toute navigation. La session vit jusqu'à
  * la fermeture du contexte : jamais détachée avant (détachée, elle laisserait repartir les requêtes suspendues).
@@ -208,7 +221,7 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
       return;
     }
     const requestId = params['requestId'];
-    const request = params['request'] as { url?: unknown; method?: unknown } | undefined;
+    const request = params['request'] as { url?: unknown; method?: unknown; postData?: unknown; postDataEntries?: unknown } | undefined;
     const url = typeof request?.url === 'string' ? request.url : '';
     const method = typeof request?.method === 'string' ? request.method : 'GET';
     const networkId = typeof params['networkId'] === 'string' ? params['networkId'] : undefined;
@@ -220,7 +233,8 @@ export async function installRequestGuard(context: BrowserContext, page: Page, i
     if (known === undefined && networkId !== undefined) remember(networkId, url);
     const resourceType = typeof params['resourceType'] === 'string' ? params['resourceType'] : 'Other';
     const mainFrame = mainFrameId !== undefined && params['frameId'] === mainFrameId && resourceType === 'Document';
-    const allowed = await requestVerdict(url, inScope, check, { redirect, rootUrl, resourceType, mainFrame, method });
+    const body = postBodyOf(request);
+    const allowed = await requestVerdict(url, inScope, check, { redirect, rootUrl, resourceType, mainFrame, method, ...(body === undefined ? {} : { body }) });
     if (allowed) await channel.send('Fetch.continueRequest', { requestId }).catch(() => undefined);
     else await channel.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
   };

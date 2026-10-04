@@ -7,7 +7,7 @@
 // 3. l'avis ne bloque rien : l'appelant n'en tire que `judge_flag` (`applyJudgement`) ;
 // 4. le prompt et la réponse ne sont jamais journalisés ; le coût est imputé au run (INV4).
 import { createHash, randomBytes } from 'node:crypto';
-import { JUDGE_VERDICT_SCHEMA, judgeUserContent, parseJudgement, type Judgement, type RunProfile } from '@runtime/core';
+import { JUDGE_VERDICT_SCHEMA, judgeUserContent, parseJudgement, toolRegistryForPhase, type Judgement, type RunProfile } from '@runtime/core';
 import type { ChatMessage, JsonSchema, LlmCallResult, LlmClient } from '@runtime/llm';
 
 export const JUDGE_SYSTEM_PROMPT = [
@@ -43,7 +43,7 @@ export async function proposeJudgement(client: LlmClient, args: JudgeArgs & { re
     schema: JUDGE_VERDICT_SCHEMA as unknown as JsonSchema,
     name: 'judgement',
     maxTokens: JUDGE_MAX_TOKENS,
-    noTools: true,
+    noTools: toolRegistryForPhase('judge').tools.length === 0,
     ...(args.signal === undefined ? {} : { signal: args.signal }),
     ...(args.beforeCall === undefined ? {} : { beforeCall: args.beforeCall }),
   });

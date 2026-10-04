@@ -2,7 +2,7 @@
 // Tâche 2.4 : garde-fous de Stagehand en production (local seulement, X1 ; outils en liste fermée, 08 §4 mesure 3), trace
 // sémantique des clics (base de la compilation E6 → E5), extraction E4 par le rôle `extract` sur le faux fournisseur :
 // contenu non fiable encadré par un jeton, aucun outil offert, schéma d'origine imposé (INV1).
-import { AGENT_TOOLS } from '@runtime/core';
+import { AGENT_TOOLS, toolRegistryForPhase } from '@runtime/core';
 import { Secret } from '@runtime/core';
 import { createLlmClient, LlmError } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/testing';
@@ -33,6 +33,17 @@ describe('assert_agent_toolset_closed', () => {
     for (const action of Object.values(STAGEHAND_TOOL_ACTIONS)) expect(AGENT_TOOLS).toContain(action);
     expect(toolsOutsideClosedList(['act', 'ariaTree', 'extract', 'fillForm', 'goto', 'keys', 'navback', 'scroll', 'think', 'wait', 'done'])).toEqual([]);
     expect(toolsOutsideClosedList(['act', 'search', 'shell', 'install_package', 'approve_all'])).toEqual(['search', 'shell', 'install_package', 'approve_all']);
+  });
+  it('assert_rule_of_two_by_phase — registre de la phase : un outil Stagehand hors des outils de la phase est refusé (PA-01)', () => {
+    const names = ['act', 'goto', 'extract', 'read_skill', 'done'];
+    expect(toolsOutsideClosedList(names, toolRegistryForPhase('e5_e6').tools)).toEqual([]);
+    expect(toolsOutsideClosedList(names, toolRegistryForPhase('instructed').tools)).toEqual([]);
+    // Phases sans outil (enquête, E4, juge…) : aucun outil du moteur,  compris.
+    for (const phase of ['replay', 'e4_extract', 'investigation', 'recompile', 'judge', 'reflect'] as const) {
+      expect(toolsOutsideClosedList(names, toolRegistryForPhase(phase).tools)).toEqual(names);
+    }
+    // Registre réduit : goto (navigate) retiré, act (click) gardé.
+    expect(toolsOutsideClosedList(['act', 'goto'], ['click'])).toEqual(['goto']);
   });
   it('assert_llm_redaction — capture d’écran jamais proposée au modèle (mode dom) : une image ne peut pas être masquée par llm.redact (08 §1)', () => {
     expect(STAGEHAND_EXCLUDED_TOOLS).toContain('screenshot');

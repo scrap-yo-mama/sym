@@ -125,9 +125,9 @@ function within(step: Promise<unknown>, ms: number): Promise<'answered' | 'rejec
  * avant est déjà connu. UNE échéance couvre toute l'attente : une page dont le fil principal boucle (l'évaluation ne
  * répond jamais) ne tient ni l'essai ni le slot du pool ; la barrière sans réponse à l'échéance compte pour une écriture
  * (non vérifiable : échec fermé). Une évaluation rejetée (contexte détruit par une navigation) est relancée.
- * Limites (revue de fix-flaky), hors de portée de la barrière : une écriture d'un worker ou d'un cadre hors processus, et
- * une navigation POST (envoi de formulaire, même dans la page : son `requestWillBeSent` vient du processus du navigateur,
- * après l'IPC BeginNavigation, sur un autre canal que la réponse de l'évaluation). Elles ne sont connues qu'à leur arrivée
+ * Un envoi de formulaire POST de la page est compté dès sa DEMANDE (`Page.frameRequestedNavigation`, émise par le moteur de
+ * rendu sur le fil de la page : son `requestWillBeSent` vient, lui, du processus du navigateur, après l'IPC BeginNavigation).
+ * Limites (revue de fix-flaky), hors de portée de la barrière : une écriture d'un worker ou d'un cadre hors processus. Elles ne sont connues qu'à leur arrivée
  * à une couche de la garde (`route`, `check`), sans attendre aucun verdict : reste leur seul acheminement moteur de rendu
  * → navigateur → Node, que Stagehand précède d'au moins 500 ms de calme réseau après chaque geste. Le rejeu E5 sur le pool
  * refuse de toute façon toute écriture sans `allow_write_actions` (`navigationAdmission`, agent-executors.ts).
@@ -137,6 +137,15 @@ async function trackPageWrites(context: BrowserContext, page: Page, counts: Writ
   session.on('Network.requestWillBeSent', (event) => {
     if (isWrite(event.request.method) && /^https?:/i.test(event.request.url)) counts.page.add(event.requestId);
   });
+  // Envoi de formulaire POST : la DEMANDE de navigation est émise par le moteur de rendu, sur le fil de la page, avant l'IPC
+  // vers le navigateur (`Page.frameRequestedNavigation`) : la barrière ci-dessous, ordonnée sur la même session, la voit.
+  // Sans elle, un envoi lancé par le tout dernier geste de l'agent n'arrivait aux couches de la garde qu'après le compte
+  // (course constatée sous charge, fix-pa01).
+  let formPosts = 0;
+  session.on('Page.frameRequestedNavigation', (event) => {
+    if (event.reason === 'formSubmissionPost') counts.page.add(`form:${(formPosts += 1)}`);
+  });
+  await session.send('Page.enable');
   // Aucun tampon de corps de réponse ni de corps envoyé : seuls les identifiants des requêtes servent ici.
   await session.send('Network.enable', { maxTotalBufferSize: 0, maxResourceBufferSize: 0, maxPostDataSize: 0 });
   return async (timeoutMs) => {

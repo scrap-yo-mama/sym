@@ -15,7 +15,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { DataCandidate } from '@runtime/core/investigation';
 import { INVESTIGATION_PROPOSAL_SCHEMA, narrativeUrl, parseProposal, type InvestigationProposal } from '@runtime/core/investigation';
-import { maskTextForLlm } from '@runtime/core';
+import { maskTextForLlm, toolRegistryForPhase } from '@runtime/core';
 import type { ChatMessage, JsonSchema, LlmCallResult, LlmClient } from '@runtime/llm';
 
 export const INVESTIGATE_SYSTEM_PROMPT = [
@@ -128,6 +128,8 @@ export async function proposeInvestigation(
     schema: INVESTIGATION_PROPOSAL_SCHEMA as unknown as JsonSchema,
     name: 'investigation_proposal',
     maxTokens: INVESTIGATE_MAX_TOKENS,
+    // Registre de la phase `investigation` (19 §7) : aucun outil, pas même celui de soumission du profil S2.
+    noTools: toolRegistryForPhase('investigation').tools.length === 0,
     ...(args.signal === undefined ? {} : { signal: args.signal }),
     ...(args.beforeCall === undefined ? {} : { beforeCall: args.beforeCall }),
   });
