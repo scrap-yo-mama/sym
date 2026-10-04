@@ -20,6 +20,7 @@ import {
 } from '@runtime/core';
 import { briefConfigFromEnv, type BriefConfig } from '@runtime/core';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
+import { supportedLocales } from './i18n.js';
 import type { McpConfig } from './mcp/runtime.js';
 import { TOOL_EXPOSURES, type ToolExposure } from './mcp/tools.js';
 
@@ -54,6 +55,8 @@ export type ServerConfig = {
   mfaEnforced: MfaEnforced;
   /** Garde SSRF (INV10) : relais SMTP et fournisseur OIDC en politique `operator-config` ; `ALLOWED_PRIVATE_HOSTS`. */
   ssrfPolicy: SsrfPolicy;
+  /** `DEFAULT_LOCALE` (21 § 3) : langue d'instance imposée, surcharge de `settings.default_locale` ; null = non posée. */
+  defaultLocale: string | null;
   /** Passerelle tunnel WSS (07 § 6, tâche 2.7). */
   tunnel: TunnelConfig;
   /** API REST (tâche 3.1, 05 § 2) : attente synchrone et file. */
@@ -292,6 +295,10 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   } catch (error) {
     throw new ConfigError((error as Error).message);
   }
+  const defaultLocale = env['DEFAULT_LOCALE']?.trim().toLowerCase() || null;
+  if (defaultLocale !== null && !supportedLocales().includes(defaultLocale)) {
+    throw new ConfigError(`DEFAULT_LOCALE invalide : « ${defaultLocale} » (langues livrées : ${supportedLocales().join(', ')}).`);
+  }
   let persistence: PersistencePolicy;
   try {
     persistence = persistencePolicyFromEnv(env);
@@ -312,6 +319,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     trustProxy: parseTrustProxy(env['TRUST_PROXY']),
     mfaEnforced,
     ssrfPolicy,
+    defaultLocale,
     tunnel: loadTunnelConfig(env, databaseUrl),
     persistence,
     rest: {

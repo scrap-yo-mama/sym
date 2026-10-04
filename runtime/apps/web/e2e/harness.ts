@@ -78,6 +78,8 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 /** Construit la console dans un dossier temporaire et la sert avec un faux serveur d'API. */
 export async function startConsole(): Promise<ConsoleApp> {
   const outDir = mkdtempSync(join(tmpdir(), 'zz_test_console-'));
+  // E2E : une clé de traduction manquante lève (gestionnaire `missing` de vue-i18n, 21b § 3).
+  process.env['VITE_I18N_STRICT'] = 'true';
   await build({ root: WEB_DIR, logLevel: 'silent', configFile: join(WEB_DIR, 'vite.config.ts'), build: { outDir, emptyOutDir: true } });
 
   let routes: ApiRoutes = {};

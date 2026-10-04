@@ -8,7 +8,7 @@ import { nextTick, watch } from 'vue';
 import TestOutcome from '@/components/settings/TestOutcome.vue';
 import { resetSession } from '@/composables/useSession';
 import { LLM_PRESETS, useExtensionSettings, useLlmSettings, useProxies, useSmtp, useWebhooks } from '@/composables/useSettings';
-import en from '@/i18n/locales/en.json';
+import en from '@runtime/i18n/locales/en.json';
 import { setApi } from '@/lib/api';
 import { collectDiagnostic } from '@/lib/diagnostic';
 import { buildApi } from '@/lib/api';

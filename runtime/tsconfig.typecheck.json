@@ -10,6 +10,7 @@
     "fixtures/src/**/*.ts",
     "tests/**/*.ts",
     "scripts/**/*.ts",
+    "packages/i18n/scripts/**/*.ts",
     "eval/**/*.ts",
     "vitest.config.ts"
   ],

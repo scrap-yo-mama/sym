@@ -17,11 +17,13 @@ import {
   type Role,
 } from '@runtime/core';
 import { isMailAddress } from '@runtime/core/net';
+import { defaultI18n, renderInviteEmail } from '@runtime/i18n';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import { issueSession } from '../auth/better-auth.js';
 import { readSecuritySettings, readSsoSettings } from '../auth/security-settings.js';
 import type { ServerContext } from '../context.js';
+import { instanceDefaultLocale, isSupportedLocale } from '../i18n.js';
 import { AttemptLimiter, ipBucket } from '../rate-limit.js';
 import { iso, libraryHeaders, meView, rememberDevice, sendAccountMail, smtpConfigured, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
@@ -35,9 +37,10 @@ type InvitationRow = {
   created_at: Date;
   accepted_at: Date | null;
   revoked_at: Date | null;
+  locale: string;
 };
 
-const COLUMNS = 'id, email, role, invited_by, expires_at, created_at, accepted_at, revoked_at';
+const COLUMNS = 'id, email, role, invited_by, expires_at, created_at, accepted_at, revoked_at, locale';
 
 const view = (r: InvitationRow) => ({
   id: r.id,
@@ -48,6 +51,7 @@ const view = (r: InvitationRow) => ({
   created_at: r.created_at.toISOString(),
   accepted_at: iso(r.accepted_at),
   revoked_at: iso(r.revoked_at),
+  locale: r.locale,
 });
 
 /** Réponse unique de l'acceptation refusée (jeton inconnu, expiré, révoqué, consommé, adresse déjà prise). */
@@ -60,14 +64,14 @@ function invitationLink(ctx: Pick<ServerContext, 'publicUrl'>, token: string): s
 async function deliver(ctx: ServerContext, request: FastifyRequest, row: InvitationRow, token: string): Promise<{ emailed: boolean; link: string | null }> {
   const link = invitationLink(ctx, token);
   if (!(await smtpConfigured(ctx))) return { emailed: false, link };
-  const outcome = await sendAccountMail(
-    ctx,
-    request,
-    row.email,
-    'Scrapyomama Runtime: invitation',
-    `You are invited to a Scrapyomama Runtime instance (${ctx.publicUrl}). This link is valid for ${INVITATION_TTL_HOURS} hours and works once:\n${link}\n\n` +
-      `Vous êtes invité sur une instance Scrapyomama Runtime (${ctx.publicUrl}). Ce lien est valable ${INVITATION_TTL_HOURS} h et ne sert qu’une fois :\n${link}\n`,
+  // E-mail dans `invitations.locale` (choisie par l'invitant) : sujet, corps, `lang` du HTML et `Content-Language` (21 § 4.6).
+  const inviter = row.invited_by === null ? null : (await ctx.pool.query<{ display_name: string; email: string }>('SELECT display_name, email FROM users WHERE id = $1', [row.invited_by])).rows[0];
+  const message = renderInviteEmail(
+    defaultI18n().renderer,
+    { inviter: inviter ? inviter.display_name || inviter.email : new URL(ctx.publicUrl).host, instance: new URL(ctx.publicUrl).host, link, expiresAt: row.expires_at },
+    row.locale,
   );
+  const outcome = await sendAccountMail(ctx, request, row.email, message);
   // Envoi impossible (relais en panne) : le lien reste copiable par l'admin, qui peut aussi renvoyer plus tard.
   return outcome === 'sent' ? { emailed: true, link: null } : { emailed: false, link };
 }
@@ -81,8 +85,8 @@ export async function consumeInvitation(
   tokenHash: string,
   account: { passwordHash: string; displayName?: string } | { oidc: { providerId: string; accountId: string; email: string; displayName?: string } },
 ): Promise<{ userId: string; role: Role; email: string; invitationId: string } | null> {
-  const { rows } = await client.query<{ id: string; email: string; role: 'member' | 'admin' }>(
-    `SELECT id, email, role FROM invitations
+  const { rows } = await client.query<{ id: string; email: string; role: 'member' | 'admin'; locale: string }>(
+    `SELECT id, email, role, locale FROM invitations
      WHERE token_hash = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now() FOR UPDATE`,
     [tokenHash],
   );
@@ -94,8 +98,9 @@ export async function consumeInvitation(
   if (taken.rowCount !== 0) return null;
   const displayName = ('oidc' in account ? account.oidc.displayName : account.displayName) ?? '';
   const created = await client.query<{ id: string }>(
-    `INSERT INTO users (email, display_name, role, status, email_verified, email_verified_at) VALUES ($1, $2, $3, 'active', true, now()) RETURNING id`,
-    [invitation.email, displayName.slice(0, 100), invitation.role],
+    `INSERT INTO users (email, display_name, role, status, email_verified, email_verified_at, locale) VALUES ($1, $2, $3, 'active', true, now(), $4) RETURNING id`,
+    // `invitations.locale` est copiée dans `users.locale` à l'acceptation (21 § 3) ; une langue retirée du registre retombe sur `en`.
+    [invitation.email, displayName.slice(0, 100), invitation.role, isSupportedLocale(invitation.locale) ? invitation.locale : 'en'],
   );
   const userId = created.rows[0]!.id;
   if ('oidc' in account) {
@@ -118,7 +123,7 @@ export function invitationRoutes(app: FastifyInstance, ctx: ServerContext): void
     return { invitations: rows.map(view) };
   });
 
-  app.post<{ Body: { email: string; role: 'member' | 'admin' } }>(
+  app.post<{ Body: { email: string; role: 'member' | 'admin'; locale?: string } }>(
     '/api/invitations',
     {
       schema: {
@@ -126,7 +131,7 @@ export function invitationRoutes(app: FastifyInstance, ctx: ServerContext): void
           type: 'object',
           required: ['email', 'role'],
           additionalProperties: false,
-          properties: { email: { type: 'string', maxLength: 254 }, role: { type: 'string', enum: ['member', 'admin'] } },
+          properties: { email: { type: 'string', maxLength: 254 }, role: { type: 'string', enum: ['member', 'admin'] }, locale: { type: 'string', minLength: 2, maxLength: 3 } },
         },
       },
     },
@@ -134,6 +139,9 @@ export function invitationRoutes(app: FastifyInstance, ctx: ServerContext): void
       const actor = request.actor!;
       const email = request.body.email.trim().toLowerCase();
       const role = request.body.role;
+      // Langue de l'e-mail : choisie par l'invitant, sinon sa propre langue (21b § 1) ; donnée personnelle de l'invité.
+      const locale = request.body.locale ?? (isSupportedLocale(actor.locale) ? actor.locale : await instanceDefaultLocale(ctx));
+      if (!isSupportedLocale(locale)) return sendError(reply, 400, 'invalid_locale', 'langue non gérée par cette instance');
       if (!canInviteAs(actor.role, role)) {
         await audit(ctx, request, actor, { action: 'invitation.created', outcome: 'denied', meta: { reason: 'role', role } });
         return sendError(reply, 403, 'forbidden', 'action non autorisée');
@@ -147,9 +155,9 @@ export function invitationRoutes(app: FastifyInstance, ctx: ServerContext): void
       if (pending.rowCount !== 0) return sendError(reply, 409, 'invitation_pending', 'invitation déjà en cours : renvoyez-la');
       const { token, hash } = generateOpaqueToken();
       const { rows } = await ctx.pool.query<InvitationRow>(
-        `INSERT INTO invitations (email, role, invited_by, token_hash, expires_at, sent_at)
-         VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5), now()) RETURNING ${COLUMNS}`,
-        [email, role, actor.userId, hash, INVITATION_TTL_HOURS],
+        `INSERT INTO invitations (email, role, invited_by, token_hash, expires_at, sent_at, locale)
+         VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5), now(), $6) RETURNING ${COLUMNS}`,
+        [email, role, actor.userId, hash, INVITATION_TTL_HOURS, locale],
       );
       const row = rows[0]!;
       const delivery = await deliver(ctx, request, row, token);

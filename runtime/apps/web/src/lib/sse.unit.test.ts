@@ -6,7 +6,7 @@ import { renderToString } from 'vue/server-renderer';
 import { createI18n } from 'vue-i18n';
 import { describe, expect, test } from 'vitest';
 import ConnectionBanner from '@/components/ConnectionBanner.vue';
-import en from '@/i18n/locales/en.json';
+import en from '@runtime/i18n/locales/en.json';
 import { defaultBackoff, EventStreamClient, SseParser, STOP_ON_NOT_FOUND_DEFAULT, type SseEvent, type StreamStatus } from './sse';
 
 const frame = (id: string, data: string, event = 'run.updated') => `id: ${id}\nevent: ${event}\ndata: ${data}\n\n`;

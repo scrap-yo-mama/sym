@@ -18,7 +18,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { useIdentities, useMyAudit, useMySessions } from '@/composables/useAccount';
 import { useSsoPublic } from '@/composables/useAccountFlows';
-import { usePreferences } from '@/composables/usePreferences';
+import { persistPreferences, usePreferences } from '@/composables/usePreferences';
 import { useSession } from '@/composables/useSession';
 import { selectClass } from '@/lib/classes';
 import { readFieldValue, takeFieldValue } from '@/lib/form-field';
@@ -29,6 +29,17 @@ const { t, te, locale } = useI18n();
 const route = useRoute();
 const { me } = useSession();
 const { changeMotion, motion } = usePreferences();
+
+// Fuseau du compte (21b § 1) : IANA, contrôlé par le serveur ; sert aux e-mails, aux messages MCP et au fuseau par défaut d'une
+// planification. Jamais déduit de la langue.
+const timezone = ref(me.value?.timezone ?? '');
+const timezoneStatus = ref<'idle' | 'saved' | 'invalid'>('idle');
+const zones: readonly string[] = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
+async function saveTimezone(): Promise<void> {
+  const value = timezone.value.trim();
+  const result = await persistPreferences({ timezone: value === '' ? null : value });
+  timezoneStatus.value = result.ok ? 'saved' : 'invalid';
+}
 
 function onMotion(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
@@ -87,6 +98,17 @@ const actionLabel = (action: string): string => {
           <option v-for="name in MOTIONS" :key="name" :value="name">{{ t(`account.preferences.motions.${name}`) }}</option>
         </select>
         <p id="pref-motion-hint" class="text-sm text-muted-foreground">{{ t('account.preferences.motionHint') }}</p>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label for="pref-timezone" class="text-sm font-medium">{{ t('account.preferences.timezone') }}</label>
+        <div class="flex flex-wrap items-center gap-2">
+          <input id="pref-timezone" v-model="timezone" list="pref-timezone-list" class="max-w-xs" :class="selectClass" autocomplete="off" spellcheck="false" aria-describedby="pref-timezone-hint" data-testid="timezone-input" />
+          <datalist id="pref-timezone-list"><option v-for="zone in zones" :key="zone" :value="zone" /></datalist>
+          <Button type="button" variant="outline" size="sm" data-testid="timezone-save" @click="saveTimezone">{{ t('account.preferences.timezoneSave') }}</Button>
+        </div>
+        <p id="pref-timezone-hint" class="text-sm text-muted-foreground">{{ t('account.preferences.timezoneHint') }}</p>
+        <p v-if="timezoneStatus === 'saved'" role="status" class="text-sm">{{ t('account.preferences.timezoneSaved') }}</p>
+        <p v-else-if="timezoneStatus === 'invalid'" role="alert" class="sym-error">{{ t('account.preferences.timezoneInvalid') }}</p>
       </div>
     </section>
 

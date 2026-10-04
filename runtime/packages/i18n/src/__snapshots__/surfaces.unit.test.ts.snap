@@ -1,0 +1,85 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`M9 : e-mails localisés > assert_email_snapshot_en_fr : instantanés texte des e-mails d’invitation, de réinitialisation et d’alerte, par langue livrée > alert en 1`] = `
+{
+  "subject": "[Scrapyomama] zz_test_annonces: blocked by the site",
+  "text": "The site refuses automated access. Scrapyomama stopped on purpose: it does not retry on its own and does not change IP address after a refusal.
+
+API: zz_test_annonces
+Run: r1
+Failure class: blocked_by_protection
+Transitions: 1
+  Oct 2, 2026, 12:00 PM UTC  sain -> bloquee (blocked_by_protection)
+
+Console: https://sym.example/apis/zz_test_annonces
+",
+}
+`;
+
+exports[`M9 : e-mails localisés > assert_email_snapshot_en_fr : instantanés texte des e-mails d’invitation, de réinitialisation et d’alerte, par langue livrée > alert fr 1`] = `
+{
+  "subject": "[Scrapyomama] zz_test_annonces : bloquée par le site",
+  "text": "Le site refuse l'accès automatisé. Scrapyomama s'est arrêté volontairement : aucune relance automatique, et l'adresse IP ne change pas après un refus.
+
+API : zz_test_annonces
+Run : r1
+Classe d'échec : blocked_by_protection
+Transitions : 1
+  2 oct. 2026, 12:00 UTC  sain -> bloquee (blocked_by_protection)
+
+Console : https://sym.example/apis/zz_test_annonces
+",
+}
+`;
+
+exports[`M9 : e-mails localisés > assert_email_snapshot_en_fr : instantanés texte des e-mails d’invitation, de réinitialisation et d’alerte, par langue livrée > invite en 1`] = `
+{
+  "subject": "Alice invited you to sym.example",
+  "text": "Alice invited you to join sym.example on Scrapyomama Runtime.
+
+Open this link to create your account. It works once and expires on Oct 2, 2026, 12:00 PM UTC:
+https://sym.example/invite/TOKEN
+
+If you were not expecting this invitation, you can ignore this message.
+",
+}
+`;
+
+exports[`M9 : e-mails localisés > assert_email_snapshot_en_fr : instantanés texte des e-mails d’invitation, de réinitialisation et d’alerte, par langue livrée > invite fr 1`] = `
+{
+  "subject": "Alice t'invite sur sym.example",
+  "text": "Alice t'invite à rejoindre sym.example sur Scrapyomama Runtime.
+
+Ouvre ce lien pour créer ton compte. Il ne sert qu'une fois et expire le 2 oct. 2026, 12:00 UTC :
+https://sym.example/invite/TOKEN
+
+Si tu n'attendais pas cette invitation, ignore ce message.
+",
+}
+`;
+
+exports[`M9 : e-mails localisés > assert_email_snapshot_en_fr : instantanés texte des e-mails d’invitation, de réinitialisation et d’alerte, par langue livrée > reset en 1`] = `
+{
+  "subject": "Reset your password on sym.example",
+  "text": "A password reset was requested for your account on sym.example.
+
+Open this link to choose a new password. It works once and expires on Oct 2, 2026, 02:00 PM GMT+2:
+https://sym.example/reset-password/TOKEN
+
+If you did not ask for it, ignore this message: your password stays as it is.
+",
+}
+`;
+
+exports[`M9 : e-mails localisés > assert_email_snapshot_en_fr : instantanés texte des e-mails d’invitation, de réinitialisation et d’alerte, par langue livrée > reset fr 1`] = `
+{
+  "subject": "Réinitialise ton mot de passe sur sym.example",
+  "text": "Une réinitialisation du mot de passe a été demandée pour ton compte sur sym.example.
+
+Ouvre ce lien pour choisir un nouveau mot de passe. Il ne sert qu'une fois et expire le 2 oct. 2026, 14:00 UTC+2 :
+https://sym.example/reset-password/TOKEN
+
+Si tu n'es pas à l'origine de la demande, ignore ce message : ton mot de passe ne change pas.
+",
+}
+`;

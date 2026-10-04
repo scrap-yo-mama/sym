@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Référence des codes de raison : produite depuis les textes français de la console (apps/web/src/i18n/locales/fr.json) et la
+// Référence des codes de raison : produite depuis les textes français de la console (packages/i18n/locales/fr.json) et la
 // liste figée de 06 § 4.2 (apps/web/src/testing/spec-reason-codes.json). La doc n'a donc pas sa propre copie des phrases :
 // ce que la console affiche est ce que la doc publie.
 import { plain } from './rest-reference.ts';

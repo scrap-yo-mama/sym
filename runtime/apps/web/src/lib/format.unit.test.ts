@@ -20,10 +20,10 @@ describe('formatUsd', () => {
 
 describe('formatDuration', () => {
   test('ms, secondes, minutes', () => {
-    expect(formatDuration(240, 'en')).toBe('240 ms');
-    expect(formatDuration(1200, 'en')).toBe('1.2 s');
-    expect(formatDuration(1200, 'fr')).toBe('1,2 s');
-    expect(formatDuration(125_000, 'en')).toBe('2 min 5 s');
+    expect(formatDuration(240, 'en')).toMatch(/^240\s?ms$/u);
+    expect(formatDuration(1200, 'en')).toBe('1.2 sec');
+    expect(formatDuration(1200, 'fr')).toMatch(/^1,2\s?s$/u);
+    expect(formatDuration(125_000, 'en')).toBe(new (Intl as unknown as { DurationFormat: new (l: string, o: object) => { format(d: object): string } }).DurationFormat('en', { style: 'short' }).format({ minutes: 2, seconds: 5 }));
     expect(formatDuration(null, 'en')).toBeNull();
     expect(formatDuration(-1, 'en')).toBeNull();
   });

@@ -122,6 +122,7 @@ export const ENV_CATALOG: readonly EnvVariable[] = [
   v({ name: 'RETENTION_PROFILES_DAYS', group: 'Rétention', roles: ['worker', 'cli'], required: false, default: '90', description: 'Conservation des profils de qualité des runs (hors baseline validée, gardée avec sa version).' }),
   v({ name: 'RUN_LOG_RETENTION_DAYS', group: 'Rétention', roles: ['server', 'worker', 'cli'], required: false, default: '30', description: 'Conservation des journaux de run.' }),
   v({ name: 'STORAGE_PLAN_GB', group: 'Rétention', roles: ['server', 'worker', 'cli'], required: false, default: 'aucun', description: 'Taille de la base de votre offre, en Go. Sans elle, pas de garde disque ; à 95 %, un nouveau run est refusé (`storage_full`).' }),
+  v({ name: 'DEFAULT_LOCALE', group: 'Base', roles: ['server'], required: false, default: 'langue de l’owner', description: 'Langue de l’instance (code d’une langue livrée, `en` ou `fr` aujourd’hui) : surcharge `settings.default_locale`, initialisée avec la langue du navigateur de l’owner au premier démarrage. Elle ne remplace jamais le choix d’une personne.' }),
   v({ name: 'PHONE_DEFAULT_REGION', group: 'Rétention', roles: ['worker', 'cli'], required: false, default: 'FR', description: 'Région ISO 3166-1 des numéros de téléphone nationaux des personnes concernées (droit à l’effacement).' }),
 ];
 

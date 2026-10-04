@@ -9,7 +9,7 @@ import { renderToString } from 'vue/server-renderer';
 import { createMemoryHistory } from 'vue-router';
 import { createI18n } from 'vue-i18n';
 import { ensureSession, resetSession, signIn, signOut, useSession } from '@/composables/useSession';
-import en from '@/i18n/locales/en.json';
+import en from '@runtime/i18n/locales/en.json';
 import { buildApi, setApi } from '@/lib/api';
 import { createAppRouter } from '@/router/index';
 import HomeView from '@/views/HomeView.vue';

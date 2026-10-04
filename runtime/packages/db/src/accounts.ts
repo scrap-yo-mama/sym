@@ -355,6 +355,8 @@ export async function reactivateUser(db: Queryable, userId: string): Promise<voi
  */
 export async function deleteOrAnonymizeUser(client: pg.ClientBase, userId: string, by: string): Promise<'deleted' | 'anonymized'> {
   await revokeUserAccess(client, userId, by, { wipeCookies: true });
+  // Invitations à cette adresse (`invitations.locale` : donnée personnelle de l'invité, 17 § 6) : supprimées avec le compte.
+  await client.query('DELETE FROM invitations WHERE email = (SELECT email FROM users WHERE id = $1)', [userId]);
   for (const sql of [
     'DELETE FROM auth_accounts WHERE user_id = $1',
     'DELETE FROM two_factor WHERE user_id = $1',
@@ -376,7 +378,7 @@ export async function deleteOrAnonymizeUser(client: pg.ClientBase, userId: strin
   }
   await client.query(
     `UPDATE users SET email = 'deleted+' || id::text || '@deleted.invalid', display_name = '', image = NULL, status = 'disabled',
-       email_verified = false, email_verified_at = NULL, two_factor_enabled = false, deleted_at = now(),
+       email_verified = false, email_verified_at = NULL, two_factor_enabled = false, locale = 'en', timezone = NULL, deleted_at = now(),
        disabled_at = coalesce(disabled_at, now()), updated_at = now()
      WHERE id = $1`,
     [userId],

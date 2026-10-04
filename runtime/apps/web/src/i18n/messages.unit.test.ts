@@ -3,8 +3,8 @@
 // erreur de syntaxe n'apparaîtrait sinon qu'à l'affichage de l'écran concerné.
 import { describe, expect, test, vi } from 'vitest';
 import { createI18n } from 'vue-i18n';
-import en from './locales/en.json';
-import fr from './locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 
 type Tree = { [key: string]: string | Tree };
 
@@ -23,7 +23,7 @@ describe('compilation des messages', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       try {
-        const i18n = createI18n({ legacy: false, locale: code, fallbackLocale: false as unknown as string, missingWarn: true, fallbackWarn: true, messages: { [code]: messages } });
+        const i18n = createI18n({ legacy: false, locale: code, fallbackLocale: false as unknown as string, missingWarn: true, fallbackWarn: true, messages: { [code]: messages } as unknown as Record<string, typeof en> });
         for (const key of keys(messages as Tree)) {
           const raw = key.split('.').reduce<unknown>((node, part) => (node as Record<string, unknown>)[part], messages) as string;
           const out = i18n.global.t(key, paramsOf(raw));

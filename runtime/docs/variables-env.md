@@ -18,6 +18,7 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `DATABASE_URL` secret | server, worker, CLI | obligatoire | aucun | PostgreSQL 15 ou plus (16 recommandé). Peut viser un pooler en mode session ; derrière un pooler en mode transaction, `DATABASE_URL_DIRECT` est obligatoire. |
 | `DATABASE_URL_DIRECT` secret | server, worker, CLI | obligatoire derrière un pooler en mode transaction | `DATABASE_URL` | Connexion directe : LISTEN, pg-boss, migrations, verrous. Sans elle derrière un pooler en mode transaction, le démarrage est refusé (« connexion de session requise »). |
 | `DB_POOL_MAX` | worker, CLI | facultative | 5 | Taille du pool de connexions du worker. `WORKER_CONCURRENCY` doit rester inférieur ou égal. |
+| `DEFAULT_LOCALE` | server | facultative | langue de l’owner | Langue de l’instance (code d’une langue livrée, `en` ou `fr` aujourd’hui) : surcharge `settings.default_locale`, initialisée avec la langue du navigateur de l’owner au premier démarrage. Elle ne remplace jamais le choix d’une personne. |
 
 ## Clé
 

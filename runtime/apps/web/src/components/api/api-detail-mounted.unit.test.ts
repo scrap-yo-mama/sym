@@ -11,7 +11,7 @@ import type { components } from '@runtime/client';
 import { loadSession, resetSession } from '@/composables/useSession';
 import { setApi } from '@/lib/api';
 import { API_TABS } from '@/lib/api-tabs';
-import fr from '@/i18n/locales/fr.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { apiDetail, controls, installApi, json, TUNNEL_WORDING, UUID } from '@/testing/console-fixtures';
 import { ME } from '@/testing/console.testkit';
 import { mountHtml, type MountedHtml } from '@/testing/memory-mount';

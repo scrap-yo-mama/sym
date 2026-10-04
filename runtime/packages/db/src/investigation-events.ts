@@ -4,6 +4,7 @@
 // essai, et un rapport qui arrête l'enquête (refus du site, 402) interdit tout essai ensuite ;
 // la base le refuse (`AccessReportFirstError`), quel que soit l'appelant (`assert_access_report_first`).
 import type pg from 'pg';
+import { assertCodesOnly, scrubRenderedSentences, type RenderedSentenceMode } from './codes-only.js';
 import { withActor } from './rls.js';
 
 export const ACCESS_REPORT_EVENT = 'access_report';
@@ -24,13 +25,21 @@ const isAccessReportFirst = (error: unknown): boolean =>
 
 /**
  * Ajoute un événement au récit d'une enquête (numéro suivant, sous verrou du run), comme le propriétaire du run.
- * Lève `AccessReportFirstError` si la base refuse un essai avant le rapport d'accès.
+ * Lève `AccessReportFirstError` si la base refuse un essai avant le rapport d'accès. Une phrase du catalogue dans la charge lève
+ * `RenderedSentenceError` ; avec `onRenderedSentence: 'scrub'` (chemin de l'enquête), elle est remplacée par un code et les
+ * chemins refusés sont rendus (`scrubbed`) pour être journalisés : l'enquête ne s'arrête pas sur une prose de tiers.
  */
 export async function appendInvestigationEvent(
   pool: pg.Pool,
   event: { readonly runId: string; readonly ownerId: string; readonly kind: string; readonly payload?: unknown },
-): Promise<{ seq: number }> {
+  options: { readonly onRenderedSentence?: RenderedSentenceMode } = {},
+): Promise<{ seq: number; scrubbed?: string[] }> {
   if (event.kind.length === 0 || event.kind.length > 64) throw new Error('investigation_events.kind : 1 à 64 caractères');
+  // Le récit est rendu à la lecture (21b § 1) : la ligne ne porte que le code (`kind`) et ses paramètres (la charge).
+  let payload: unknown = event.payload ?? {};
+  let scrubbed: string[] = [];
+  if (options.onRenderedSentence === 'scrub') ({ payload, paths: scrubbed } = scrubRenderedSentences(payload));
+  else assertCodesOnly('investigation_events', payload);
   try {
     return await withActor(pool, { userId: event.ownerId, role: 'member' }, async (tx) => {
       await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1::text, 1101))', [event.runId]);
@@ -39,11 +48,11 @@ export async function appendInvestigationEvent(
          SELECT r.id, COALESCE((SELECT max(e.seq) FROM investigation_events e WHERE e.run_id = r.id), 0) + 1, $2, r.project_id, $3, $4::jsonb
            FROM runs r WHERE r.id = $1 AND r.owner_id = $2
          RETURNING seq`,
-        [event.runId, event.ownerId, event.kind, JSON.stringify(event.payload ?? {})],
+        [event.runId, event.ownerId, event.kind, JSON.stringify(payload)],
       );
       const row = rows[0];
       if (row === undefined) throw new Error('run introuvable pour ce propriétaire');
-      return { seq: row.seq };
+      return scrubbed.length === 0 ? { seq: row.seq } : { seq: row.seq, scrubbed };
     });
   } catch (error) {
     if (isAccessReportFirst(error)) throw new AccessReportFirstError((error as Error).message);
@@ -52,8 +61,12 @@ export async function appendInvestigationEvent(
 }
 
 /** Inscrit le rapport d'accès (étape 0) : charge `accessReportEventPayload(report)` (verdict obligatoire). */
-export function recordAccessReport(pool: pg.Pool, args: { readonly runId: string; readonly ownerId: string; readonly payload: Record<string, unknown> }): Promise<{ seq: number }> {
-  return appendInvestigationEvent(pool, { runId: args.runId, ownerId: args.ownerId, kind: ACCESS_REPORT_EVENT, payload: args.payload });
+export function recordAccessReport(
+  pool: pg.Pool,
+  args: { readonly runId: string; readonly ownerId: string; readonly payload: Record<string, unknown> },
+  options: { readonly onRenderedSentence?: RenderedSentenceMode } = {},
+): Promise<{ seq: number; scrubbed?: string[] }> {
+  return appendInvestigationEvent(pool, { runId: args.runId, ownerId: args.ownerId, kind: ACCESS_REPORT_EVENT, payload: args.payload }, options);
 }
 
 /** Récit d'une enquête dans l'ordre, lu comme le propriétaire. */

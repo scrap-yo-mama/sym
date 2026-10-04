@@ -8,8 +8,8 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
-import en from './i18n/locales/en.json';
-import fr from './i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { visibleNav } from './lib/nav';
 
 const SRC = dirname(fileURLToPath(import.meta.url));

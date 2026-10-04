@@ -11,7 +11,7 @@ const runtime = new URL('../../', here);
 
 export function generateReference(): { rest: string; reasons: string } {
   const openapi = parse(readFileSync(new URL('packages/client/openapi/openapi.yaml', runtime), 'utf8')) as OpenApiDocument;
-  const fr = JSON.parse(readFileSync(new URL('apps/web/src/i18n/locales/fr.json', runtime), 'utf8')) as Parameters<typeof renderReasonsReference>[0];
+  const fr = JSON.parse(readFileSync(new URL('packages/i18n/locales/fr.json', runtime), 'utf8')) as Parameters<typeof renderReasonsReference>[0];
   const spec = (JSON.parse(readFileSync(new URL('apps/web/src/testing/spec-reason-codes.json', runtime), 'utf8')) as { codes: string[] }).codes;
   return { rest: renderRestReference(openapi), reasons: renderReasonsReference(fr, spec) };
 }

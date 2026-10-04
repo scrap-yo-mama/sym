@@ -45,10 +45,11 @@ export function briefReport(hints: readonly FinalHint[]): BriefReportEntry[] {
   }));
 }
 
-export type NarrativeLocale = 'en' | 'fr';
+/** Langues des gabarits ci-dessous (clés de BRIEF_NARRATIVE) : le registre de langues n'est pas dupliqué ici. */
+export type NarrativeLocale = keyof typeof BRIEF_NARRATIVE;
 
 /** Gabarits fermés `narrative.brief.*` (20 § 3.3) : aucun verbe de contournement, aucune promesse d'invisibilité. */
-export const BRIEF_NARRATIVE: Readonly<Record<NarrativeLocale, Readonly<Record<string, string>>>> = {
+export const BRIEF_NARRATIVE = {
   fr: {
     'narrative.brief.read': 'SYM 👻 : J’ai lu ton dossier : {hints} indices, {tried} essais déjà faits. Je vérifie chaque indice avant de m’y fier.',
     'narrative.brief.step': 'Dossier : {done} indices vérifiés sur {hints}',
@@ -105,7 +106,7 @@ export const BRIEF_NARRATIVE: Readonly<Record<NarrativeLocale, Readonly<Record<s
     'narrative.brief.reason.brief_subject_excluded': 'about a person who asked to be erased: ignored',
     'narrative.brief.reason.none': 'waiting to be checked',
   },
-};
+} satisfies Readonly<Record<string, Readonly<Record<string, string>>>>;
 
 const fill = (template: string, params: Readonly<Record<string, string | number>>) => template.replace(/\{(\w+)\}/g, (_, k: string) => String(params[k] ?? ''));
 

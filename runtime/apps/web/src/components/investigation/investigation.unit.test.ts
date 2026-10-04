@@ -3,8 +3,8 @@
 // compteur de budget, Pause et Arrêter sont présents quand l'enquête tourne ; le volet « essai en moins de 2 s » est dans
 // composables/useInvestigation.unit.test.ts. Le panneau « Bloquée » a son propre test (components/BlockedPanel.unit.test.ts).
 import { describe, expect, test } from 'vitest';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { emptyInvestigation, toggleExcluded, type InvestigationState, type PlanStep } from '@/lib/investigation';
 import { esc, view as render } from '@/testing/console.testkit';
 import InvestigationBoard from './InvestigationBoard.vue';
@@ -41,8 +41,8 @@ describe('assert_budget_and_stop_controls : compteur de budget, Pause et Arrête
     // Le rôle log est sur un conteneur, la liste est dedans : sur le <ol>, il remplacerait son rôle de liste (axe listitem).
     expect(html).toMatch(/<div[^>]*role="log"[^>]*>\s*<ol/);
     expect(html).not.toMatch(/<ol[^>]*role="log"/);
-    expect(html).toContain('Spend: $0.012 of $0.50');
-    expect(html).toContain('Time: 14 s of 5 min 0 s');
+    expect(html).toContain('Spend: $0.01 of $0.50');
+    expect(html).toContain('Time: 14 sec of 5 min');
     expect(html).toContain('Kept: ~$0.002; a full agent: ~$0.09 (estimate)');
   });
 
@@ -88,7 +88,7 @@ describe('assert_budget_and_stop_controls : compteur de budget, Pause et Arrête
   test('enquête arrêtée ou terminée : boutons inactifs (aria-disabled), coût conservé annoncé', async () => {
     const stopped = await render(InvestigationBoard, props(running(), { cancelled: true }));
     expect(stopped).toMatch(/aria-disabled="true"[^>]*data-testid="investigation-stop"|data-testid="investigation-stop"[^>]*aria-disabled="true"/);
-    expect(stopped).toContain('Investigation stopped. Trials and cost so far are kept: $0.012.');
+    expect(stopped).toContain('Investigation stopped. Trials and cost so far are kept: $0.01.');
     const state = running();
     state.terminal = true;
     state.status = 'sain';

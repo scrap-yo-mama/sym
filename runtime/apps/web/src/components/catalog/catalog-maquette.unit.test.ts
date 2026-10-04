@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'vitest';
 import ApiCatalogTable from '@/components/catalog/ApiCatalogTable.vue';
 import CatalogHealth from '@/components/catalog/CatalogHealth.vue';
-import fr from '@/i18n/locales/fr.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { actionCause } from '@/lib/action-required';
 import { rowAction } from '@/lib/catalog-actions';
 import { catalogHealth, countByStatus } from '@/lib/catalog-health';

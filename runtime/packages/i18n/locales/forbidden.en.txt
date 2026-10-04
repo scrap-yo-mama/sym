@@ -1,0 +1,9 @@
+# Mots et expressions interdits en `en` (promesse de contournement, 10 § garde-fous, 20 § 2). Une entrée par ligne, insensible à la casse ;
+# `#` commence un commentaire. Liste de départ de la tâche 3.20 : le contenu complet (listes P et L, liste blanche) relève de la tâche 3.19.
+stealth
+bypass
+undetectable
+anti-detect
+circumvent
+unblock
+captcha solving

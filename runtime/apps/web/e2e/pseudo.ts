@@ -69,7 +69,7 @@ export function pseudoMessages(node: unknown): unknown {
  * pour son module `assets/en-*.js`, un module dont l'export par défaut est le catalogue pseudo-localisé.
  */
 export async function routePseudoLocale(page: Page): Promise<void> {
-  const messages = JSON.parse(readFileSync(new URL('../src/i18n/locales/en.json', import.meta.url), 'utf8')) as unknown;
+  const messages = JSON.parse(readFileSync(new URL('../../../packages/i18n/locales/en.json', import.meta.url), 'utf8')) as unknown;
   const body = `export default ${JSON.stringify(pseudoMessages(messages))};\n`;
   await page.route(/\/assets\/en-[\w-]+\.js$/, (route) => route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body }));
 }

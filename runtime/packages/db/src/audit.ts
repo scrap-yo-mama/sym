@@ -3,6 +3,7 @@
 // `meta` passe par `redact` (couche 3) puis perd toute clé au nom sensible : ni secret, ni cookie, ni jeton (INV8).
 import { redact, REDACTED } from '@runtime/core';
 import type pg from 'pg';
+import { assertCodesOnly } from './codes-only.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -36,6 +37,8 @@ export function auditMeta(meta: Record<string, unknown> = {}): Record<string, un
 
 /** Ajoute une ligne à `audit_events`. `db` doit être une transaction `withActor` (rôle `runtime_app`). */
 export async function appendAudit(db: Queryable, event: AuditEvent): Promise<void> {
+  // `action` et `meta` : code et paramètres, jamais une phrase (21b § 1, `assert_audit_export_codes_only`).
+  assertCodesOnly('audit_events', { action: event.action, meta: event.meta ?? {} });
   await db.query(
     `INSERT INTO audit_events (actor_user_id, actor_via, actor_ref, action, target_type, target_id, outcome, ip, user_agent, meta)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,

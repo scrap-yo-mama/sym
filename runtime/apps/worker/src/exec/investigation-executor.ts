@@ -415,8 +415,16 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     const timedOut = () => !ctx.signal.aborted && (deadline.aborted || now() >= deadlineMs);
     let spent = state.spent_usd;
     const budgetView = () => ({ spent_usd: spent, max_usd: budgetUsd, elapsed_s: Math.round((baseElapsed + now() - started) / 1000), timeout_s: request.timeout_s });
-    const event = (kind: string, payload: Record<string, unknown> = {}) =>
-      appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind, payload: { run_id: ctx.runId, ...payload } });
+    // Garde « codes seulement » en mode scrub (21b § 1) : une prose de tiers (détail d'erreur d'un script, texte de site) qui
+    // recoupe le catalogue est remplacée par un code et le refus est journalisé (noms de chemins) ; l'enquête ne s'arrête pas.
+    const codesOnlyRefused = async (kind: string, paths: readonly string[]): Promise<void> => {
+      if (paths.length > 0) await ctx.log('warn', 'codes_only_refused', { table: 'investigation_events', kind, paths });
+    };
+    const event = async (kind: string, payload: Record<string, unknown> = {}) => {
+      const written = await appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind, payload: { run_id: ctx.runId, ...payload } }, { onRenderedSentence: 'scrub' });
+      await codesOnlyRefused(kind, written.scrubbed ?? []);
+      return written;
+    };
     /** Jalon atteint, écrit dans les journaux du run avec la clé et l'intitulé du noyau (`assert_milestones_same_labels`). */
     const milestone = (key: InvestigationMilestone) => ctx.log('info', 'milestone', milestoneLogEntry(key));
     const planView = (entries: readonly PlanEntry[]) => entries.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd }));
@@ -659,10 +667,12 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       await event(EV.started, { phase, url: narrativeUrl(pageUrl), domain: host, network: ports.mode === 'tunnel' ? 'tunnel' : first?.mode, budget: budgetView() });
 
       // --- 0. Rapport d'accès -------------------------------------------------------------------------------------
-      const report: AccessReport = await buildAccessReport({ url: pageUrl, probe: ports.probe, ...(pacer === undefined ? {} : { pacer }), signal, now });
+      // En tunnel, la sonde part du Chrome de l'utilisateur : sa langue réelle, non relevée (21 § 6.4, § 6.6).
+      const report: AccessReport = await buildAccessReport({ url: pageUrl, probe: ports.probe, requestsFrom: ports.mode === 'tunnel' ? 'user_browser' : 'engine', ...(pacer === undefined ? {} : { pacer }), signal, now });
       const stopped0 = await tunnelOutcome('access_check');
       if (stopped0 !== null) return stopped0;
-      await recordAccessReport(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, payload: accessReportEventPayload(report) });
+      const accessWritten = await recordAccessReport(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, payload: accessReportEventPayload(report) }, { onRenderedSentence: 'scrub' });
+      await codesOnlyRefused('access_report', accessWritten.scrubbed ?? []);
       if (!report.verdict.proceed) {
         await charge(ctx, ports.proxyUsd());
         spent = round6(spent + ports.proxyUsd());
@@ -862,6 +872,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             candidates,
             accessFacts: accessFactsForPrompt(report),
             ...(fixed === undefined ? {} : { fixedSchema: fixed }),
+            ...(ctx.proseLocale === undefined ? {} : { proseLocale: ctx.proseLocale }),
             rules: renderRulesPrompt(ruled.resolved),
             ...(catalogMemory === '' ? {} : { catalogMemory }),
             ...(briefRead === null || briefDigest === null ? {} : (() => {
@@ -1372,7 +1383,10 @@ function apiHostsOf(capture: ReconCapture, host: string, scope: string): string[
   return [...hosts];
 }
 
-/** Sonde par l'extension (`page_fetch` dans un onglet du site) : un défi détecté arrête le tunnel sur-le-champ. */
+/**
+ * Sonde par l'extension (`page_fetch` dans un onglet du site) : un défi détecté arrête le tunnel sur-le-champ. Aucun
+ * `sent_accept_language` : le Chrome de l'utilisateur envoie sa propre langue (21 § 6.4), le rapport le dit (`requestsFrom`).
+ */
 function tunnelProbe(session: TunnelSession, maxBytes: number): AccessProbe {
   const transport = pageFetchTransport(session, maxBytes);
   return (url, signal) => transport({ method: 'GET', url, headers: {} }, signal);

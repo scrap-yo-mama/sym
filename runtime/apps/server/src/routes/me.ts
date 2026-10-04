@@ -13,9 +13,11 @@ import {
   base32Encode,
   passwordPolicyViolation,
 } from '@runtime/core';
+import { isValidTimeZone } from '@runtime/i18n';
 import { confirmTwoFactor, deleteResetLinks, consumeTotpStep, loadTwoFactor, removeTwoFactor, replaceBackupCodes, startTwoFactorEnrollment } from '@runtime/db';
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
+import { isSupportedLocale } from '../i18n.js';
 import { AttemptLimiter } from '../rate-limit.js';
 import { decodeCursor, encodeCursor, iso, meView, reauthenticate, requireSecondFactor, twoFactorKeks, UUID } from './account-helpers.js';
 import { audit, notFound, sendError } from './guard.js';
@@ -83,6 +85,47 @@ export function meRoutes(app: FastifyInstance, ctx: ServerContext): void {
     // `via` : « ui » ou « apikey » (le jeton d'extension n'atteint pas cette route).
     return meView(ctx, { ...actor, via: actor.via === 'extension' ? 'ui' : actor.via });
   });
+
+  // --- Préférences : langue, fuseau, thème (21b § 1) ---------------------------------------------------------------
+  // `locale` : une langue livrée du registre ; `timezone` : IANA contrôlé contre `Intl.supportedValuesOf` (null l'efface). Le
+  // fuseau est une donnée personnelle (indice de localisation, 17 § 6) : l'audit garde le NOM des champs changés, jamais leur valeur.
+  app.patch<{ Body: { locale?: string; timezone?: string | null; theme?: 'light' | 'dark' | 'system' } }>(
+    '/api/me',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            locale: { type: 'string', minLength: 2, maxLength: 3 },
+            timezone: { type: ['string', 'null'], maxLength: 64 },
+            theme: { type: 'string', enum: ['light', 'dark', 'system'] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const actor = request.actor!;
+      const { locale, timezone, theme } = request.body;
+      if (locale !== undefined && !isSupportedLocale(locale)) return sendError(reply, 400, 'invalid_locale', 'langue non gérée par cette instance');
+      if (timezone !== undefined && timezone !== null && !isValidTimeZone(timezone)) return sendError(reply, 400, 'invalid_timezone', 'fuseau horaire inconnu');
+      const changed: string[] = [];
+      const sets: string[] = [];
+      const values: unknown[] = [actor.userId];
+      for (const [name, column, value] of [['locale', 'locale', locale], ['timezone', 'timezone', timezone], ['theme', 'theme', theme]] as const) {
+        if (value === undefined) continue;
+        values.push(value);
+        sets.push(`${column} = $${values.length}`);
+        changed.push(name);
+      }
+      // Toute écriture du fuseau (même `null` : effacé dans Mon compte) marque son initialisation : la console ne le réécrit plus.
+      if (timezone !== undefined) sets.push('timezone_initialized = true');
+      await ctx.pool.query(`UPDATE users SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, values);
+      await audit(ctx, request, actor, { action: 'account.preferences_updated', targetType: 'user', targetId: actor.userId, outcome: 'success', meta: { fields: changed } });
+      return meView(ctx, { ...actor, via: actor.via === 'extension' ? 'ui' : actor.via });
+    },
+  );
 
   // --- Sessions d'interface (13 § 5 : chacun liste et ferme les siennes, 7.5.2) -------------------------------
   app.get('/api/me/sessions', async (request) => {

@@ -13,7 +13,7 @@ import { test, expect, type Browser, type BrowserContext, type Page } from '@pla
 import { CONSOLE_CSP, watchCspViolations } from '../../apps/web/e2e/csp.ts';
 import { startInstance, type Instance } from './instance.ts';
 
-const EN = JSON.parse(readFileSync(new URL('../../apps/web/src/i18n/locales/en.json', import.meta.url), 'utf8')) as Record<string, unknown>;
+const EN = JSON.parse(readFileSync(new URL('../../packages/i18n/locales/en.json', import.meta.url), 'utf8')) as Record<string, unknown>;
 /** Texte anglais d'une clé de la console, pour attendre le texte exact affiché. */
 function t(key: string): string {
   const found = key.split('.').reduce<unknown>((node, part) => (typeof node === 'object' && node !== null ? (node as Record<string, unknown>)[part] : undefined), EN);

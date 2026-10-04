@@ -117,10 +117,10 @@ const detailOf = async (runId: string) => (await pool.query<{ error_detail: stri
 /** Proposition scriptée du rôle `investigate` pour l'API JSON de contacts (gisement c1, pagination par page). */
 const CONTACTS_PROPOSAL = {
   fields: [
-    { name: 'id', type: 'string', required: true, personal: false, description: 'Identifiant du contact' },
-    { name: 'name', type: 'string', required: true, personal: true, description: 'Nom' },
-    { name: 'email', type: 'string', required: true, personal: true, description: 'Adresse électronique' },
-    { name: 'city', type: 'string', required: false, personal: false, description: 'Ville' },
+    { name: 'id', type: 'string', required: true, personal: false, description: 'Contact identifier' },
+    { name: 'name', type: 'string', required: true, personal: true, description: 'Name' },
+    { name: 'email', type: 'string', required: true, personal: true, description: 'E-mail address' },
+    { name: 'city', type: 'string', required: false, personal: false, description: 'City' },
     { name: 'score', type: 'integer', required: true, personal: false, description: 'Score' },
   ],
   sources: [
@@ -140,9 +140,9 @@ const CONTACTS_PROPOSAL = {
 
 const NEXT_PROPOSAL = {
   fields: [
-    { name: 'sku', type: 'string', required: true, personal: false, description: 'Référence' },
-    { name: 'title', type: 'string', required: true, personal: false, description: 'Titre' },
-    { name: 'price_cents', type: 'integer', required: true, personal: false, description: 'Prix en centimes' },
+    { name: 'sku', type: 'string', required: true, personal: false, description: 'Reference' },
+    { name: 'title', type: 'string', required: true, personal: false, description: 'Title' },
+    { name: 'price_cents', type: 'integer', required: true, personal: false, description: 'Price in cents' },
   ],
   sources: [
     {
@@ -399,7 +399,7 @@ describe('enquête (tâche 2.1)', () => {
     fake.setScenario(MODEL, [
       scripted.json({
         fields: [
-          { name: 'title', type: 'string', required: true, personal: false, description: 'Titre' },
+          { name: 'title', type: 'string', required: true, personal: false, description: 'Title' },
           { name: 'price', type: 'number', required: true, personal: false, description: 'Prix en euros' },
         ],
         sources: [],

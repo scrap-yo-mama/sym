@@ -1,0 +1,10 @@
+# Mots et expressions interdits en `fr`. Une entrée par ligne, insensible à la casse ; `#` commence un commentaire. Reprend les termes
+# de promesse anglais (21 § 7) ; le contenu complet (listes P et L, liste blanche « mot de passe ») relève de la tâche 3.19.
+stealth
+bypass
+undetectable
+anti-detect
+indétectable
+contourner
+contournement
+débloquer

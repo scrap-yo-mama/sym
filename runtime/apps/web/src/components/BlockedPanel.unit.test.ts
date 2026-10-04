@@ -4,8 +4,8 @@
 // d'enquête. Le tunnel reste un réglage neutre de la politique réseau, jamais proposé après un blocage.
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { emptyInvestigation, ingestEvent, BLOCK_CAUSES, type AttemptView, type BlockCause } from '@/lib/investigation';
 import { esc, view, type Locale } from '@/testing/console.testkit';
 import BlockedPanel from './BlockedPanel.vue';

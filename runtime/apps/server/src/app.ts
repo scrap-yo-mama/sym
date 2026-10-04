@@ -7,6 +7,7 @@ import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyServ
 import type { ExtensionOriginPolicy } from './config.js';
 import { defaultConsoleDir, registerConsole, securityHeaders } from './console.js';
 import type { ServerContext } from './context.js';
+import { localizeErrors } from './i18n.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { apiRoutes } from './routes/apis.js';
 import { datasetRoutes } from './routes/datasets.js';
@@ -90,6 +91,8 @@ export function buildServer(
   // Serveur MCP (05 § 3) : Host et Origin contrôlés AVANT l'authentification (rebinding DNS, requêtes de navigateur).
   app.addHook('onRequest', mcpTransportGuard(ctx));
   app.addHook('onRequest', guard(ctx));
+  // `message` des erreurs REST dans la langue résolue (21 § 4.4) : `Content-Language` et `Vary: Accept-Language` à la sortie.
+  app.addHook('onSend', localizeErrors(ctx));
   // En-têtes de 08b § 2 sur toute réponse du service (console, API, erreurs) ; un en-tête déjà posé par une route est gardé.
   const headers = Object.entries(securityHeaders(ctx.publicUrl));
   app.addHook('onSend', (_request, reply, payload, done) => {

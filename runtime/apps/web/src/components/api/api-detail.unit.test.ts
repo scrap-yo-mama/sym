@@ -12,8 +12,8 @@ import RevertConfirm from '@/components/api/RevertConfirm.vue';
 import StrategyDiffView from '@/components/api/StrategyDiffView.vue';
 import { setApi } from '@/lib/api';
 import { API_TABS } from '@/lib/api-tabs';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { apiDetail, controls, renderHtml, textOf, TUNNEL_WORDING, UUID, type Control } from '@/testing/console-fixtures';
 
 afterEach(() => setApi(undefined));
@@ -144,6 +144,28 @@ describe('onglet Accès', () => {
     expect(textOf(await renderHtml(ApiAccessTab, { detail: apiDetail({ access_report: null }) }))).toContain(fr.accessTab.noReport);
   });
 
+  test('assert_accept_language_engine_real : la langue envoyée au site (Accept-Language du moteur) est affichée, « aucune » quand rien n’est envoyé (21 § 6.6, M8)', async () => {
+    const none = await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: { ...report, accept_language: null } }) });
+    expect(none).toContain('data-testid="accept-language"');
+    expect(textOf(none)).toContain(fr.accessTab.acceptLanguage);
+    expect(textOf(none)).toContain(fr.accessTab.acceptLanguageNone);
+    const sent = await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: { ...report, accept_language: 'en-US,en;q=0.9' } }) });
+    expect(sent).toMatch(/data-testid="accept-language"[^>]*>en-US,en;q=0\.9</);
+  });
+
+  test('assert_accept_language_engine_real : run en tunnel → « celle de ton navigateur », jamais « Aucune » (21 § 6.4, § 6.6)', async () => {
+    // En tunnel, le Chrome de l'utilisateur envoie sa langue réelle : la vue porte accept_language_source = user_browser, sans valeur.
+    const tunnel = textOf(await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: { ...report, accept_language_source: 'user_browser' as const } }) }));
+    expect(tunnel).toContain(fr.accessTab.acceptLanguageUserBrowser);
+    expect(tunnel).not.toContain(fr.accessTab.acceptLanguageNone);
+    // Même si une ancienne vue portait null à côté, la source prime.
+    const legacy = textOf(await renderHtml(ApiAccessTab, { detail: blockedDetail({ access_report: { ...report, accept_language: null, accept_language_source: 'user_browser' as const } }) }));
+    expect(legacy).toContain(fr.accessTab.acceptLanguageUserBrowser);
+    expect(legacy).not.toContain(fr.accessTab.acceptLanguageNone);
+    // En anglais aussi, une clé dédiée.
+    expect(en.accessTab.acceptLanguageUserBrowser).toMatch(/your browser/i);
+  });
+
   test('lecture seule : aucune requête de la console n’envoie access_policy (politique fixe)', () => {
     const webSrc = new URL('../../', import.meta.url).pathname;
     const files = (dir: string): string[] =>
@@ -186,7 +208,7 @@ describe('formulaire Lancer', () => {
       expect(estimate).toBeGreaterThan(-1);
       expect(button).toBeGreaterThan(estimate);
       const text = textOf(html.slice(estimate, button));
-      expect(text).toContain(locale === 'fr' ? '~0,002 $' : '~0.002 $');
+      expect(text.replace(/[\u00a0\u202f]/g, ' ')).toContain(locale === 'fr' ? '~0,002 $' : '~$0.002');
       expect(text).toContain(locale === 'fr' ? 'médiane de 10 runs' : 'median of 10 runs');
     }
   });

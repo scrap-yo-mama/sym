@@ -9,7 +9,7 @@ import { describe, expect, test } from 'vitest';
 import config from '../playwright.config.ts';
 import { visualMode } from '../e2e/visual-policy.ts';
 import { OVERFLOW_EXEMPT, PSEUDO_CLOSE, PSEUDO_OPEN, pseudoMessage, pseudoMessages } from '../e2e/pseudo.ts';
-import en from '@/i18n/locales/en.json';
+import en from '@runtime/i18n/locales/en.json';
 
 const VISUAL_DIR = new URL('../e2e/__visual__/', import.meta.url);
 const SCREENS = ['catalog', 'catalog-all', 'new-api-gate'];

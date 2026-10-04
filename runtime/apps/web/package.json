@@ -14,11 +14,11 @@
   },
   "dependencies": {
     "@runtime/client": "workspace:*",
+    "@runtime/i18n": "workspace:*",
     "@runtime/ui": "workspace:*",
     "@vueuse/core": "catalog:",
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",
-    "cronstrue": "catalog:",
     "reka-ui": "catalog:",
     "tailwind-merge": "catalog:",
     "vue": "catalog:",

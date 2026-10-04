@@ -7,8 +7,8 @@
 // worker avec `milestoneLogEntry`) sont lus par apps/worker/src/exec/investigation.integration.test.ts. Le récit MCP n’existe
 // pas encore (3.2, 3.19) : `test.todo` explicite ci-dessous.
 import { describe, expect, test } from 'vitest';
-import en from '../apps/web/src/i18n/locales/en.json' with { type: 'json' };
-import fr from '../apps/web/src/i18n/locales/fr.json' with { type: 'json' };
+import en from '../packages/i18n/locales/en.json' with { type: 'json' };
+import fr from '../packages/i18n/locales/fr.json' with { type: 'json' };
 import * as consoleSide from '../apps/web/src/lib/milestones.ts';
 import * as core from '../packages/core/src/investigation/milestones.ts';
 
@@ -24,8 +24,14 @@ describe('assert_milestones_same_labels : une seule définition des quatre jalon
 
   test.each(['en', 'fr'] as const)('%s : les libellés de la frise de la console sont ceux du récit MCP et des journaux', (locale) => {
     for (const key of core.INVESTIGATION_MILESTONES) {
-      expect(catalogs[locale].investigation.milestones[key], `${locale}:${key}`).toBe(core.MILESTONE_LABELS[locale][key]);
+      expect(catalogs[locale].investigation.milestones[key], `${locale}:${key}`).toBe(core.milestoneLabel(key, locale));
     }
+  });
+
+  test('les libellés du noyau sont lus dans le catalogue commun (packages/i18n, 3.20 M14) : aucune langue codée en dur', () => {
+    expect(core.milestoneLabel('describe', 'fr')).toBe('Décrire');
+    expect(core.milestoneLabel('reconnaissance', 'en')).toBe('Explore');
+    expect('MILESTONE_LABELS' in core).toBe(false);
   });
 
   test('l’intitulé de récit « n/4 Libellé » suit l’ordre des jalons, dans les deux langues', () => {
@@ -58,7 +64,10 @@ describe('assert_milestones_same_labels : une seule définition des quatre jalon
 
   test('journaux : l’entrée « milestone » d’un run porte la clé et l’intitulé du noyau (écrite par le worker, lue dans run_logs par apps/worker/src/exec/investigation.integration.test.ts)', () => {
     for (const key of core.INVESTIGATION_MILESTONES) {
-      expect(core.milestoneLogEntry(key)).toEqual({ milestone: key, heading: core.milestoneHeading(key, 'en'), labels: { en: core.MILESTONE_LABELS.en[key], fr: core.MILESTONE_LABELS.fr[key] } });
+      // Journaux en anglais et en codes (21 § 4.7, 21b M10 `assert_logs_english_codes`) : clé et intitulé anglais seulement,
+      // aucun libellé d'une autre langue.
+      expect(core.milestoneLogEntry(key)).toEqual({ milestone: key, heading: core.milestoneHeading(key, 'en') });
+      expect(JSON.stringify(core.milestoneLogEntry(key))).not.toContain(fr.investigation.milestones[key]);
     }
   });
 

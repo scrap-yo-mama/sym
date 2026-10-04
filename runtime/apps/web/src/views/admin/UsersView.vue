@@ -18,6 +18,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { useSession } from '@/composables/useSession';
+import { LANGUAGE_CHOICES, normalizeLocale } from '@/i18n';
 import { useUsers, type AccountUser, type Invitation } from '@/composables/useUsers';
 import { selectClass } from '@/lib/classes';
 import { readFieldValue, takeFieldValue } from '@/lib/form-field';
@@ -40,11 +41,14 @@ const actionsOf = (user: AccountUser): UserAction[] => (viewer.value ? actionsFo
 // --- Invitation -------------------------------------------------------------------------------------------------------
 const inviteEmail = ref('');
 const inviteRole = ref<'member' | 'admin'>('member');
+// Langue de l'e-mail d'invitation (21b § 1) : celle de l'invitant par défaut, modifiable ; aperçu en clair de la langue choisie.
+const inviteLocale = ref<string>(normalizeLocale(me.value?.locale));
+const inviteLanguage = computed(() => LANGUAGE_CHOICES.find((choice) => choice.code === inviteLocale.value)?.endonym ?? inviteLocale.value);
 async function invite(event: Event): Promise<void> {
   const form = event.currentTarget instanceof HTMLFormElement ? event.currentTarget : null;
   const email = readFieldValue(form, 'email', inviteEmail.value).trim();
   if (email === '') return;
-  if (await users.invite(email, inviteRole.value)) inviteEmail.value = '';
+  if (await users.invite(email, inviteRole.value, inviteLocale.value)) inviteEmail.value = '';
 }
 
 function invitationState(invitation: Invitation): 'accepted' | 'revoked' | 'expired' | 'pending' {
@@ -180,6 +184,13 @@ function startTransfer(event: Event): void {
           <option value="member">{{ t('users.roles.member') }}</option>
           <option v-if="can('users:set_role')" value="admin">{{ t('users.roles.admin') }}</option>
         </select>
+      </div>
+      <div class="flex flex-col gap-1">
+        <Label for="invite-locale">{{ t('users.invite.locale') }}</Label>
+        <select id="invite-locale" v-model="inviteLocale" name="locale" class="max-w-48" :class="selectClass" aria-describedby="invite-locale-preview" data-testid="invite-locale">
+          <option v-for="choice in LANGUAGE_CHOICES" :key="choice.code" :value="choice.code" :lang="choice.code">{{ choice.endonym }}</option>
+        </select>
+        <p id="invite-locale-preview" class="text-sm text-muted-foreground" data-testid="invite-locale-preview">{{ t('users.invite.localePreview', { language: inviteLanguage }) }}</p>
       </div>
       <div><Button type="submit" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="busy">{{ busy ? t('users.invite.submitting') : t('users.invite.submit') }}</Button></div>
     </form>

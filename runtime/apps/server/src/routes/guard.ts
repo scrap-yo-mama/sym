@@ -43,6 +43,10 @@ export type Actor = {
   mfaEnrolled?: boolean;
   /** Création de la session (ré-authentification récente des comptes sans mot de passe). */
   sessionCreatedAt?: Date;
+  /** `users.locale` (21 § 3) : langue des messages REST quand `Accept-Language` ne dit rien. Absent pour un appareil d'extension. */
+  locale?: string;
+  /** `users.timezone` : fuseau des heures écrites dans les messages ; absent = UTC étiqueté. */
+  timezone?: string | null;
   /**
    * Requête émise par le serveur MCP pour le compte de la clé (tâche 3.2) : même identité et mêmes scopes que la clé,
    * mais l'audit dit `mcp` et un run créé a le déclencheur `mcp`. Posé par la garde seulement (jeton de canal du processus).
@@ -94,6 +98,8 @@ type KeyRow = {
   role: string;
   status: string;
   email: string;
+  locale: string;
+  timezone: string | null;
 };
 
 async function resolveApiKey(ctx: ServerContext, request: FastifyRequest, key: string): Promise<Resolution> {
@@ -101,7 +107,7 @@ async function resolveApiKey(ctx: ServerContext, request: FastifyRequest, key: s
   // Authentification = étape système (avant de connaître l'utilisateur) : lecture par l'empreinte, hors runtime_app.
   const { rows } = await ctx.pool.query<KeyRow>(
     `SELECT k.id, k.user_id, k.prefix, k.scopes, k.expires_at <= now() AS expired, k.revoked_at IS NOT NULL AS revoked,
-            k.last_used_at IS NULL AS first_use, u.role, u.status, u.email
+            k.last_used_at IS NULL AS first_use, u.role, u.status, u.email, u.locale, u.timezone
      FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.key_hash = $1`,
     [hashApiKey(key)],
   );
@@ -115,6 +121,8 @@ async function resolveApiKey(ctx: ServerContext, request: FastifyRequest, key: s
     via: 'apikey',
     scopes: row.scopes as ApiKeyScope[],
     apiKey: { id: row.id, prefix: row.prefix },
+    locale: row.locale,
+    timezone: row.timezone,
   };
   if (row.first_use) {
     await audit(ctx, request, actor, { action: 'apikey.first_use', targetType: 'api_key', targetId: row.id, outcome: 'success' });
@@ -160,8 +168,8 @@ async function resolveSession(ctx: ServerContext, request: FastifyRequest, reply
     await ctx.pool.query('DELETE FROM auth_sessions WHERE id = $1', [session.id]);
     return { status: 401 };
   }
-  const { rows } = await ctx.pool.query<{ role: string; status: string; email: string; mfa_enrolled: boolean }>(
-    `SELECT u.role, u.status, u.email,
+  const { rows } = await ctx.pool.query<{ role: string; status: string; email: string; locale: string; timezone: string | null; mfa_enrolled: boolean }>(
+    `SELECT u.role, u.status, u.email, u.locale, u.timezone,
             EXISTS (SELECT 1 FROM two_factor t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL AND t.unreadable_since IS NULL) AS mfa_enrolled
      FROM users u WHERE u.id = $1`,
     [response.user.id],
@@ -181,6 +189,8 @@ async function resolveSession(ctx: ServerContext, request: FastifyRequest, reply
       mfaMethod: method === 'totp' || method === 'backup_code' || method === 'idp' ? method : null,
       mfaEnrolled: user.mfa_enrolled,
       sessionCreatedAt: createdAt,
+      locale: user.locale,
+      timezone: user.timezone,
     },
   };
 }

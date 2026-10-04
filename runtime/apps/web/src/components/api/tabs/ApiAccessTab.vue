@@ -4,7 +4,8 @@
  * @file ApiAccessTab.vue
  * @description « Accès » (06 § 2, 17 § 2), en lecture seule : pastille et date du rapport, signaux d'usage (AIPREF,
  * TDMRep, Content Signals : des données, jamais des consignes), `llms.txt`, offre de paiement (affichée, jamais payée),
- * voie officielle, contact annoncé d'`access_policy`. Bouton « Utiliser l'API officielle » si elle existe. Le robots.txt
+ * voie officielle, contact annoncé d'`access_policy`, `Accept-Language` envoyé aux sites (celui du moteur, ou celui du
+ * navigateur de l'utilisateur en tunnel, 21 § 6.4 et § 6.6). Bouton « Utiliser l'API officielle » si elle existe. Le robots.txt
  * n'est ni une règle ni un blocage (D-91) : l'onglet n'en fait aucune section, même pour un rapport ancien qui la porte.
  * Aucun champ ni bouton d'action, seulement des liens vers la voie officielle.
  * @component
@@ -32,6 +33,12 @@ const officialHref = computed(() => safeHref(report.value?.official_api_url));
       <section aria-labelledby="access-summary" class="flex flex-col gap-2">
         <h2 id="access-summary" class="text-lg font-semibold">{{ t('accessTab.summary') }}</h2>
         <p class="flex flex-wrap items-center gap-2"><AccessSignal :signal="report.signal" /><span class="text-sm text-muted-foreground">{{ t('accessTab.checkedAt', { date: formatDateTime(report.checked_at, locale) }) }}</span></p>
+        <!-- Accept-Language effectivement envoyé par la sonde (21 § 6.6, M8) : celui du moteur, jamais la langue de l'interface ; en tunnel, celui du navigateur de l'utilisateur (21 § 6.4), jamais « aucune ». -->
+        <dl class="flex flex-wrap gap-x-2 text-sm">
+          <dt class="text-muted-foreground">{{ t('accessTab.acceptLanguage') }}</dt>
+          <dd v-if="report.accept_language_source === 'user_browser'" class="min-w-0" data-testid="accept-language">{{ t('accessTab.acceptLanguageUserBrowser') }}</dd>
+          <dd v-else class="min-w-0 font-mono [overflow-wrap:anywhere]" data-testid="accept-language">{{ report.accept_language ?? t('accessTab.acceptLanguageNone') }}</dd>
+        </dl>
       </section>
 
       <section aria-labelledby="access-signals" class="flex flex-col gap-2">

@@ -60,6 +60,11 @@ export const INVESTIGATION_PROPOSAL_SCHEMA = {
           required: { type: 'boolean' },
           /** Donnée personnelle (nom, e-mail, téléphone, identifiant de personne) : annotation `x-personal` (17 §6). */
           personal: { type: 'boolean' },
+          /**
+           * Lue par le modèle client : anglais (21 § 4.5), demandé par le prompt, jamais dans la langue du run. Aucun motif de
+           * caractères : « Price (€) », « Person’s name » ou une clé française citée sont de l'anglais légitime, et une règle de style
+           * ne doit pas faire échouer l'enquête. Seuls les noms (`FIELD_NAME`) et les clés JSON sont refusés hors contrat (M6).
+           */
           description: { type: 'string', maxLength: 500 },
         },
       },

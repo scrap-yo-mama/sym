@@ -101,7 +101,7 @@ describe('assert_responsible_use_ack_pending : 17 § 11, critères 2 et 3 de la 
   });
 
   test('la confirmation d\'un site à compte (console, 3.5) cite conditions, RGPD et responsabilité, dans chaque langue', () => {
-    const warning = (locale: string): string => (JSON.parse(read(`apps/web/src/i18n/locales/${locale}.json`)) as { newApi: { account: { warning: string } } }).newApi.account.warning;
+    const warning = (locale: string): string => (JSON.parse(read(`packages/i18n/locales/${locale}.json`)) as { newApi: { account: { warning: string } } }).newApi.account.warning;
     expect(warning('fr')).toMatch(/conditions d'utilisation/);
     expect(warning('fr')).toMatch(/RGPD/);
     expect(warning('fr')).toMatch(/responsable/);

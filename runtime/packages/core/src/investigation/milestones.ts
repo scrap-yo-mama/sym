@@ -4,7 +4,9 @@
 // journaux : `assert_milestones_same_labels` (I1). La console garde ses libellés dans ses catalogues (`investigation.milestones.*`)
 // et un test les compare à ce fichier ; le récit MCP (3.19) le lira ; le worker écrit chaque jalon atteint dans `run_logs` par `milestoneLogEntry`. « Décrire » n'est pas un
 // sous-état serveur : il précède l'enquête (`investigation_phase` nul) et se termine quand `create_api` a rendu l'`api_id`.
-// Fonctions pures, sans I/O ; aucun libellé n'est un texte généré (les phrases de voix sont celles de la tâche 3.19).
+// Aucun libellé n'est un texte généré (les phrases de voix sont celles de la tâche 3.19). Les libellés sont ceux du catalogue
+// commun (`investigation.milestones.*` de packages/i18n, 3.20) : une langue ajoutée au registre n'exige aucun code (21b M14).
+import { defaultI18n } from '@runtime/i18n';
 
 /** Clés des jalons, dans l'ordre de l'enquête. */
 export const INVESTIGATION_MILESTONES = ['describe', 'reconnaissance', 'schema', 'trials'] as const;
@@ -24,13 +26,13 @@ export const MILESTONE_OF_PHASE: Readonly<Record<Exclude<MilestonePhase, 'done'>
   testing: 'trials',
 });
 
-export type MilestoneLocale = 'en' | 'fr';
+/** Code de langue du registre (`@runtime/i18n`) ; une langue inconnue retombe sur `en` (repli du rendu). */
+export type MilestoneLocale = string;
 
-/** Libellés des jalons par langue (21 : tutoiement, voix de la console ; transcréation de `en`). */
-export const MILESTONE_LABELS: Readonly<Record<MilestoneLocale, Readonly<Record<InvestigationMilestone, string>>>> = Object.freeze({
-  en: Object.freeze({ describe: 'Describe', reconnaissance: 'Explore', schema: 'Validate the schema', trials: 'Try' }),
-  fr: Object.freeze({ describe: 'Décrire', reconnaissance: 'Reconnaître', schema: 'Valider le schéma', trials: 'Essayer' }),
-});
+/** Libellé d'un jalon dans une langue, lu dans le catalogue commun : le même que la frise de la console. */
+export function milestoneLabel(key: InvestigationMilestone, locale: MilestoneLocale): string {
+  return defaultI18n().renderer.render(`investigation.milestones.${key}`, {}, locale);
+}
 
 /** État d'un jalon dans la frise : en texte, jamais par la couleur seule. `stopped` : arrêt volontaire ou enquête arrêtée. */
 export type MilestoneState = 'todo' | 'current' | 'done' | 'stopped';
@@ -59,16 +61,19 @@ export function milestoneStates(input: { phase: MilestonePhase | null; created: 
 
 /** Ligne de récit d'un jalon : « 1/4 Décrire ». Le résultat (`… {résultat}`) est ajouté par l'appelant (voix de 3.19). */
 export function milestoneHeading(key: InvestigationMilestone, locale: MilestoneLocale): string {
-  return `${INVESTIGATION_MILESTONES.indexOf(key) + 1}/${INVESTIGATION_MILESTONES.length} ${MILESTONE_LABELS[locale][key]}`;
+  return `${INVESTIGATION_MILESTONES.indexOf(key) + 1}/${INVESTIGATION_MILESTONES.length} ${milestoneLabel(key, locale)}`;
 }
 
-/** Entrée de journal d'un jalon atteint (`run_logs`, événement `milestone`) : clé, intitulé de récit et libellés du noyau. */
-export type MilestoneLogEntry = { milestone: InvestigationMilestone; heading: string; labels: Record<MilestoneLocale, string> };
+/**
+ * Entrée de journal d'un jalon atteint (`run_logs`, événement `milestone`) : clé et intitulé de récit en anglais. Les journaux
+ * portent des codes, en anglais, jamais un texte d'une autre langue du catalogue (21 § 4.7, 21b M10).
+ */
+export type MilestoneLogEntry = { milestone: InvestigationMilestone; heading: string };
 
 /**
  * Ce que le worker écrit dans les journaux quand une enquête atteint un jalon : la même clé, le même intitulé (« 2/4 Explore »,
  * en anglais : langue des journaux) et les mêmes libellés que la frise de la console et le récit MCP.
  */
 export function milestoneLogEntry(key: InvestigationMilestone): MilestoneLogEntry {
-  return { milestone: key, heading: milestoneHeading(key, 'en'), labels: { en: MILESTONE_LABELS.en[key], fr: MILESTONE_LABELS.fr[key] } };
+  return { milestone: key, heading: milestoneHeading(key, 'en') };
 }

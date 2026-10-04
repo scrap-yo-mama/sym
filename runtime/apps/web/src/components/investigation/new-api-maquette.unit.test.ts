@@ -7,8 +7,8 @@
 // coût dans le bouton (« · ~{max} »), cartes élaguées et branche « Arrêt volontaire », icône SVG au lieu de l'emoji (20 § 1.4 e).
 // La comparaison visuelle côte à côte est e2e/maquette-fidelity.e2e.ts.
 import { describe, expect, test } from 'vitest';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { emptyInvestigation, trialCards, type InvestigationState } from '@/lib/investigation';
 import { view as render } from '@/testing/console.testkit';
 import { textOf } from '@/testing/console-fixtures';

@@ -82,7 +82,7 @@ function serverMessages(): { where: string; text: string }[] {
   return files.flatMap((file) => messagesOf(readFileSync(file, 'utf8')).map((text) => ({ where: relative(root, file), text })));
 }
 
-const localesDir = join(root, 'apps/web/src/i18n/locales');
+const localesDir = join(root, 'packages/i18n/locales');
 const locales = Object.fromEntries(['en', 'fr'].map((code) => [code, flatten(JSON.parse(readFileSync(join(localesDir, `${code}.json`), 'utf8')) as Tree)]));
 
 describe('assert_ui_strings_no_forbidden_words', () => {

@@ -73,6 +73,11 @@
         },
         {
           "type": "json",
+          "path": "packages/i18n/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
           "path": "packages/llm/package.json",
           "jsonpath": "$.version"
         },

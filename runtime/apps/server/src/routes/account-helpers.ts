@@ -237,12 +237,12 @@ export async function smtpConfigured(ctx: ServerContext): Promise<boolean> {
   return rowCount === 1;
 }
 
-export async function sendAccountMail(ctx: ServerContext, request: FastifyRequest, to: string, subject: string, text: string): Promise<MailOutcome> {
+export async function sendAccountMail(ctx: ServerContext, request: FastifyRequest, to: string, message: { subject: string; text: string; html?: string; lang?: string }): Promise<MailOutcome> {
   if (!ctx.secrets) return 'not_configured';
   const config = await loadSmtpConfig(ctx.pool, ctx.secrets);
   if (!config) return 'not_configured';
   try {
-    await sendMail({ ...config, ...(ctx.extraCa ? { ca: ctx.extraCa } : {}) }, { to: [to], subject, text }, { guard: ctx.guard });
+    await sendMail({ ...config, ...(ctx.extraCa ? { ca: ctx.extraCa } : {}) }, { to: [to], subject: message.subject, text: message.text, ...(message.html === undefined ? {} : { html: message.html }), ...(message.lang === undefined ? {} : { lang: message.lang }) }, { guard: ctx.guard });
     return 'sent';
   } catch (error) {
     // Ni adresse ni contenu dans le journal : la classe d'échec seulement.
@@ -304,8 +304,8 @@ export async function meView(
   ctx: Pick<ServerContext, 'pool' | 'mfaEnforced'>,
   who: { userId: string; email: string; role: Role; via: 'ui' | 'apikey' | 'extension'; scopes: string[] | null; mfaMethod?: MfaMethod | null },
 ) {
-  const { rows } = await ctx.pool.query<{ display_name: string; locale: string; theme: string; mfa_enabled: boolean }>(
-    `SELECT u.display_name, u.locale, u.theme,
+  const { rows } = await ctx.pool.query<{ display_name: string; locale: string; timezone: string | null; timezone_initialized: boolean; theme: string; mfa_enabled: boolean }>(
+    `SELECT u.display_name, u.locale, u.timezone, u.timezone_initialized, u.theme,
             EXISTS (SELECT 1 FROM two_factor t WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL AND t.unreadable_since IS NULL) AS mfa_enabled
      FROM users u WHERE u.id = $1`,
     [who.userId],
@@ -318,6 +318,8 @@ export async function meView(
     displayName: row?.display_name ?? '',
     role: who.role,
     locale: row?.locale ?? 'en',
+    timezone: row?.timezone ?? null,
+    timezoneInitialized: row?.timezone_initialized === true,
     theme: row?.theme ?? 'system',
     via: who.via,
     scopes: who.scopes,

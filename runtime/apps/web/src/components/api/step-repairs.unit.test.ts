@@ -14,8 +14,9 @@ import ApiOverviewTab from '@/components/api/tabs/ApiOverviewTab.vue';
 import { useApiRuns } from '@/composables/useApiRuns';
 import { useInstructedMode } from '@/composables/useInstructedMode';
 import { loadSession, resetSession } from '@/composables/useSession';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import { fmtUsd } from '@runtime/i18n/browser';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { setApi } from '@/lib/api';
 import { isStepReasonCode, STEP_REASON_ACTIONS, STEP_REASON_CODES } from '@/lib/reasons';
 import { instructedOffered, patchLines, stepAttempts } from '@/lib/step-repairs';
@@ -117,8 +118,8 @@ const instructed = (overrides: Partial<Schemas['InstructedSteps']> = {}): Schema
   ...overrides,
 });
 
-const usd = (value: number, locale: 'fr' | 'en' = 'fr', estimated = false): string =>
-  `${estimated ? '~' : ''}${new Intl.NumberFormat(locale, { minimumFractionDigits: 0, maximumFractionDigits: 4 }).format(value)} $`;
+// Montants au format de 3.20 (fmtUsd de @runtime/i18n, Intl « currency » USD, comparé à Intl dans packages/i18n) : « 0,02 $ », « $0.04 » ; espaces normalisés comme textOf.
+const usd = (value: number, locale: 'fr' | 'en' = 'fr', estimated = false): string => `${estimated ? '~' : ''}${fmtUsd(value, locale)}`.replace(/\s+/g, ' ');
 
 async function signIn(routes: Parameters<typeof installApi>[0] = {}): Promise<string[]> {
   const seen = installApi({

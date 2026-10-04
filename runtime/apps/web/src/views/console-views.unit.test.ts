@@ -5,7 +5,7 @@ import { describe, expect, test } from 'vitest';
 import { createMemoryHistory } from 'vue-router';
 import ApiCatalogView from '@/views/ApiCatalogView.vue';
 import { createAppRouter } from '@/router/index';
-import fr from '@/i18n/locales/fr.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { renderHtml, textOf } from '@/testing/console-fixtures';
 
 describe('catalogue', () => {

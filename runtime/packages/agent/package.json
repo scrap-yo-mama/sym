@@ -22,6 +22,7 @@
   "dependencies": {
     "@browserbasehq/stagehand": "catalog:",
     "@runtime/core": "workspace:*",
+    "@runtime/i18n": "workspace:*",
     "@runtime/llm": "workspace:*",
     "playwright-core": "catalog:",
     "zod": "catalog:"

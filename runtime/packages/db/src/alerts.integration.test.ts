@@ -175,11 +175,11 @@ describe('alertes actionnables', () => {
     expect(smtp.mails).toHaveLength(1);
     const mail = smtp.mails[0]!;
     expect(mail.to).toEqual(['admin@example.zz-test']);
-    expect(mail.headers['subject']).toBe('[Scrapyomama] zz_test_annonces : needs attention (error)');
-    expect(mail.text).toContain('API : zz_test_annonces');
-    expect(mail.text).toContain(`Run : ${run}`);
-    expect(mail.text).toContain('Failure class : extraction');
-    expect(mail.text).toContain('Console : https://runtime.example/apis/zz_test_annonces');
+    expect(mail.headers['subject']).toBe('[Scrapyomama] zz_test_annonces: needs attention (error)');
+    expect(mail.text).toContain('API: zz_test_annonces');
+    expect(mail.text).toContain(`Run: ${run}`);
+    expect(mail.text).toContain('Failure class: extraction');
+    expect(mail.text).toContain('Console: https://runtime.example/apis/zz_test_annonces');
     expect(mail.text).toMatch(/repair_budget_exhausted/);
 
     // Un run dégradé isolé (sain → warning) n'alerte pas.
@@ -202,12 +202,12 @@ describe('alertes actionnables', () => {
     await pool.query("UPDATE runs SET created_at = now() + interval '1 minute' WHERE id = $1", [later]);
     await sendAlertEmail(ctx(), { api_id: id, cause: 'status_erreur', since: NOW.toISOString() });
     const text = smtp.mails.at(-1)!.text;
-    expect(text).toContain(`Run : ${cause}`);
-    expect(text).toContain('Failure class : extraction');
+    expect(text).toContain(`Run: ${cause}`);
+    expect(text).toContain('Failure class: extraction');
     expect(text).not.toContain(later);
     // Échec de run planifié : le run porté par le job, même si un autre run est plus récent.
     await sendAlertEmail(ctx(), { api_id: id, cause: 'run_failed', since: NOW.toISOString(), run_id: cause });
-    expect(smtp.mails.at(-1)!.text).toContain(`Run : ${cause}`);
+    expect(smtp.mails.at(-1)!.text).toContain(`Run: ${cause}`);
     expect(smtp.mails.at(-1)!.text).not.toContain(later);
   });
 
@@ -239,7 +239,7 @@ describe('alertes actionnables', () => {
 
     await sendAlertEmail(ctx(), { api_id: id, cause: 'status_erreur', since: t0.toISOString() });
     expect(smtp.mails).toHaveLength(1);
-    expect(smtp.mails[0]!.text).toContain('Transitions : 2');
+    expect(smtp.mails[0]!.text).toContain('Transitions: 2');
     // Une autre API et une autre cause ont leur propre alerte.
     const other = await api('reparation');
     expect((await transition(other, { type: 'repair_failed', cause: 'budget_exhausted' }, t0)).alerts).toBe(1);
@@ -304,7 +304,7 @@ describe('alertes actionnables', () => {
       const jobs = await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM pgboss.job WHERE name = $1 AND data->>'api_id' = $2", [ALERT_QUEUE, id]);
       expect(jobs.rows[0]!.n).toBe(1);
       expect(mine()).toHaveLength(1);
-      expect(mine()[0]!.text).toContain('Transitions : 2');
+      expect(mine()[0]!.text).toContain('Transitions: 2');
     } finally {
       await q.stop({ timeoutMs: 1000 }).catch(() => undefined);
     }
@@ -392,7 +392,7 @@ describe('warning au-delà de D', () => {
     expect(await checkLongWarnings({ pool, queue, now: () => new Date(NOW.getTime() + 9 * DAY) })).toEqual([]);
     const sent = await sendAlertEmail(ctx(), { api_id: id, cause: 'warning_stale', since: NOW.toISOString() });
     expect(sent.sent).toBe(true);
-    expect(smtp.mails[0]!.headers['subject']).toBe('[Scrapyomama] zz_test_warning : warning for too long');
+    expect(smtp.mails[0]!.headers['subject']).toBe('[Scrapyomama] zz_test_warning: warning for too long');
     expect(smtp.mails[0]!.text).toContain('In warning since');
   });
 

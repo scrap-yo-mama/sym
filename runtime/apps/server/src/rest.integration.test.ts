@@ -785,10 +785,19 @@ describe('assert_rest_error_codes : runs et codes de 05 § 4.3', () => {
   test('accès croisé → 404 identique à une ressource inexistante (run, dataset, API)', async () => {
     const api1 = await seedApi(srv.db.url, a.user.id);
     const run = await seedRun(srv.db.url, { apiId: api1.id, ownerId: a.user.id, items: [{ title: 'zz_test_secret_item' }] });
-    for (const [url, template] of [[`/api/runs/${run.runId}`, '/api/runs/{id}'], [`/api/datasets/${run.datasetId}/items`, '/api/datasets/{id}/items'], [`/api/apis/${api1.slug}`, '/api/apis/{slug}']] as const) {
+    // Le `message` suit la langue résolue (3.20, 21 § 4.4) : on compare au corps d'une ressource qui n'existe pas, octet pour octet.
+    const missing = '00000000-0000-4000-8000-00000000dead';
+    for (const [url, absent, template] of [
+      [`/api/runs/${run.runId}`, `/api/runs/${missing}`, '/api/runs/{id}'],
+      [`/api/datasets/${run.datasetId}/items`, `/api/datasets/${missing}/items`, '/api/datasets/{id}/items'],
+      [`/api/apis/${api1.slug}`, '/api/apis/zz-test-absente-dead00', '/api/apis/{slug}'],
+    ] as const) {
       const res = await api(b, 'GET', url, template);
       expect(res.status, url).toBe(404);
-      expect(res.raw.body).toBe('{"error":{"code":"not_found","message":"ressource introuvable"}}');
+      const none = await api(b, 'GET', absent, template);
+      expect(none.status, absent).toBe(404);
+      expect(res.raw.body).toBe(none.raw.body);
+      expect(JSON.parse(res.raw.body)).toMatchObject({ error: { code: 'not_found' } });
     }
   });
 

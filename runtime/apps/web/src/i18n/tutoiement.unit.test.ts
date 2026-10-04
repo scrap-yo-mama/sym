@@ -4,7 +4,7 @@
 // message envoyé à un site tiers (demande d'accès) s'adresse à quelqu'un d'autre que la personne qui utilise la console :
 // il est listé ici, par clé, et rien d'autre ne l'est.
 import { describe, expect, test } from 'vitest';
-import fr from './locales/fr.json';
+import fr from '@runtime/i18n/locales/fr.json';
 
 type Tree = { [key: string]: string | Tree };
 

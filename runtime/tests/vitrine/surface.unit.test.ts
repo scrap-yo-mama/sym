@@ -388,6 +388,8 @@ describe('registre des allégations : preuve, relecture, statut, CLAIMS.md gén�
     expect(one({ fr: 'Rejoue sans LLM quand la stratégie le permet, répare étape par étape', proof: [repair] })).toMatch(/la reprise par étape sans preuve propre/);
     const steps: ProofContext = { ...context, testCorpus: `${context.testCorpus}\nassert_step_classification_guard` };
     expect(claimProblems({ version: 1, claims: [{ ...base, en: 'Sites that change: it repairs the step that broke', proof: [repair, 'assert_step_classification_guard'] }] }, steps)).toEqual([]);
+    // Forme préfixée « test: » (celle qu'exige le registre de la landing pour toute entrée) : même preuve propre.
+    expect(claimProblems({ version: 1, claims: [{ ...base, en: 'Sites that change: it repairs the step that broke', proof: [repair, 'test:assert_step_patch_bounded'] }] }, steps)).toEqual([]);
   });
 
   test('les preuves propres d’une fonction ne visent que les surfaces du dépôt : celles de la landing relèvent de la porte du GO (4.11, check:landing-go)', () => {

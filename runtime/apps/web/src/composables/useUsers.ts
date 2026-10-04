@@ -53,9 +53,9 @@ export function useUsers() {
 
   const say = (key: string, params: Record<string, string> = {}): void => void (notice.value = { key, params });
 
-  async function invite(email: string, role: InvitableRole): Promise<boolean> {
+  async function invite(email: string, role: InvitableRole, locale?: string): Promise<boolean> {
     const ok = await act(
-      () => call(() => getApi().POST('/api/invitations', { body: { email, role } })),
+      () => call(() => getApi().POST('/api/invitations', { body: { email, role, ...(locale === undefined ? {} : { locale }) } })),
       (created) => {
         oneTimeLink.value = created.link ? { kind: 'invitation', subject: created.email, link: created.link, expiresAt: created.expires_at } : null;
         if (!created.link) say('users.invite.emailed', { email: created.email });

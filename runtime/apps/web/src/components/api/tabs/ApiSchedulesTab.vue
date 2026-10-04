@@ -17,17 +17,20 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { ApiDetail } from '@/composables/useApiDetail';
 import { useSchedules, type ScheduleWrite } from '@/composables/useSchedules';
+import { useSession } from '@/composables/useSession';
 import { describeCron } from '@/lib/cron';
 import { formatDateTime } from '@/lib/display-format';
 
 const props = defineProps<{ slug: string; status: ApiDetail['status'] }>();
 const { t, te, locale } = useI18n();
+const { me } = useSession();
 const schedules = useSchedules(() => props.slug);
 
 /** Reprendre une planification suspendue : jamais sur une API bloquée (aucun bouton de relance, 06 § 2). */
 const canResume = computed(() => props.status !== 'bloquee');
 
-const browserZone = (() => {
+// Fuseau par défaut d'une nouvelle planification : celui du compte (`users.timezone`), sinon celui du navigateur ; jamais déduit de la langue.
+const browserZone = me.value?.timezone ?? (() => {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   } catch {

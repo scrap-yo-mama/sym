@@ -140,8 +140,8 @@ const attemptsOf = async (runId: string) =>
 
 const PRODUCTS_PROPOSAL = {
   fields: [
-    { name: 'sku', type: 'string', required: true, personal: false, description: 'Référence' },
-    { name: 'title', type: 'string', required: true, personal: false, description: 'Titre' },
+    { name: 'sku', type: 'string', required: true, personal: false, description: 'Reference' },
+    { name: 'title', type: 'string', required: true, personal: false, description: 'Title' },
     { name: 'price_cents', type: 'integer', required: true, personal: false, description: 'Prix en centimes' },
   ],
   sources: [
@@ -159,8 +159,8 @@ const PRODUCTS_PROPOSAL = {
 
 const PEOPLE_PROPOSAL = {
   fields: [
-    { name: 'id', type: 'string', required: true, personal: false, description: 'Identifiant' },
-    { name: 'name', type: 'string', required: true, personal: true, description: 'Nom' },
+    { name: 'id', type: 'string', required: true, personal: false, description: 'Identifier' },
+    { name: 'name', type: 'string', required: true, personal: true, description: 'Name' },
     { name: 'email', type: 'string', required: true, personal: true, description: 'E-mail' },
   ],
   sources: [

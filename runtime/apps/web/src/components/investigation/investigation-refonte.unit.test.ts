@@ -4,8 +4,8 @@
 // d'une langue à l'autre. Rendu côté serveur sous Node ; le navigateur réel est dans e2e/catalog-new-api.e2e.ts.
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { emptyInvestigation, ingestEvent, schemaFields, trialCards, type InvestigationState } from '@/lib/investigation';
 import type { SseEvent } from '@/lib/sse';
 import { view as render } from '@/testing/console.testkit';
@@ -55,7 +55,8 @@ describe('assert_schema_gate_before_trials : aucun essai ne démarre avant l’a
     expect(html).toContain('data-testid="schema-gate"');
     expect(html).toContain(messages.investigation.gate.noTrial);
     expect(html).toContain('data-testid="gate-spent"');
-    expect(html).toMatch(locale === 'en' ? /Already spent on the reconnaissance: \$0\.012/ : /Déjà dépensé pour la reconnaissance : 0,012\d*\s\$/u);
+    // Montant au format Intl de 3.20 (assert_intl_formats_by_locale, U2) : 2 décimales à partir de 0,01 $ (0,0123 → 0,01).
+    expect(html).toMatch(locale === 'en' ? /Already spent on the reconnaissance: \$0\.01\./ : /Déjà dépensé pour la reconnaissance : 0,01\s\$\./u);
     expect(html).toContain('data-testid="gate-budget"');
     expect(html).toContain('data-testid="schema-validate"');
     expect(html).toMatch(locale === 'en' ? /Validate and start the trials · ~\$0\.50/ : /Valider et lancer les essais · ~0,50\s\$/u);

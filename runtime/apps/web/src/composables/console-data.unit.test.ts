@@ -13,7 +13,7 @@ import { useSchedules } from '@/composables/useSchedules';
 import { useRevertPreview, useStrategyVersions } from '@/composables/useStrategyVersions';
 import { groupFailures } from '@/composables/useStatusEvents';
 import ActionRequiredBanner from '@/components/api/ActionRequiredBanner.vue';
-import fr from '@/i18n/locales/fr.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { setApi } from '@/lib/api';
 import { EventStreamClient, type SseEvent } from '@/lib/sse';
 import { apiDetail, apiSummary, installApi, json, renderHtml, textOf, UUID } from '@/testing/console-fixtures';

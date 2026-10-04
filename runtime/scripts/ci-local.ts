@@ -12,6 +12,8 @@ const STEPS: Step[] = [
   { job: 'quality', name: 'garde X6 (historique git complet)', cmd: ['node', 'runtime/scripts/check-x6.ts', '--history'], cwd: 'root' },
   { job: 'quality', name: 'typecheck', cmd: ['pnpm', 'typecheck'] },
   { job: 'quality', name: 'lint', cmd: ['pnpm', 'lint'] },
+  // Tâche 3.20 : parité de toutes les surfaces, `keys.d.ts` à jour, pseudo-locale qui garde variables et pluriels.
+  { job: 'quality', name: 'langues : parité, clés typées, pseudo-locale', cmd: ['pnpm', 'i18n:check'] },
   { job: 'quality', name: 'knip', cmd: ['pnpm', 'knip'] },
   { job: 'quality', name: 'invariants', cmd: ['pnpm', 'check:invariants'] },
   { job: 'quality', name: 'deps épinglées', cmd: ['pnpm', 'check:deps-pinned'] },

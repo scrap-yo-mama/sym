@@ -186,7 +186,7 @@ export async function saveAlertSettings(db: Queryable, input: Partial<AlertSetti
   const settings: AlertSettings = {
     to: [...input.to],
     window_seconds: window,
-    locale: input.locale === 'fr' ? 'fr' : 'en',
+    locale: typeof input.locale === 'string' && /^[a-z]{2,3}$/.test(input.locale) ? input.locale : 'en',
     base_url: input.base_url ?? null,
     webhook_subscription_id: input.webhook_subscription_id ?? null,
   };
@@ -370,7 +370,7 @@ export async function sendAlertEmail(ctx: AlertContext, job: AlertJob): Promise<
   };
   const message = renderAlertEmail(digest, settings.locale);
   try {
-    await sendMail({ ...config, ...(ctx.smtpCa ? { ca: ctx.smtpCa } : {}) }, { to: settings.to, subject: message.subject, text: message.text }, { guard: ctx.guard });
+    await sendMail({ ...config, ...(ctx.smtpCa ? { ca: ctx.smtpCa } : {}) }, { to: settings.to, subject: message.subject, text: message.text, html: message.html, lang: message.lang }, { guard: ctx.guard });
   } catch (error) {
     const code = error instanceof SmtpError ? error.code : (error as { code?: unknown } | null)?.code === 'ssrf_blocked' ? 'ssrf_blocked' : null;
     if (code !== null && FINAL_SMTP_FAILURES.has(code)) return { sent: false, reason: code };

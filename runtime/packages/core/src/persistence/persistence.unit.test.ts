@@ -186,9 +186,9 @@ describe('assert_persistence_schedule_and_caps', () => {
 
 describe('récit et interrupteur (narrative.persistence.*, 19b §3, 20b §3.5)', () => {
   test('gabarits en et fr, mêmes clés, rendus à la lecture', () => {
-    for (const locale of ['en', 'fr'] as const) expect(Object.keys(PERSISTENCE_NARRATIVE[locale]).sort()).toEqual([...PERSISTENCE_NARRATIVE_KEYS].sort());
+    for (const locale of ['en', 'fr'] as const) expect(Object.keys(PERSISTENCE_NARRATIVE[locale]!).sort()).toEqual([...PERSISTENCE_NARRATIVE_KEYS].sort());
     expect(renderPersistenceNarrative('fr', 'narrative.persistence.recovered', { api: 'zz_test_api' })).toContain('zz_test_api');
-    expect(renderPersistenceNarrative('fr', 'narrative.persistence.recovered', { api: 'zz_test_api' })).toBe('SYM 👻 : Je n’ai pas lâché : zz_test_api est de nouveau saine.');
+    expect(renderPersistenceNarrative('fr', 'narrative.persistence.recovered', { api: 'zz_test_api' })).toBe('SYM 👻\u00a0: Je n’ai pas lâché : zz_test_api est de nouveau saine.');
     expect(renderPersistenceNarrative('en', 'narrative.persistence.stopped', { reason: 'refused' })).toContain('the site said no');
   });
 
@@ -196,19 +196,19 @@ describe('récit et interrupteur (narrative.persistence.*, 19b §3, 20b §3.5)',
     const now = new Date('2026-10-02T14:00:00Z');
     const paris = { now, timeZone: 'Europe/Paris' };
     // Demain 09:10 à Paris (UTC+2 en octobre).
-    expect(renderPersistenceNarrative('fr', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-03T07:10:00Z'), ...paris })).toBe('SYM 👻 : Toujours en erreur. Je réessaie demain à 09:10.');
+    expect(renderPersistenceNarrative('fr', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-03T07:10:00Z'), ...paris })).toBe('SYM 👻\u00a0: Toujours en erreur. Je réessaie demain à 09:10.');
     expect(renderPersistenceNarrative('en', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-03T07:10:00Z'), ...paris })).toBe('SYM 👻: Still in error. I will try again tomorrow at 09:10.');
-    expect(renderPersistenceNarrative('fr', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-02T15:30:00Z'), ...paris })).toBe('SYM 👻 : Toujours en erreur. Je réessaie aujourd’hui à 17:30.');
+    expect(renderPersistenceNarrative('fr', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-02T15:30:00Z'), ...paris })).toBe('SYM 👻\u00a0: Toujours en erreur. Je réessaie aujourd’hui à 17:30.');
     // Au-delà de demain : la date courte, dans la langue du compte.
-    expect(renderPersistenceNarrative('fr', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-05T07:10:00Z'), ...paris })).toBe('SYM 👻 : Toujours en erreur. Je réessaie le 05/10 à 09:10.');
+    expect(renderPersistenceNarrative('fr', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-05T07:10:00Z'), ...paris })).toBe('SYM 👻\u00a0: Toujours en erreur. Je réessaie le 05/10 à 09:10.');
     expect(renderPersistenceNarrative('en', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-05T07:10:00Z'), ...paris })).toBe('SYM 👻: Still in error. I will try again on 10/05 at 09:10.');
     // Le jour relatif suit le fuseau du lecteur, pas UTC : 23:30 UTC le 2 est déjà le 3 à Paris.
-    expect(renderPersistenceNarrative('fr', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-02T23:30:00Z'), ...paris })).toBe('SYM 👻 : Toujours en erreur. Je réessaie demain à 01:30.');
+    expect(renderPersistenceNarrative('fr', 'narrative.persistence.attempt', { nextAt: new Date('2026-10-02T23:30:00Z'), ...paris })).toBe('SYM 👻\u00a0: Toujours en erreur. Je réessaie demain à 01:30.');
   });
 
   test('l’interrupteur dit ce qu’il ne fait pas : jamais après un refus, un défi ou une connexion requise', () => {
-    expect(PERSISTENCE_SWITCH_COPY.fr.help).toBe('Réessayer seul quand l’API est en erreur. Jamais après un refus, un défi ou une connexion requise.');
-    expect(PERSISTENCE_SWITCH_COPY.en.help).toMatch(/Never after a refusal, a challenge or a required login\./);
+    expect(PERSISTENCE_SWITCH_COPY.fr!.help).toBe('Réessayer seul quand l’API est en erreur. Jamais après un refus, un défi ou une connexion requise.');
+    expect(PERSISTENCE_SWITCH_COPY.en!.help).toMatch(/Never after a refusal, a challenge or a required login\./);
   });
 
   test('corpus du mode : aucune promesse de contournement ni idiome d’invisibilité (garde d’assert_brand_copy_no_bypass_promise)', () => {

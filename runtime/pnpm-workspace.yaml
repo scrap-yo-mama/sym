@@ -60,6 +60,8 @@ catalog:
   vue-router: 5.3.1
   vue-tsc: 3.3.11
   vue-i18n: 11.4.12
+  # Paquet de langues commun (tâche 3.20, 21 § 2) : @intlify/core-base est déjà dans l'arbre (dépendance de vue-i18n), même version exacte ; MIT.
+  '@intlify/core-base': 11.4.12
   tailwindcss: 4.3.3
   '@tailwindcss/vite': 4.3.3
   reka-ui: 2.10.5
@@ -79,6 +81,8 @@ catalog:
   # Lint des composants .vue (tâche 3.3).
   eslint-plugin-vue: 10.11.0
   vue-eslint-parser: 10.4.1
+  # Lint des messages et des gabarits vue-i18n (tâche 3.20, 21 § 9) : MIT, 4.5.1 publiée le 2026-06-02 (plus de 7 jours), pair ESLint ^10.
+  '@intlify/eslint-plugin-vue-i18n': 4.5.1
   # Webhooks (tâche 2.5) : bibliothèque de référence Standard Webhooks, devDependency d'oracle de test (08 § 7 : « la signature v1
   # se vérifie avec la bibliothèque de référence »). MIT ; 1.1.1 publiée le 2026-08-28.
   standardwebhooks: 1.1.1

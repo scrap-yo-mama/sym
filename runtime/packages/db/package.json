@@ -22,9 +22,10 @@
   },
   "dependencies": {
     "@runtime/core": "workspace:*",
+    "@runtime/i18n": "workspace:*",
     "drizzle-orm": "catalog:",
-    "pg-boss": "catalog:",
-    "pg": "catalog:"
+    "pg": "catalog:",
+    "pg-boss": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

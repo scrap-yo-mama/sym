@@ -5,6 +5,7 @@
 // (taille d'une entrée, nombre d'entrées par run) bornent la table.
 import { maskPersonal, maskPersonalText, secretValues, type PersonalValueRegistry, type SecretValueRegistry } from '@runtime/core';
 import type pg from 'pg';
+import { assertCodesOnly, scrubRenderedSentences, type RenderedSentenceMode } from './codes-only.js';
 
 export type RunLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 export type RunLogEntry = { runId: string; seq: number; ownerId: string; level: RunLogLevel; event: string; data?: unknown };
@@ -33,7 +34,18 @@ export async function appendRunLog(
   personal: PersonalValueRegistry,
   registry: SecretValueRegistry = secretValues,
   limits: Pick<RunLogLimits, 'maxDataBytes'> = RUN_LOG_LIMITS,
+  onRenderedSentence: RenderedSentenceMode = 'throw',
 ): Promise<void> {
+  // Journaux : code stable en anglais et paramètres, jamais une phrase destinée à l'utilisateur (21b M10, `assert_logs_english_codes`).
+  // `scrub` (journal d'un run, `createRunLogger`) : une phrase du catalogue venue d'un tiers est remplacée par un code et les chemins
+  // refusés sont ajoutés à `data.codes_only_refused` ; l'entrée est écrite, rien n'est levé.
+  if (onRenderedSentence === 'scrub') {
+    const { payload, paths } = scrubRenderedSentences({ event: entry.event, data: entry.data });
+    if (paths.length > 0) {
+      const data = typeof payload.data === 'object' && payload.data !== null && !Array.isArray(payload.data) ? payload.data : payload.data === undefined ? {} : { data: payload.data };
+      entry = { ...entry, event: payload.event, data: { ...data, codes_only_refused: paths } };
+    }
+  } else assertCodesOnly('run_logs', { event: entry.event, data: entry.data });
   await db.query('INSERT INTO run_logs (run_id, seq, owner_id, level, event, data) VALUES ($1, $2, $3, $4, $5, $6::jsonb)', [
     entry.runId,
     entry.seq,
@@ -68,7 +80,7 @@ export async function createRunLogger(
   let dropped = 0;
   let chain: Promise<void> = Promise.resolve();
   const write = (level: RunLogLevel, event: string, data: unknown) =>
-    appendRunLog(db, { ...ids, seq, level, event, data }, personal, options.registry, limits).catch((error: unknown) => {
+    appendRunLog(db, { ...ids, seq, level, event, data }, personal, options.registry, limits, 'scrub').catch((error: unknown) => {
       dropped += 1;
       options.onError?.(error);
     });

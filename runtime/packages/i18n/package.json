@@ -1,0 +1,48 @@
+{
+  "name": "@runtime/i18n",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Paquet de langues commun (tâche 3.20, 21 et 21b) : catalogues en/fr, registre, résolution de la langue, rendu, formats Intl, pseudo-locale, parité sur toutes les surfaces.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./locales/*.json": "./locales/*.json",
+    "./locales/registry.json": "./locales/registry.json",
+    "./keys": {
+      "types": "./keys.d.ts"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    }
+  },
+  "files": [
+    "dist",
+    "locales",
+    "keys.d.ts"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests",
+    "i18n:parity": "node scripts/parity.ts",
+    "i18n:pseudo": "node scripts/pseudo.ts",
+    "i18n:types": "node scripts/types.ts",
+    "i18n:ext-locales": "node scripts/ext-locales.ts",
+    "i18n:doc-codes": "node scripts/doc-codes.ts"
+  },
+  "dependencies": {
+    "@intlify/core-base": "catalog:",
+    "cronstrue": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

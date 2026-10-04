@@ -66,6 +66,9 @@ export function setupRoutes(app: FastifyInstance, ctx: ServerContext): void {
     }
 
     const passwordHash = await hashPassword(request.body.password);
+    // Langue de l'owner : meilleure correspondance d'`Accept-Language` parmi les langues livrées (sinon `en`), valeur stockée une fois
+    // (21 § 3). `DEFAULT_LOCALE`, si elle est posée, fixe la langue d'instance ; sinon l'instance reprend celle de l'owner.
+    const ownerLocale = localeFromAcceptLanguage(request.headers['accept-language']);
     const client = await ctx.pool.connect();
     let userId: string;
     try {
@@ -73,9 +76,10 @@ export function setupRoutes(app: FastifyInstance, ctx: ServerContext): void {
       const { rows } = await client.query<{ id: string }>(
         `INSERT INTO users (email, display_name, role, status, email_verified, email_verified_at, locale)
          VALUES ($1, $2, 'owner', 'active', true, now(), $3) RETURNING id`,
-        [email, request.body.displayName ?? '', localeFromAcceptLanguage(request.headers['accept-language'])],
+        [email, request.body.displayName ?? '', ownerLocale],
       );
       userId = rows[0]!.id;
+      await client.query("INSERT INTO settings (key, value) VALUES ('default_locale', to_jsonb($1::text)) ON CONFLICT (key) DO NOTHING", [ownerLocale]);
       await client.query(
         "INSERT INTO auth_accounts (user_id, provider_id, account_id, password_hash) VALUES ($1, 'credential', $2, $3)",
         [userId, userId, passwordHash],

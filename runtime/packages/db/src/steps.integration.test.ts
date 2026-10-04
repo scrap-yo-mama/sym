@@ -7,7 +7,7 @@ import { instructedStepsSha256, validateInstructedSteps } from '@runtime/core';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../../tests/helpers/pg.js';
-import { migrateDown, migrateUp } from './migrate.js';
+import { loadMigrations, migrateDown, migrateUp } from './migrate.js';
 import { withActor } from './rls.js';
 import { recordAttempt } from './runs.js';
 import { confirmInstructedSteps, readInstructedState, readStepAttempts, saveStepRepairedStrategy, setInstructedMode } from './steps.js';
@@ -60,11 +60,13 @@ describe('migration 0023 (reprise par étape, agent instruit)', () => {
     await expect(pool.query("UPDATE strategy_versions SET compilable = 'peut-être' WHERE api_id = $1", [api])).rejects.toThrow();
   });
 
-  test('down puis up : 0024 puis 0023 se défont proprement', async () => {
+  test('down puis up : 0025 puis 0023 se défont proprement', async () => {
     const other = await createTestDatabase('steps_down');
     try {
       await migrateUp({ connectionString: other.url });
-      await migrateDown({ connectionString: other.url, steps: 2 });
+      // Jusqu'à step_repair inclus (les migrations suivantes, 0025_i18n de 3.20 comprise, se défont d'abord).
+      const target = loadMigrations().find((m) => m.name === 'step_repair')!.version;
+      await migrateDown({ connectionString: other.url, steps: loadMigrations().filter((m) => m.version >= target).length });
       const c = new pg.Client({ connectionString: other.url });
       await c.connect();
       const { rows } = await c.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'apis' AND column_name = 'instructed_mode'");

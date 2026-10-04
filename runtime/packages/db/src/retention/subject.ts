@@ -22,6 +22,10 @@
 //  - run_artifacts (chiffrés, donc illisibles) : supprimés pour tout run lié au sujet ;
 //  - subject_exclusions : HMAC-SHA256 de chaque valeur normalisée (téléphones en E.164), clé des sujets de l'instance ;
 //  - vérification : balayage SQL brut des tables de contenu (et des charges pg-boss) ; un résidu annule la transaction.
+//  - comptes et invitations (tâche 3.20, 17 § 6, `users.locale`, `users.timezone`, `invitations.locale`) : si la personne visée
+//    est aussi un compte ou une invitation de l'instance (même adresse), l'export (portée instance, ou le compte lui-même)
+//    inclut ces champs ; l'effacement supprime les invitations en attente qui la visent et renvoie vers la suppression du compte
+//    (13 § 6 : `deleteOrAnonymizeUser` efface `users.locale` et `users.timezone`) ; un résidu d'invitation annule tout.
 // Hors outil : les comptes (`users`, `auth_*`) et l'audit, jamais balayés ici (ni compte ni contenu rendu).
 import { createHash } from 'node:crypto';
 import {
@@ -291,6 +295,31 @@ async function relatedRunIds(db: Queryable, req: SubjectRequest, pattern: string
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Comptes et invitations de l'instance visés par le sujet (adresse e-mail identique)
+// ---------------------------------------------------------------------------------------------------------------
+/** Adresses e-mail parmi les valeurs du sujet (normalisées en minuscules). */
+function emailsOf(values: readonly string[]): string[] {
+  return [...new Set(values.map((v) => v.trim().toLowerCase()).filter((v) => /^[^@\s]+@[^@\s]+$/.test(v)))];
+}
+
+export type SubjectAccountData = {
+  /** Compte de l'instance à cette adresse (hors compte supprimé) : langue et fuseau (indice de localisation). */
+  user: { locale: string; timezone: string | null } | null;
+  invitations: { locale: string; pending: boolean }[];
+};
+
+async function accountDataFor(db: Queryable, emails: readonly string[]): Promise<SubjectAccountData & { userIds: string[] }> {
+  if (emails.length === 0) return { user: null, invitations: [], userIds: [] };
+  const users = await db.query<{ id: string; locale: string; timezone: string | null }>('SELECT id, locale, timezone FROM users WHERE email = ANY($1::citext[]) AND deleted_at IS NULL', [emails]);
+  const invitations = await db.query<{ locale: string; pending: boolean }>(
+    'SELECT locale, (accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()) AS pending FROM invitations WHERE email = ANY($1::citext[]) ORDER BY created_at',
+    [emails],
+  );
+  const first = users.rows[0];
+  return { user: first ? { locale: first.locale, timezone: first.timezone } : null, invitations: invitations.rows, userIds: users.rows.map((u) => u.id) };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // export_subject
 // ---------------------------------------------------------------------------------------------------------------
 export type SubjectExport = {
@@ -321,6 +350,8 @@ export type SubjectExport = {
   api_briefs: { api_id: string; owner_id: string; brief_version: number; created_at: string; erased: boolean; content?: unknown }[];
   /** Faits du code sur les indices (codes et sonde) qui citent le sujet (2.14). */
   brief_hint_outcomes: { api_id: string; owner_id: string; hint_id: string; state: string; reason?: string | null }[];
+  /** Compte et invitations de l'instance à la même adresse (`users.locale`, `users.timezone`, `invitations.locale`) : portée instance, ou le compte lui-même. */
+  account?: SubjectAccountData;
 };
 
 /**
@@ -355,6 +386,8 @@ export async function exportSubject(pool: pg.Pool, req: SubjectRequest, now: Dat
     )
   ).rows;
   const excluded = (await pool.query('SELECT 1 FROM subject_exclusions WHERE subject_hash = ANY($1::text[]) LIMIT 1', [hashes])).rowCount === 1;
+  const accountData = await accountDataFor(pool, emailsOf(req.values));
+  const mayReadAccount = 'instance' in req.scope || (req.actor.userId !== null && accountData.userIds.includes(req.actor.userId));
   const out: SubjectExport = {
     generated_at: iso(now),
     scope: 'ownerId' in req.scope ? 'owner' : 'instance',
@@ -383,6 +416,7 @@ export async function exportSubject(pool: pg.Pool, req: SubjectRequest, now: Dat
     run_artifacts: artifacts.map((r) => ({ ...r, created_at: iso(r.created_at) })),
     api_briefs: briefs.map((r) => ({ api_id: r.api_id, owner_id: r.owner_id, brief_version: r.brief_version, created_at: iso(r.created_at), erased: r.erased_at !== null, ...(content ? { content: r.content } : {}) })),
     brief_hint_outcomes: hintFacts.map((r) => ({ api_id: r.api_id, owner_id: r.owner_id, hint_id: r.hint_id, state: r.state, ...(content ? { reason: r.reason } : {}) })),
+    ...(mayReadAccount && (accountData.user !== null || accountData.invitations.length > 0) ? { account: { user: accountData.user, invitations: accountData.invitations } } : {}),
   };
   await appendAudit(pool, {
     actorUserId: req.actor.userId,
@@ -403,6 +437,7 @@ export async function exportSubject(pool: pg.Pool, req: SubjectRequest, now: Dat
       run_artifacts: out.run_artifacts.length,
       api_briefs: out.api_briefs.length,
       brief_hint_outcomes: out.brief_hint_outcomes.length,
+      account: out.account !== undefined,
     },
   });
   return out;
@@ -421,6 +456,8 @@ export type EraseReport = {
   run_artifacts: number;
   scrubbed: Record<string, number>;
   exclusions_added: number;
+  /** Invitations en attente supprimées (même adresse) ; `account_present` : un compte existe, à supprimer (13 § 6). */
+  account: { invitations_deleted: number; account_present: boolean };
   /** Tables de contenu où une valeur subsiste : toujours vide après un effacement validé (sinon annulation). */
   residual: Record<string, number>;
 };
@@ -502,7 +539,17 @@ export async function eraseSubject(pool: pg.Pool, req: SubjectRequest, opts: { d
         const r = await client.query('INSERT INTO subject_exclusions (subject_hash) VALUES ($1) ON CONFLICT DO NOTHING', [h]);
         report.exclusions_added += r.rowCount ?? 0;
       }
+      // Invitations en attente à la même adresse (portée instance) : supprimées ; le compte, lui, relève de sa suppression (13 § 6).
+      const emails = emailsOf(req.values);
+      if ('instance' in req.scope && emails.length > 0) {
+        report.account.invitations_deleted = (await client.query('DELETE FROM invitations WHERE email = ANY($1::citext[]) AND accepted_at IS NULL', [emails])).rowCount ?? 0;
+        report.account.account_present = (await accountDataFor(client, emails)).user !== null;
+      }
       report.residual = await countSubjectOccurrences(client, req.values, req.scope);
+      if ('instance' in req.scope && emails.length > 0) {
+        const left = (await client.query<{ n: string }>('SELECT count(*)::text AS n FROM invitations WHERE email = ANY($1::citext[]) AND accepted_at IS NULL', [emails])).rows[0]?.n;
+        if (Number(left) > 0) report.residual['invitations'] = Number(left);
+      }
       if (Object.keys(report.residual).length > 0) throw new SubjectErasureIncompleteError(report.residual);
       await appendErasureAudit(client, req, report);
       await client.query('COMMIT');
@@ -517,7 +564,7 @@ export async function eraseSubject(pool: pg.Pool, req: SubjectRequest, opts: { d
 }
 
 function emptyReport(dryRun: boolean, hashes: string[], plan: ErasePlan): EraseReport {
-  return { dry_run: dryRun, subject_hashes: hashes, plan, dataset_items: 0, items_scrubbed: 0, dedup_keys: 0, run_artifacts: 0, scrubbed: {}, exclusions_added: 0, residual: {} };
+  return { dry_run: dryRun, subject_hashes: hashes, plan, dataset_items: 0, items_scrubbed: 0, dedup_keys: 0, run_artifacts: 0, scrubbed: {}, exclusions_added: 0, account: { invitations_deleted: 0, account_present: false }, residual: {} };
 }
 
 async function scrubTable(db: Queryable, t: ScrubTarget, pattern: string, req: SubjectRequest): Promise<number> {
@@ -571,6 +618,8 @@ function appendErasureAudit(db: Queryable, req: SubjectRequest, r: EraseReport):
       run_artifacts: r.run_artifacts,
       scrubbed: r.scrubbed,
       exclusions_added: r.exclusions_added,
+      invitations_deleted: r.account.invitations_deleted,
+      account_present: r.account.account_present,
     },
   });
 }

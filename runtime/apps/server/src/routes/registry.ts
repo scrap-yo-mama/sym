@@ -75,6 +75,8 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'POST', url: '/api/auth/sign-out', auth: 'public', library: true },
   { method: 'GET', url: '/api/auth/get-session', auth: 'public', library: true },
   { method: 'GET', url: '/api/me', auth: 'session_or_key', mfa: 'enroll' },
+  // Langue, fuseau et thème du compte (21b § 1) : session d'interface seulement.
+  { method: 'PATCH', url: '/api/me', auth: 'session', permission: 'account:update', mfa: 'enroll' },
   { method: 'GET', url: '/api/api-keys', auth: 'session', permission: 'apikeys:manage', resource: { type: 'api_key', kind: 'collection' } },
   { method: 'POST', url: '/api/api-keys', auth: 'session', permission: 'apikeys:manage' },
   { method: 'DELETE', url: '/api/api-keys/:id', auth: 'session', permission: 'apikeys:manage', resource: { type: 'api_key', kind: 'item' } },

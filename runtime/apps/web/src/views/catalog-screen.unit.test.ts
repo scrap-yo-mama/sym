@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { components } from '@runtime/client';
 import ApiCatalogView from '@/views/ApiCatalogView.vue';
 import { setApi } from '@/lib/api';
-import fr from '@/i18n/locales/fr.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { apiSummary, installApi, json, textOf, UUID } from '@/testing/console-fixtures';
 import { mountHtml, type MountedHtml } from '@/testing/memory-mount';
 

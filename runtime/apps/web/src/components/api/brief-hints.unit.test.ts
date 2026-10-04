@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import BriefHintsList from '@/components/api/BriefHintsList.vue';
 import { setApi } from '@/lib/api';
-import fr from '@/i18n/locales/fr.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { controls, installApi, json } from '@/testing/console-fixtures';
 import { mountHtml, type MountedHtml } from '@/testing/memory-mount';
 

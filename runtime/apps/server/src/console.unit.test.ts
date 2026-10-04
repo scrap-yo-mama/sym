@@ -3,6 +3,7 @@
 // serveur sert le build de la console (apps/web/dist) à la racine, avec repli SPA vers index.html pour les routes de la console,
 // jamais pour /api, /mcp, /tunnel, /hooks, /.well-known ni /metrics ; cache long sur les fichiers hachés, no-cache sur index.html.
 // assert_csp_headers (08b § 2) : CSP stricte, Referrer-Policy, COOP, nosniff ; HSTS seulement si PUBLIC_URL est en HTTPS.
+import { defaultI18n } from '@runtime/i18n';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +19,7 @@ const CSP_08B =
 const INDEX = '<!doctype html><html><head><title>zz_test_console</title><script type="module" src="/assets/index-zzTest01.js"></script></head><body><div id="app"></div></body></html>';
 const HASHED_JS = 'console.log("zz_test_hashed");';
 const ONE_YEAR = 31_536_000;
+const NOT_FOUND_EN = defaultI18n().renderer.render('srv.error.not_found', {}, 'en');
 
 let scratch = '';
 let consoleDir = '';
@@ -64,7 +66,9 @@ const expectIndex = (res: { statusCode: number; headers: Record<string, unknown>
 const expectNotFoundJson = (res: { statusCode: number; headers: Record<string, unknown>; body: string }, what: string) => {
   expect(res.statusCode, what).toBe(404);
   expect(String(res.headers['content-type']), what).toMatch(/^application\/json/);
-  expect(JSON.parse(res.body), what).toEqual({ error: { code: 'not_found', message: 'ressource introuvable' } });
+  // 404 uniforme : le `code` est le contrat ; le `message` est celui du catalogue dans la langue résolue (3.20, 21 § 4.4),
+  // ici `en` (ni Accept-Language, ni compte, ni langue d'instance lisible).
+  expect(JSON.parse(res.body), what).toEqual({ error: { code: 'not_found', message: NOT_FOUND_EN } });
 };
 
 describe('assert_console_served — la console est servie par le serveur, à la racine', () => {

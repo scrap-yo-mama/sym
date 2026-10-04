@@ -70,6 +70,16 @@ export function requireInstanceContact(contact: string | null | undefined): stri
 }
 
 
+/**
+ * `Accept-Language` d'un Chromium vierge de l'image (21 § 6, 17 § 5) : la valeur RÉELLE du moteur, jamais celle d'un utilisateur,
+ * d'un compte, d'un run ni d'un pays de proxy. Mesurée sur le moteur (image Linux `LANG=C.UTF-8`, CI ubuntu, macOS, Chromium 153) :
+ * un Chromium vierge n'envoie AUCUN en-tête `Accept-Language`, d'où `null`. Le client HTTP (E1) fait de même (il retire
+ * l'en-tête qu'une stratégie poserait) ; les contextes Chromium n'ont ni option `locale`, ni `--lang`, ni commande CDP de langue
+ * ou de fuseau. Contrôlée sur toute plateforme par `assert_accept_language_engine_real`
+ * (tests/browser/engine-accept-language.security.test.ts), comme le User-Agent : si le moteur change, ce test le signale.
+ */
+export const ENGINE_ACCEPT_LANGUAGE: string | null = null;
+
 const VERSION = /^[0-9A-Za-z.+-]{1,32}$/;
 const ENGINE_VERSION = /^(\d{1,4})\.\d{1,6}(?:\.\d{1,6}){0,2}$/;
 

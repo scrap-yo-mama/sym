@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // « Tous les runs » et « Nouvelle API » (06 § 2, tâche 3.5), rendus côté serveur avec un faux serveur REST (aucun réseau réel).
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import en from '@/i18n/locales/en.json';
+import en from '@runtime/i18n/locales/en.json';
 import { resetSession } from '@/composables/useSession';
 import { setApi } from '@/lib/api';
 import { esc, installFakeServer, json, ME, sessionRoutes, signedIn, view } from '@/testing/console.testkit';

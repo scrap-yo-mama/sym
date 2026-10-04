@@ -2,7 +2,7 @@
 // Garde de session du routeur : connexion obligatoire, page publique fermée aux sessions ouvertes, redirection interne seule.
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { createMemoryHistory } from 'vue-router';
-import en from '@/i18n/locales/en.json';
+import en from '@runtime/i18n/locales/en.json';
 import { resetSession } from '@/composables/useSession';
 import { buildApi, setApi } from '@/lib/api';
 import { createAppRouter, focusRouteHeading, focusRouteHeadingWhenReady, safeRedirect } from './index';

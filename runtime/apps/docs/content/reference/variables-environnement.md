@@ -109,6 +109,7 @@ cinq premières est posée. Pour PostgreSQL, passez la CA par `sslrootcert` dans
 | `ARTIFACT_RETENTION_DAYS` | 7 | server, worker | artefacts de run (captures, traces) | lue |
 | `RETENTION_TICK_SECONDS` | 300 | worker | période de la passe de rétention | lue |
 | `PHONE_DEFAULT_REGION` | aucun | worker | région par défaut pour normaliser les numéros de téléphone des personnes (code pays à deux lettres) | lue |
+| `DEFAULT_LOCALE` | langue de l'owner | server | langue de l'instance (code d'une langue livrée, `en` ou `fr`) : surcharge `settings.default_locale`, initialisée au premier démarrage avec la langue du navigateur de l'owner. Elle ne remplace jamais le choix d'une personne | lue |
 | `STORAGE_PLAN_GB` | aucun | CLI (`doctor`), création de run | taille prévue de la base : alerte à 80 %, refus des nouveaux runs à 95 % (`storage_full`). Sans valeur, pas de garde disque | lue |
 
 ## Dossier d'enquête

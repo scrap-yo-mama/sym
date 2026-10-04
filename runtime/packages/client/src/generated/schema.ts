@@ -202,7 +202,8 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /** Langue, fuseau et thème du compte (session d'interface seulement) */
+        patch: operations["updateMe"];
         trace?: never;
     };
     "/api/api-keys": {
@@ -1916,12 +1917,16 @@ export interface components {
          */
         Permission: "account:update" | "account:mfa" | "account:sessions" | "apikeys:manage" | "users:invite" | "users:list" | "users:deactivate" | "users:delete" | "users:set_role" | "owner:transfer" | "users:revoke_sessions" | "apis:create" | "apis:update" | "apis:delete" | "schedules:manage" | "apis:read" | "apis:set_visibility" | "apis:run" | "runs:read" | "datasets:read" | "runs:stats" | "sites:connect" | "sites:server_use" | "tunnel:pair" | "sites:read_cookies" | "tunnel:route_other" | "apikeys:read_other" | "tunnel:revoke_other" | "apikeys:revoke_other" | "settings:llm:write" | "settings:proxies:write" | "settings:smtp:write" | "settings:identity:write" | "settings:security:write" | "settings:sso:write" | "audit:read" | "audit:export" | "audit:purge";
         Me: {
+            /** @description Fuseau IANA du compte (`users.timezone`), null tant qu'il n'est pas posé ; sert aux e-mails, aux messages MCP et au fuseau par défaut d'une planification. Donnée personnelle, jamais déduite de la langue (21b § 1). */
+            timezone: string | null;
+            /** @description Le fuseau a déjà été écrit une fois (première connexion ou Mon compte, même effacé) : la console ne pose le fuseau du navigateur qu'à la première connexion (21b § 1), jamais sur un fuseau effacé volontairement. */
+            timezoneInitialized?: boolean;
             /** Format: uuid */
             id: string;
             email: string;
             displayName: string;
             role: components["schemas"]["Role"];
-            /** @description Langue préférée (`users.locale`) ; la console n'affiche que `en` et `fr` et retombe sur `en` sinon. */
+            /** @description Langue préférée (`users.locale`), code d'une langue du registre de l'instance ; la console retombe sur `en` pour une langue qu'elle ne connaît pas. */
             locale: string;
             theme: components["schemas"]["Theme"];
             /** @enum {string} */
@@ -1936,6 +1941,13 @@ export interface components {
             mfaRequired: boolean;
             /** @description MFA_ENFORCED concerne le rôle et la 2FA n'est pas en place (ni `amr` de l'IdP) : toute route sauf l'enrôlement répond 403 `mfa_enrollment_required` (13 § 7). */
             mfaEnrollmentRequired: boolean;
+        };
+        MePatch: {
+            /** @description Code d'une langue livrée (`400 invalid_locale` sinon). Le choix du compte l'emporte sur `Accept-Language`. */
+            locale?: string;
+            /** @description Fuseau IANA contrôlé contre `Intl.supportedValuesOf('timeZone')` (`400 invalid_timezone` sinon) ; null l'efface. */
+            timezone?: string | null;
+            theme?: components["schemas"]["Theme"];
         };
         ApiKey: {
             /** Format: uuid */
@@ -2072,6 +2084,13 @@ export interface components {
                 kind: string;
                 value: string;
             }[];
+            /**
+             * @description Qui envoie les requêtes vers le site, donc leur `Accept-Language` (21 § 6) : `engine` = le moteur serveur, la valeur est dans `accept_language` ; `user_browser` = run en tunnel, le Chrome de l'utilisateur envoie sa langue réelle (21 § 6.4), non mesurée : `accept_language` est alors absent. Absent (rapport antérieur) : `engine`.
+             * @enum {string}
+             */
+            accept_language_source?: "engine" | "user_browser";
+            /** @description `Accept-Language` effectif envoyé aux sites cibles par le moteur : celui d'un Chromium vierge de l'image, le même pour le client HTTP et pour le navigateur (21 § 6). Jamais la langue de l'interface, du compte ou du run. `null` : aucun en-tête (un Chromium vierge de l'image n'en envoie pas). Absent quand `accept_language_source` vaut `user_browser` (tunnel). */
+            accept_language?: string | null;
             llms_txt?: boolean;
             payment_offer?: string | null;
             official_api_url?: string | null;
@@ -3339,6 +3358,8 @@ export interface components {
             totp_code: string;
         };
         Invitation: {
+            /** @description Langue de l'e-mail d'invitation (`invitations.locale`), choisie par l'invitant ; copiée dans `users.locale` à l'acceptation. Donnée personnelle de l'invité (17 § 6). */
+            locale: string;
             /** Format: uuid */
             id: string;
             email: string;
@@ -3365,6 +3386,8 @@ export interface components {
              * @enum {string}
              */
             role: "member" | "admin";
+            /** @description Langue de l'e-mail (code d'une langue livrée) ; par défaut la langue de l'invitant. */
+            locale?: string;
         };
         InvitationCreated: components["schemas"]["Invitation"] & {
             emailed: boolean;
@@ -4048,6 +4071,33 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    updateMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MePatch"];
+            };
+        };
+        responses: {
+            /** @description Identité mise à jour. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     listApiKeys: {

@@ -3,8 +3,8 @@
 // « consultatif », il ne propose aucune action qui change le statut ou la version ; une valeur `x-personal` n'a que
 // des formes (remplissage, sentinelles, motifs, longueurs).
 import { describe, expect, test } from 'vitest';
-import en from '@/i18n/locales/en.json';
-import fr from '@/i18n/locales/fr.json';
+import en from '@runtime/i18n/locales/en.json';
+import fr from '@runtime/i18n/locales/fr.json';
 import { esc, view } from '@/testing/console.testkit';
 import RunQualityCard from './RunQualityCard.vue';
 
