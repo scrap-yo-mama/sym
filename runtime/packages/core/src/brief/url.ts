@@ -14,8 +14,8 @@ const TOKEN_PARAMS = new Set(
 );
 /** Paramètres de segment de session (`;jsessionid=`). */
 const SEGMENT_PARAM = /;(?:jsessionid|phpsessid|sid)=/i;
-/** URL absolues présentes dans un texte (bornées). */
-const URL_IN_TEXT = /\bhttps?:\/\/[^\s"'<>]{1,600}/gi;
+/** URL absolues présentes dans un texte (bornées), puis chemins relatifs suivis d'une requête (`/api?token=…`). */
+const URL_IN_TEXT = /\bhttps?:\/\/[^\s"'<>]{1,600}|(?<![^\s"'([])\/[^\s?"'<>#]*\?[^\s"'<>]{1,600}/gi;
 
 /** Une URL porte-t-elle un jeton (paramètre nommé, couple signé, segment de session, identifiants) ? */
 export function urlCarriesToken(raw: string): boolean {
@@ -29,6 +29,11 @@ export function urlCarriesToken(raw: string): boolean {
   if (url.username !== '' || url.password !== '') return true;
   const names = new Set([...url.searchParams.keys()].map((k) => k.toLowerCase()));
   for (const name of names) if (TOKEN_PARAMS.has(name)) return true;
+  // Jeton en fragment (`#access_token=…`, flux implicite OAuth).
+  if (url.hash.length > 1) {
+    const fragment = new Set([...new URLSearchParams(url.hash.slice(1)).keys()].map((k) => k.toLowerCase()));
+    for (const name of fragment) if (TOKEN_PARAMS.has(name)) return true;
+  }
   // `Signature` avec `Key-Pair-Id` (URL signée CloudFront), `sv` avec `sig` (SAS).
   if (names.has('signature') && names.has('key-pair-id')) return true;
   if (names.has('sv') && names.has('sig')) return true;

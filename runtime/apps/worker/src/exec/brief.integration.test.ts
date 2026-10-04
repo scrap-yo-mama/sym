@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { DomainPacer, generateMasterKey, MasterKey, Secret, type RunExecutor } from '@runtime/core';
 import { normalizeBrief, type InvestigationBrief } from '@runtime/core';
 import * as net from '@runtime/core/net';
-import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readBriefForApi, readRun, runQueueDefinition, startInvestigation, storeBrief, withActor } from '@runtime/db';
+import { createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingStore, readBriefForApi, readCatalogMemory, readRun, runQueueDefinition, startInvestigation, storeBrief, withActor } from '@runtime/db';
 import { createLlmClient, type LlmConfig } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/testing';
 import pg from 'pg';
@@ -238,6 +238,29 @@ describe('dossier d’enquête dans l’enquête (2.14)', () => {
     // Aucun essai hors politique : réseau direct seulement, aucun proxy ni tunnel.
     const networks = (await pool.query<{ network: string }>('SELECT DISTINCT network FROM run_attempts WHERE run_id = $1', [run.id])).rows.map((r) => r.network);
     expect(networks).toEqual(['direct']);
+  });
+
+  test('assert_brief_cannot_widen (refus fabriqués) — indices vers un 403 ordinaire, un 401 et une redirection vers /login : l’enquête continue sans le dossier, statut inchangé, aucun run forbidden, aucun refus en mémoire', async () => {
+    fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_brief_ordinary_refusals', API_HOST);
+    await attachBrief(apiId, {
+      v: 1,
+      hints: [
+        { id: 'h1', kind: 'endpoint', value: `GET ${base(API_HOST)}/api/admin`, confidence: 'high' },
+        { id: 'h2', kind: 'endpoint', value: `GET ${base(API_HOST)}/api/me`, confidence: 'high' },
+        { id: 'h3', kind: 'endpoint', value: `GET ${base(API_HOST)}/api/orders`, confidence: 'high' },
+      ],
+    });
+    const run = await investigate(apiId);
+    // L'enquête suit son cours sans le dossier : pas d'arrêt par la sonde, pas de classe de refus.
+    expect(run.state).toBe('succeeded');
+    expect(run.failure_class).toBeNull();
+    const evs = await events(run.id);
+    const probes = evs.find((e) => e.kind === 'brief.probes')!.payload as { results: { id: string; outcome: string }[] };
+    expect(probes.results.filter((r) => r.outcome === 'probe_failed').length).toBeGreaterThanOrEqual(2);
+    expect((await pool.query<{ status: string }>('SELECT status FROM apis WHERE id = $1', [apiId])).rows[0]!.status).not.toBe('bloquee');
+    expect(await pool.query("SELECT 1 FROM runs WHERE api_id = $1 AND failure_class IN ('forbidden', 'auth_required')", [apiId]).then((r) => r.rowCount)).toBe(0);
+    expect((await readCatalogMemory(pool, { ownerId: A, apiId, domain: 'zz_test_api_json.localhost' })).refusals).toEqual([]);
   });
 
   test('assert_replay_no_llm_with_rules (dossier) — rejeux E1 d’une API dont la source porte un dossier : 0 appel LLM, 0 lecture du dossier', async () => {

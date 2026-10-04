@@ -17,7 +17,7 @@ import { briefLogPayload, briefNarrative, briefReport, briefResumeDigest, BRIEF_
 import { briefRuleProposal, shouldEmitHintVerified } from './promotion.js';
 import { BRIEF_REASONS, type InvestigationBrief } from './schema.js';
 import { checkBrief, normalizeBrief } from './validate.js';
-import { displayTemplate } from './url.js';
+import { displayTemplate, urlCarriesToken } from './url.js';
 
 const PAGE = 'https://shop.example/catalogue/';
 const SCOPE = 'shop.example';
@@ -98,6 +98,26 @@ describe('Entrée : schéma fermé, taille, secrets (19c § 9.3)', () => {
     // Le schéma n'a aucun champ de garde ni de sortie (INV1) : hôtes, budget, proxy, en-têtes, cookies, session, statut.
     const out = checkBrief(honest);
     expect(out.ok).toBe(true);
+  });
+
+  test('invalid_brief : le nom d’une clé inconnue n’est jamais renvoyé s’il ressemble à un jeton', () => {
+    const out = checkBrief({ v: 1, hints: [{ id: 'h1', kind: 'pitfall', value: 'x', sk_live_AbCdEf0123456789ZZ: 1 }] });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.code).toBe('invalid_brief');
+    expect(JSON.stringify(out)).not.toContain('sk_live');
+    expect(out.field).toBe('brief.hints.0.<unknown>');
+    expect(checkBrief({ v: 1, allowed_hosts: [] })).toMatchObject({ field: 'brief.allowed_hosts' });
+  });
+
+  test('secret_in_brief : URL relative avec jeton, jeton en fragment (flux implicite OAuth)', () => {
+    for (const text of ['call /api/items?token=zzSecret now', 'see https://shop.example/cb#access_token=zzSecret&x=1', 'GET /api/v1/x?api_key=zzSecret']) {
+      const out = checkBrief({ notes: text });
+      expect(out, text).toMatchObject({ ok: false, code: 'secret_in_brief' });
+      expect(JSON.stringify(out)).not.toContain('zzSecret');
+    }
+    expect(urlCarriesToken('https://shop.example/cb#id_token=zzSecret')).toBe(true);
+    expect(checkBrief({ notes: 'the list lives at /api/items?page=2 and https://shop.example/a#top' }).ok).toBe(true);
   });
 
   test('assert_brief_size_cap_actionable — 20 Ko : brief_too_large avec what_to_do, aucune troncature', () => {
@@ -247,6 +267,35 @@ describe('Garde : orienter sans élargir (19c § 3)', () => {
     const run = await runBriefProbes(d, ports, { budgetUsd: 0.5 });
     expect(ports.fetched).toEqual(['https://shop.example/api/a']);
     expect(run.blocking?.failure_class).toBe('blocked_by_protection');
+  });
+
+  test('assert_brief_cannot_widen (fabrication de refus) — un 403 ordinaire, un 401, une redirection vers /login, un hôte résolu en privé : jamais blocking, probe_failed ou brief_host_ignored', async () => {
+    const a = 'https://shop.example/admin';
+    const b = 'https://shop.example/api/me';
+    const c = 'https://shop.example/api/orders';
+    const d = digestOf({ hints: [a, b].map((u, i) => ({ id: `h${i + 1}`, kind: 'endpoint' as const, value: `GET ${u}` })) });
+    const ports = accessPorts({ [a]: exchange(a, 403, '{"error":"forbidden"}'), [b]: exchange(b, 401, '{"error":"unauthorized"}') });
+    const run = await runBriefProbes(d, ports, { budgetUsd: 0.5 });
+    expect(run.blocking).toBeNull();
+    expect(run.results.map((r) => [r.id, r.outcome, r.reason])).toEqual([['h1', 'probe_failed', 'brief_probe_failed'], ['h2', 'probe_failed', 'brief_probe_failed']]);
+    expect(run.breakerOpen).toBe(true);
+    const dLogin = digestOf({ hints: [{ id: 'h1', kind: 'endpoint', value: `GET ${c}` }] });
+    const runLogin = await runBriefProbes(dLogin, accessPorts({ [c]: { status: 302, headers: { location: 'https://shop.example/login' }, body: '', url: 'https://shop.example/login' } }), { budgetUsd: 0.5 });
+    expect(runLogin.blocking).toBeNull();
+    expect(runLogin.results.map((r) => r.outcome)).toEqual(['probe_failed']);
+    // Un hôte de la portée qui résout vers une adresse privée (garde SSRF) ou une redirection hors portée : brief_host_ignored, sans échec compté.
+    const e = 'https://shop.example/api/a';
+    const f = 'https://shop.example/api/b';
+    const d2 = digestOf({ hints: [{ id: 'h1', kind: 'endpoint', value: `GET ${e}` }, { id: 'h2', kind: 'endpoint', value: `GET ${f}` }] });
+    const p2 = accessPorts({});
+    const run2 = await runBriefProbes(d2, { ...p2, get: async (url) => ({ failure: { failure_class: url === e ? 'forbidden' : 'code_error', retryable: false, detail: url === e ? 'ssrf_blocked' : 'domain_not_allowed' }, costUsd: 0, ms: 1 }) }, { budgetUsd: 0.5 });
+    expect(run2.blocking).toBeNull();
+    expect(run2.results.map((r) => [r.outcome, r.reason])).toEqual([['skipped', 'brief_host_ignored'], ['skipped', 'brief_host_ignored']]);
+    expect(run2.breakerOpen).toBe(false);
+    // Même refus de garde au contrôle de portée.
+    const run3 = await runBriefProbes(d2, { ...p2, check: async () => ({ allowed: false, failure: { failure_class: 'forbidden', retryable: false, detail: 'ssrf_blocked' } }) }, { budgetUsd: 0.5 });
+    expect(run3.blocking).toBeNull();
+    expect(run3.results.every((r) => r.reason === 'brief_host_ignored')).toBe(true);
   });
 
   test('assert_brief_cannot_widen — différentiel sans dossier, dossier honnête, corpus hostile : politique et décisions de garde identiques ; seuls l’ordre, les sondes et le prompt diffèrent', async () => {

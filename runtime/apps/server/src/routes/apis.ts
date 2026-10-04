@@ -57,8 +57,8 @@ import {
   versionSummary,
   type ApiRow,
 } from '../rest/apis.js';
-import { briefViewOf, prepareBrief, rejectBrief, saveBrief } from '../rest/briefs.js';
-import { runErrorFor, runErrorOf } from '../rest/run-error.js';
+import { briefViewOf, ownerNarrativeLocale, prepareBrief, rejectBrief, saveBrief } from '../rest/briefs.js';
+import { runErrorOf } from '../rest/run-error.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
 import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
@@ -259,11 +259,12 @@ async function waitApiLeavesEnquete(ctx: ServerContext, actor: Actor, apiId: str
 
 /** Corps de `ApiCreated` (05 § 4.1) : phase, schéma proposé et échantillon (propriétaire), rapport d'accès, run. */
 export async function createdView(ctx: ServerContext, actor: Actor, apiId: string, runId: string) {
+  const locale = await ownerNarrativeLocale(ctx, actor.userId);
   return withActor(ctx.pool, actor, async (db) => {
     const api = await readApiById(db, apiId);
     const proposal = await latestProposal(db, apiId);
     // Dossier d'enquête (19c § 7) : rapport et récit du code, propriétaire seulement (lecture filtrée par owner_id).
-    const brief = api !== null && api.owner_id === actor.userId ? await briefViewOf(db, { apiId, ownerId: actor.userId, pageUrl: await investigationUrlOf(db, apiId, actor.userId) }) : null;
+    const brief = api !== null && api.owner_id === actor.userId ? await briefViewOf(db, { apiId, ownerId: actor.userId, locale, pageUrl: await investigationUrlOf(db, apiId, actor.userId) }) : null;
     // UX-07 : l'état réel de l'enquête (en cours, ou échec avec sa cause), pour que la phase, le schéma et la phrase ne se contredisent pas.
     const run = await readRunRow(db, runId);
     const error = run === null ? null : runErrorOf(run);
@@ -416,7 +417,13 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
       // pendant l'attente ne se répond qu'avec le statut qui en découle, jamais `failed` + `enquete` (attente bornée).
       if (row?.state === 'failed') await waitApiLeavesEnquete(ctx, actor, created.apiId, Math.min(deadline, Date.now() + 2_000), controller.signal);
       // Validation automatique terminée : l'enveloppe RunResult (05 § 4.1, `auto_validate`).
-      if (row !== null && body.auto_validate === true && isTerminalRunState(row.state)) return reply.code(201).send(await buildRunResult(ctx, actor, row));
+      if (row !== null && body.auto_validate === true && isTerminalRunState(row.state)) {
+        // Accusé du dossier (19c § 7) dans l'enveloppe RunResult aussi : version, rapport et récit du code, sans texte du dossier.
+        const locale = await ownerNarrativeLocale(ctx, actor.userId);
+        const brief = await withActor(ctx.pool, actor, async (db) => briefViewOf(db, { apiId: created.apiId, ownerId: actor.userId, locale, pageUrl: await investigationUrlOf(db, created.apiId, actor.userId) }));
+        const result = await buildRunResult(ctx, actor, row);
+        return reply.code(201).send(brief === null ? result : { ...result, brief_version: brief.brief_version, brief_report: brief.brief_report, brief_narrative: brief.narrative });
+      }
     }
     return reply.code(201).send(await createdView(ctx, actor, created.apiId, created.runId));
   });

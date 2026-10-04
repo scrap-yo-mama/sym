@@ -4870,6 +4870,18 @@ components:
       additionalProperties: false
       required: [run_id, state, status, items, total, dataset_id, truncated, next_cursor, degraded_reasons, message, next_action, poll_after_seconds, timeline, cost, console_url]
       properties:
+        brief_version:
+          description: Dossier d'enquête enregistré à la création de l'API (réponse de create_api avec auto_validate seulement).
+          type: integer
+        brief_report:
+          type: array
+          items:
+            $ref: '#/components/schemas/BriefReportEntry'
+        brief_narrative:
+          description: Récit du dossier en gabarits fermés (narrative.brief.*), sans texte du dossier.
+          type: array
+          items:
+            type: string
         run_id:
           type: string
           format: uuid

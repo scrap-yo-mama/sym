@@ -102,8 +102,12 @@ function textFields(brief: InvestigationBrief): { path: string; text: string; ur
 /** Chemin d'erreur Ajv → `brief.hints.0.allowed_hosts` (caractères sûrs seulement). */
 function fieldOf(error: { instancePath?: string; keyword?: string; params?: unknown } | undefined): string {
   if (error === undefined) return 'brief';
-  const extra = error.keyword === 'additionalProperties' ? `/${String((error.params as { additionalProperty?: unknown }).additionalProperty ?? '')}` : '';
-  return `brief${(error.instancePath ?? '') + extra}`.replace(/\//g, '.').replace(/[^a-zA-Z0-9_.]/g, '').slice(0, 120);
+  const base = `brief${error.instancePath ?? ''}`.replace(/\//g, '.').replace(/[^a-zA-Z0-9_.]/g, '');
+  if (error.keyword !== 'additionalProperties') return base.slice(0, 120);
+  // Le nom d'une clé inconnue est choisi par l'appelant : renvoyé seulement s'il a l'allure d'un nom de champ, jamais d'un jeton.
+  const name = String((error.params as { additionalProperty?: unknown }).additionalProperty ?? '');
+  const safe = /^[a-z_]{1,32}$/.test(name) && !textCarriesSecret(name);
+  return `${base}.${safe ? name : '<unknown>'}`.slice(0, 120);
 }
 
 /**

@@ -248,7 +248,12 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       for (const key of ['example_output', 'auto_validate', 'network_policy', 'brief'] as const) if (args[key] !== undefined) body[key] = args[key];
       const answer = await rest(ctx, caller, 'POST', `/api/apis${query({ wait: wait(args) })}`, body);
       if (answer.status !== 201) return restError(answer);
-      if (typeof answer.body['run_id'] === 'string' && Array.isArray(answer.body['items'])) return runResultAnswer(answer.body);
+      // Enveloppe RunResult (`auto_validate`) : l'accusé du dossier y figure aussi, en tête du message.
+      if (typeof answer.body['run_id'] === 'string' && Array.isArray(answer.body['items'])) {
+        const { brief_narrative: runNarrative, ...envelope } = answer.body;
+        const runLines = Array.isArray(runNarrative) ? runNarrative.filter((l): l is string => typeof l === 'string') : [];
+        return success(runLines.length === 0 ? String(envelope['message'] ?? '') : `${runLines.join('\n')}\n${String(envelope['message'] ?? '')}`, envelope);
+      }
       // Récit du dossier (19c § 7) : gabarits fermés du code en tête du texte, `brief_report[]` dans structuredContent ;
       // aucun texte du dossier. Sans dossier, aucune ligne de plus. Phrase selon l'état réel de l'enquête (UX-07).
       const { brief_narrative: narrative, ...structured } = answer.body;

@@ -78,7 +78,7 @@ const apiJson: SiteFactory = (env) => {
     id: 'api_json',
     lot: 'base',
     description:
-      'API JSON paginée de 500 contacts factices, avec les 6 mutations du banc de réparation ; robots.txt interdit /private-api/ (qui sert pourtant les mêmes contacts) et /api/missing répond 404 (dossier d’enquête, 2.14)',
+      'API JSON paginée de 500 contacts factices, avec les 6 mutations du banc de réparation ; robots.txt interdit /private-api/ (qui sert pourtant les mêmes contacts) /api/missing répond 404, /api/admin 403 ordinaire, /api/me 401 et /api/orders redirige vers /login (dossier d’enquête, 2.14)',
     hosts: ['zz_test_api_json.localhost'],
     ownsRobots: true,
     smoke: { path: '/api/contacts', status: 200 },
@@ -96,6 +96,10 @@ const apiJson: SiteFactory = (env) => {
       // Dossier d'enquête (2.14, recette 12i) : un Disallow dédié (aucune requête n'y est attendue) et un point d'accès inexistant.
       if (req.path === '/robots.txt') return { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: 'User-agent: *\nDisallow: /private-api/\n' };
       if (req.path === '/private-api/contacts') return list(req);
+      // Dossier d'enquête (2.14, point 6 de la revue) : refus ORDINAIRES, sans signature de protection ni défi.
+      if (req.path === '/api/admin') return json(403, { error: 'forbidden' });
+      if (req.path === '/api/me') return json(401, { error: 'unauthorized' });
+      if (req.path === '/api/orders') return { status: 302, headers: { location: '/login' }, body: '' };
       if (req.path === listPath && (mutation === 'data_451' || (mutation === 'data_451_page_2' && intParam(req, 'page', 1, 1, 10_000) >= 2))) {
         return json(451, { error: 'unavailable_for_legal_reasons' });
       }

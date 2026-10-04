@@ -2575,6 +2575,11 @@ export interface components {
         };
         /** @description Enveloppe commune des sorties d'exécution (05 § 4.1), identique en MCP et en REST. */
         RunResult: {
+            /** @description Dossier d'enquête enregistré à la création de l'API (réponse de create_api avec auto_validate seulement). */
+            brief_version?: number;
+            brief_report?: components["schemas"]["BriefReportEntry"][];
+            /** @description Récit du dossier en gabarits fermés (narrative.brief.*), sans texte du dossier. */
+            brief_narrative?: string[];
             /** Format: uuid */
             run_id: string;
             state: components["schemas"]["RunState"];

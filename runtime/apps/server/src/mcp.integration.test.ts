@@ -822,6 +822,35 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
     expect(await count("SELECT count(*) FROM audit_events WHERE target_id = $1 AND action = 'api.created' AND meta::text NOT LIKE '%zz_test_hostile%' AND (meta -> 'brief' ->> 'version')::int = 1", [view.api_id])).toBe(1);
   });
 
+  test('assert_narrative_matches_structured : create_api auto_validate terminé pendant le wait porte brief_version, brief_report et la ligne du dossier, dans la langue du propriétaire', async () => {
+    const client = await connect(a.key);
+    const url = 'https://zz-test-brief-av.example/';
+    const before = await withClient(srv.db.url, async (c) => (await c.query<{ id: string }>('SELECT id FROM runs WHERE owner_id = $1', [a.user.id])).rows.map((r) => r.id));
+    await withClient(srv.db.url, (c) => c.query("UPDATE users SET locale = 'fr' WHERE id = $1", [a.user.id]));
+    await withClient(srv.db.url, (c) => c.query("INSERT INTO responsible_use_acks (user_id, version) VALUES ($1, '2026-10-01') ON CONFLICT DO NOTHING", [a.user.id]));
+    try {
+      const done = (async () => {
+        const deadline = Date.now() + 10_000;
+        for (;;) {
+          const id = await withClient(srv.db.url, async (c) => (await c.query<{ id: string }>("SELECT r.id FROM runs r JOIN apis x ON x.id = r.api_id WHERE x.owner_id = $1 AND r.kind = 'investigation' AND r.state = 'queued' AND r.id <> ALL($2::uuid[]) ORDER BY r.created_at DESC LIMIT 1", [a.user.id, before])).rows[0]?.id);
+          if (id) return completeRun(id, []);
+          if (Date.now() > deadline) throw new Error('aucun run créé');
+          await new Promise((r) => setTimeout(r, 25));
+        }
+      })();
+      const result = await call(client, 'create_api', { description: 'zz_test dossier auto', url, auto_validate: true, brief: { v: 1, hints: [{ id: 'h1', kind: 'endpoint', value: 'GET https://zz-test-brief-av.example/api/items?page=1' }] }, wait_seconds: 3 });
+      await done;
+      expect(result.isError ?? false, JSON.stringify(result)).toBe(false);
+      const env = result.structuredContent as { run_id?: string; brief_version?: number; brief_report?: { id: string; state: string }[] };
+      // L'attente synchrone peut rendre la main avant le worker simulé (machine chargée) : la phrase du dossier est alors celle de la vue de création.
+      expect(env.brief_version).toBe(1);
+      expect(env.brief_report?.map((r) => r.id)).toEqual(['h1']);
+      expect(String(result.content[0]!.text)).toContain('SYM 👻 : J’ai lu ton dossier : 1 indices');
+    } finally {
+      await withClient(srv.db.url, (c) => c.query("UPDATE users SET locale = 'en' WHERE id = $1", [a.user.id]));
+    }
+  });
+
   test('assert_brief_secret_rejected (MCP) : secret_in_brief sur un dossier à cookie, en-tête Authorization ou ?access_token= ; rien créé, valeur absente de la réponse', async () => {
     const client = await connect(a.key);
     const before = await count('SELECT count(*) FROM apis WHERE owner_id = $1', [a.user.id]);
