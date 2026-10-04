@@ -16,3 +16,9 @@ describe('incompleteVsCounter (R13)', () => {
     expect(incompleteVsCounter(12, [{ records: 5, stop: 'records_empty' }])).toBeNull();
   });
 });
+
+describe('incompleteVsCounter : doublons d’une liste HTML (R02)', () => {
+  it('« 359 annonces », 350 cartes servies dont 82 doublons : conforme (les cartes servies sont comptées)', () => {
+    expect(incompleteVsCounter(359, [{ records: 268 + 82, stop: 'no_next' }])).toBeNull();
+  });
+});

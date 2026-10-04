@@ -331,8 +331,9 @@ const trialInput = (paginated: boolean, purpose: TrialPurpose, hardMaxPages: num
 const NATURAL_STOPS = new Set(['records_empty', 'path_equals', 'path_missing', 'no_next', 'repeated_cursor', 'no_pagination']);
 /**
  * Complétude contre le compteur affiché (R13 : « 6197 annonces », 24 livrées, statut « sain ») : une liste lue jusqu'à sa
- * fin naturelle qui livre moins de 80 % du compteur (et au moins 10 de moins) n'est pas conforme ; SYM essaie le niveau
- * suivant (navigateur, cookies du site).
+ * fin naturelle qui sert moins de 80 % du compteur (et au moins 10 de moins) n'est pas conforme ; SYM essaie le niveau
+ * suivant (navigateur, cookies du site). Les cartes servies comptent les doublons écartés d'une liste HTML (R02 : le compteur
+ * « 359 annonces » compte les lots, 350 cartes servies pour 268 fiches distinctes : conforme, écart dit au journal du run).
  */
 const COMPLETENESS_MIN_SHARE = 0.8;
 export function incompleteVsCounter(counter: number | undefined, runs: readonly { readonly records: number; readonly stop: string | null }[]): { counter: number; delivered: number } | null {
@@ -1640,7 +1641,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
                 pageFor.set(pair, { html: page.html, url: page.url, items: trial.outcome.result.ok ? trial.outcome.result.records : r.records });
               }
               lastRecords.set(pair, r.records);
-              runsFor.set(pair, [...(runsFor.get(pair) ?? []), { records: r.records.length, stop: r.stop }]);
+              // Cartes SERVIES (doublons d'une liste HTML compris, R02 : 350 cartes pour « 359 annonces », 268 fiches distinctes).
+              runsFor.set(pair, [...(runsFor.get(pair) ?? []), { records: r.records.length + (r.duplicates ?? 0), stop: r.stop }]);
               if (purpose === 'sample') sampleOutputs.set(pair, [...(sampleOutputs.get(pair) ?? []), r.records]);
               return { ...execution(true, null, null, r.pages, cost, trial.ms, r.stop), records: r.records.length };
             },
