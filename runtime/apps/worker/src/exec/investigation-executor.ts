@@ -1642,7 +1642,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               }
               lastRecords.set(pair, r.records);
               // Cartes SERVIES (doublons d'une liste HTML compris, R02 : 350 cartes pour « 359 annonces », 268 fiches distinctes).
-              runsFor.set(pair, [...(runsFor.get(pair) ?? []), { records: r.records.length + (r.duplicates ?? 0), stop: r.stop }]);
+              // Une lecture par échantillon de pages (vérification de la règle d'arrêt, R01) ne dit rien de la complétude.
+              if (r.sampled !== true) runsFor.set(pair, [...(runsFor.get(pair) ?? []), { records: r.records.length + (r.duplicates ?? 0), stop: r.stop }]);
               if (purpose === 'sample') sampleOutputs.set(pair, [...(sampleOutputs.get(pair) ?? []), r.records]);
               return { ...execution(true, null, null, r.pages, cost, trial.ms, r.stop), records: r.records.length };
             },

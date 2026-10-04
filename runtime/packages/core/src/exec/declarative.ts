@@ -73,6 +73,8 @@ export type DeclarativeRunResult =
       readonly duplicates?: number;
       /** Liste HTML paginée : nombre annoncé par l'en-tête de la première page (« 359 annonces »), s'il est lisible. */
       readonly announced?: number;
+      /** Lecture par échantillon de pages (`samplePages`) : les enregistrements ne sont pas toute la liste (complétude, R13). */
+      readonly sampled?: boolean;
       /**
        * Échange d'une page dont des enregistrements ont été écartés (sinon la dernière page), corps borné : preuve remise à
        * la garde quand la casse vient du seuil des items non conformes (D-49), pour le squelette du rôle `repair` (04 §5
@@ -302,7 +304,7 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     let lastPage: HttpExchange | undefined;
     const done = (stop: DeclarativeStop, truncated: boolean): DeclarativeRunResult => {
       const proof = rejectedPage ?? lastPage;
-      return { ok: true, records, pages, requests, escalated, stop, truncated, ...(duplicates > 0 ? { duplicates } : {}), ...(announced === undefined ? {} : { announced }), ...(proof === undefined ? {} : { evidence: boundedEvidence(proof) }) };
+      return { ok: true, records, pages, requests, escalated, stop, truncated, ...(duplicates > 0 ? { duplicates } : {}), ...(announced === undefined ? {} : { announced }), ...(sampleQueue === undefined ? {} : { sampled: true }), ...(proof === undefined ? {} : { evidence: boundedEvidence(proof) }) };
     };
 
     for (;;) {
