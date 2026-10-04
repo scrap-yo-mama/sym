@@ -80,6 +80,9 @@ import {
   estimateCostUsd,
   orderTrials,
   buildTrialPlan,
+  compileEstimateUsd,
+  detectAmbiguity,
+  detectCostGate,
   discoverScriptEndpoints,
   INVESTIGATION_DEFAULTS,
   INVESTIGATION_EVENTS as EV,
@@ -96,6 +99,8 @@ import {
   type BuiltStrategy,
   type CapturedExchange,
   type DataCandidate,
+  type GateReason,
+  type InvestigationGate,
   type InvestigationMilestone,
   type PairOutcome,
   type PlanEntry,
@@ -255,6 +260,12 @@ export type InvestigationExecutorDeps = {
   readonly now?: () => number;
   /** Exécutions conformes exigées par couple (défaut `INVESTIGATION_SAMPLES` = 3). */
   readonly samples?: number;
+  /**
+   * `CONFIRM_ABOVE_USD` (CDC UX, 09 § 9) : au-delà de cette dépense estimée des essais (essai retenu et compilation), la
+   * validation automatique s'arrête sur la porte du schéma et la personne confirme avant tout appel facturé. Absent : aucune
+   * porte de coût (les tests du moteur ne la subissent pas) ; le worker de production la fixe (`confirmAboveUsd` de la config).
+   */
+  readonly confirmAboveUsd?: number;
   /**
    * Mémoire du catalogue (tâche 2.12, 19 §2) : lue au départ de chaque run d'enquête (mémoire négative AVANT tout appel
    * LLM et toute requête, puis dossier du prompt). Défaut : `readCatalogMemory` (RLS et filtre `owner_id`).
@@ -481,7 +492,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     };
     /** Jalon atteint, écrit dans les journaux du run avec la clé et l'intitulé du noyau (`assert_milestones_same_labels`). */
     const milestone = (key: InvestigationMilestone) => ctx.log('info', 'milestone', milestoneLogEntry(key));
-    const planView = (entries: readonly PlanEntry[]) => entries.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd }));
+    // `compile_est_usd` : coût estimé de la compilation de l'essai agentique en stratégie déclarative (UX-38), annoncé avec le plan.
+    const planView = (entries: readonly PlanEntry[]) =>
+      entries.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd, ...(compileEstimateUsd(p) > 0 ? { compile_est_usd: compileEstimateUsd(p) } : {}) }));
     /** Décisions de l'enquête (source de la version, 18 §4.6) : événements qui les portent, `run:seq`. */
     const decisions: string[] = [];
     const decide = async (kind: string, payload: Record<string, unknown> = {}) => {
@@ -1057,8 +1070,25 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             budget: budgetView(),
           });
           if (spent >= budgetUsd) return await budgetExhausted('investigation_budget_usd');
-          if (!request.auto_validate) {
-            await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema), ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
+          // Porte (CDC UX, 03 § 4 et § 9) : la validation automatique ne s'arrête que sur une ambiguïté réelle ou un coût annoncé
+          // au-delà du seuil ; les raisons sont MESURÉES par le code (`detectAmbiguity`, `detectCostGate`) et gardées avec la phase.
+          const exampleForGate = (ctx.input as { example_output?: unknown } | null)?.example_output;
+          const gateReasons: GateReason[] = request.auto_validate
+            ? [
+                ...detectAmbiguity({ proposal: proposal!, candidates, outputSchema: built.outputSchema, ...(exampleForGate === undefined ? {} : { exampleOutput: exampleForGate }) }),
+                ...(() => {
+                  const cost = detectCostGate(gatePlan, deps.confirmAboveUsd);
+                  return cost === null ? [] : [cost];
+                })(),
+              ]
+            : [];
+          if (!request.auto_validate || gateReasons.length > 0) {
+            const gate: InvestigationGate | null =
+              gateReasons.length === 0
+                ? null
+                : { reasons: gateReasons, estimate_usd: gateReasons.find((r) => r.reason === 'cost_above_cap')?.estimate_usd ?? null, confirm_above_usd: deps.confirmAboveUsd ?? null };
+            await ctx.log('info', 'schema_gate', { reasons: gateReasons.map((r) => r.reason) });
+            await save('awaiting_schema_validation', { proposal: proposal!, proposed_schema: built.outputSchema, proposed_columns: schemaColumns(built.outputSchema), gate, ...(rulesUsed === undefined ? {} : { rules: rulesUsed }) });
             await milestone('schema');
             // Coût d'un rejeu estimé : celui de la méthode la moins chère du plan (ce que retiendrait un premier essai conforme).
             const cheapest = gatePlan.reduce<number | null>((min, p) => (p.est_cost_usd !== null && (min === null || p.est_cost_usd < min) ? p.est_cost_usd : min), null);
@@ -1112,7 +1142,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const ordered = orderWithBrief(guided.ordered, briefPreferred);
       await event(EV.phase, {
         phase: 'testing',
-        plan: ordered.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd, ...(guided.placed.has(p) ? { rule_refs: guided.placed.get(p) } : {}), ...(briefPreferred.has(p.source) ? { brief: true } : {}) })),
+        plan: ordered.map((p) => ({ execution: p.execution, network: p.network, source: p.source, est_cost_usd: p.est_cost_usd, ...(compileEstimateUsd(p) > 0 ? { compile_est_usd: compileEstimateUsd(p) } : {}), ...(guided.placed.has(p) ? { rule_refs: guided.placed.get(p) } : {}), ...(briefPreferred.has(p.source) ? { brief: true } : {}) })),
         budget: budgetView(),
       });
       const entries = new Map<TrialPair, PlanEntry>(ordered.map((p) => [p, p]));

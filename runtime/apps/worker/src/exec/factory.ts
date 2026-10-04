@@ -32,6 +32,13 @@ import { createStrategyRuntime, type AgentPorts } from './strategy-executor.js';
  * Rôles résolus pour l'enquête (schéma, prix des couples E4 et E6). Le rôle `judge` n'en fait PAS partie (revue 2.12) :
  * il est résolu à part (`judgeLlm`), et une erreur de ses réglages n'empêche jamais l'enquête.
  */
+/** `CONFIRM_ABOVE_USD` (défaut 0,10 $) : dépense estimée au-delà de laquelle une confirmation précède les essais ; valeur invalide : défaut. */
+export function confirmAboveUsdFromEnv(env: NodeJS.ProcessEnv): number {
+  const raw = env['CONFIRM_ABOVE_USD']?.trim();
+  const value = raw === undefined || raw === '' ? Number.NaN : Number(raw);
+  return Number.isFinite(value) && value >= 0 && value <= 100 ? value : 0.1;
+}
+
 export const INVESTIGATION_LLM_ROLES = ['investigate', 'extract', 'agent'] as const;
 
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
@@ -256,6 +263,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       strategy,
       // Dossier d'enquête (2.14) : bornes BRIEF_* (sondes, part du budget, mémoire négative, budget du prompt).
       briefConfig: briefConfigFromEnv(process.env),
+      // Coût annoncé avant dépense (CDC UX, U1.9) : au-delà de `CONFIRM_ABOVE_USD`, la validation automatique attend la confirmation.
+      confirmAboveUsd: confirmAboveUsdFromEnv(process.env),
       // Session requise ou tunnel seul (04 §4) : étape 0 et reconnaissance par l'extension du propriétaire.
       tunnel,
       agentic: true,
