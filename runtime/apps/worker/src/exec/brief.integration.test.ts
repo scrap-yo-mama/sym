@@ -321,6 +321,29 @@ describe('dossier d’enquête dans l’enquête (2.14)', () => {
     expect(promptOf()).not.toContain('<untrusted_agent_brief>');
   });
 
+  test('pagination « xhr » et « load more » (constat Barnes) — acceptées (jamais brief_invalid_item), rapprochées de la reconnaissance, transmises au prompt', async () => {
+    fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_brief_xhr', API_HOST);
+    await attachBrief(apiId, { v: 1, hints: [{ id: 'xhr', kind: 'pagination', value: 'xhr' }, { id: 'more', kind: 'pagination', value: 'load_more "Annonces suivantes"' }, { id: 'tiers', kind: 'pagination', value: `xhr GET http://${EVIL_EXAMPLE}/api/list` }] });
+    const run = await investigate(apiId);
+    expect(run.state).toBe('succeeded');
+    const all = await events(run.id);
+    const read = all.find((e) => e.kind === 'brief.read')!.payload as { hints: { id: string; state: string; reason: string | null }[] };
+    expect(read.hints).toEqual([
+      { id: 'xhr', kind: 'pagination', state: 'match_in_recon' },
+      { id: 'more', kind: 'pagination', state: 'match_in_recon' },
+      { id: 'tiers', kind: 'pagination', state: 'ignored', reason: 'brief_host_ignored' },
+    ]);
+    const checked = all.find((e) => e.kind === 'brief.checked')!.payload as { hints: { id: string; state: string; provenance: string | null }[]; preferred: string[] };
+    // Réponse de données vue par la reconnaissance : l'indice `xhr` la désigne ; aucun bouton dans la page : `more` reste non vérifié.
+    expect(checked.hints.find((h) => h.id === 'xhr')).toMatchObject({ state: 'verified_unused', provenance: 'traffic' });
+    expect(checked.hints.find((h) => h.id === 'more')).toMatchObject({ state: 'unverified' });
+    expect(checked.preferred).toContain('c1');
+    expect(promptOf()).toContain('xhr [code: verified_unused (traffic)]');
+    expect(promptOf()).toContain('more [code: unverified]');
+    expect(resolverLog).not.toContain(EVIL_EXAMPLE);
+  });
+
   test('assert_events_store_codes_only (dossier) — investigation_events et journaux du run : codes, identifiants d’indices, empreinte ; jamais le contenu', async () => {
     fake.setScenario(MODEL, [scripted.json(CONTACTS_PROPOSAL)]);
     const apiId = await insertApi('zz_test_brief_codes', API_HOST);
