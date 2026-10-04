@@ -80,7 +80,7 @@ export type ApiStatusState = {
  * Fins d'échec d'une enquête (transition 2, ou 21 pour une ré-enquête) et leur raison exacte (constats UX-05, UX-12,
  * UX-29, UX-32 : plus aucune cause rangée par défaut sous « budget d'enquête épuisé ») :
  * - `budget_exhausted` : `investigation_budget_usd` dépensé ; `timeout` : `investigation_timeout_s` atteint ;
- * - `trial_cost_over_cap` : un essai a demandé plus que le plafond par run de l'API (`max_cost_usd`) ;
+ * - `trial_cost_over_cap` : un essai a demandé plus que le plafond par run fixé sur l'API (`max_cost_usd` ; aucun par défaut, D-123) ;
  * - `no_conformant_strategy` : essais finis (ou aucune source) sans stratégie conforme ;
  * - `not_compilable` : seule une trace E6 non compilable en E5 était conforme (2.13) ;
  * - `error` : erreur de mise en route ou interne (configuration, LLM, imprévu), le détail du run la nomme.

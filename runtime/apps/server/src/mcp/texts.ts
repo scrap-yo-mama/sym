@@ -120,7 +120,7 @@ const EN: NarrativeCatalog = {
     `Trial ${label}: ${ok ? 'conformant' : result}${records === null ? '' : `, ${records} item${records === 1 ? '' : 's'}`}${pages === null ? '' : `, ${pages} page${pages === 1 ? '' : 's'}`}`,
   why: (code, reason) => {
     if (code === 'agent_request_blocked') return `agent request refused by the request guard${reason === null ? '' : `: ${REQUEST_REASON_EN[reason] ?? reason}${reason in REQUEST_REASON_EN ? ` (${reason})` : ''}`}`;
-    if (code === 'max_cost_usd') return 'the trial reached its cost cap (max_cost_usd)';
+    if (code === 'max_cost_usd') return 'the trial reached the per-run cost cap set on the API (max_cost_usd)';
     return `(${code})`;
   },
   schema: (ok, fields) => (ok ? `Output schema proposed${fields === null ? '' : `: ${fields} fields`}` : 'No usable output schema could be proposed'),
@@ -169,7 +169,7 @@ const FR: NarrativeCatalog = {
     `Essai ${label} : ${ok ? 'conforme' : result}${records === null ? '' : `, ${records} item${records === 1 ? '' : 's'}`}${pages === null ? '' : `, ${pages} page${pages === 1 ? '' : 's'}`}`,
   why: (code, reason) => {
     if (code === 'agent_request_blocked') return `requête de l’agent refusée par la garde${reason === null ? '' : ` : ${REQUEST_REASON_FR[reason] ?? reason}${reason in REQUEST_REASON_FR ? ` (${reason})` : ''}`}`;
-    if (code === 'max_cost_usd') return 'l’essai a atteint son plafond de coût (max_cost_usd)';
+    if (code === 'max_cost_usd') return 'l’essai a atteint le plafond par run fixé sur l’API (max_cost_usd)';
     return `(${code})`;
   },
   schema: (ok, fields) => (ok ? `Schéma de sortie proposé${fields === null ? '' : ` : ${fields} champs`}` : 'Aucun schéma de sortie exploitable n’a pu être proposé'),
