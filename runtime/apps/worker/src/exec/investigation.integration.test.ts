@@ -30,6 +30,7 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { startClient, type Client } from '../../../../fixtures/src/test-helpers.ts';
+import { htmlListItem, HTML_LIST_TOTAL } from '../../../../fixtures/src/sites/case-sites.ts';
 import { fixtureGuard } from '../../../../tests/helpers/fixture-net.ts';
 import { createTestDatabase, type TestDatabase } from '../../../../tests/helpers/pg.js';
 import { loadWorkerConfig } from '../config.js';
@@ -42,6 +43,8 @@ const NEXT_HOST = 'zz_test_next.localhost';
 const ROBOTS_HOST = 'zz_test_robots.localhost';
 const CHALLENGE_HOST = 'zz_test_challenge_200.localhost';
 const SSR_HOST = 'zz_test_ssr.localhost';
+/** Liste HTML statique paginée par le chemin (constat Janssens), fixture `html_list`. */
+const HTML_LIST = 'zz_test_html_list.localhost';
 const EXTRACT_MODEL = 'zz_extract';
 const MODEL = 'zz_investigate';
 const A = randomUUID();
@@ -172,7 +175,7 @@ beforeAll(async () => {
   queue = new PgBossJobQueue({ connectionString: tdb.url, max: 2, supervise: false });
   await queue.start();
   await queue.createQueue(runQueueDefinition());
-  const guard = fixtureGuard(client.server.port, [API_HOST, NEXT_HOST, ROBOTS_HOST, CHALLENGE_HOST, SSR_HOST], net);
+  const guard = fixtureGuard(client.server.port, [API_HOST, NEXT_HOST, ROBOTS_HOST, CHALLENGE_HOST, SSR_HOST, HTML_LIST], net);
   const pacer = new DomainPacer(new PgPacingStore(pool));
   // E4 (`agent_fetch` par le réseau) seulement : ni moteur agentique ni Chromium dans ce fichier.
   const agent = {
@@ -443,7 +446,8 @@ describe('enquête (tâche 2.1)', () => {
     fake.setScenario(EXTRACT_MODEL, [scripted.json({ items }), scripted.json({ items }), scripted.json({ items })]);
     const apiId = await insertApi('zz_test_inv_html_replay');
     const run = await investigate(apiId, { url: `${base(SSR_HOST)}/`, description: 'liste des produits du catalogue', auto_validate: true });
-    expect(run).toMatchObject({ state: 'succeeded', items: 20, strategy_version: 2 });
+    // Constat Janssens : la page porte une pagination (`?page=N`, rel=next) ; la compilée la reprend, vérifiée en page 2 (2 × 20).
+    expect(run).toMatchObject({ state: 'succeeded', items: 40, strategy_version: 2 });
     // E4 essayé et conforme (N = 3), puis UNE compilation : 2 appels du rôle investigate, 3 du rôle extract.
     expect(fake.byRole[MODEL]).toBe(2);
     expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
@@ -458,11 +462,12 @@ describe('enquête (tâche 2.1)', () => {
       [2, 'fetch', 1, true],
     ]);
     expect(versions[1]!.spec.sources).toEqual([{ id: 'page', from: 'html', records: 'article.product' }]);
+    expect((versions[1]!.spec as { pagination?: unknown }).pagination).toMatchObject({ type: 'page_param', param: 'url.query.page', start: 1 });
     expect(versions[1]!.spec.request!.allowed_hosts).toEqual([SSR_HOST]);
     expect((await apiRow(apiId)).current_strategy_version).toBe(2);
     const events = await eventsOf(run.id);
     const compiled = events.find((e) => e.kind === 'strategy.compiled')!.payload as Record<string, unknown>;
-    expect(compiled).toMatchObject({ from: 'agent_fetch', to: 'fetch', ok: true, proposals: 1, records: 20, ratio: 1 });
+    expect(compiled).toMatchObject({ from: 'agent_fetch', to: 'fetch', ok: true, proposals: 1, records: 20, ratio: 1, pagination: { type: 'page_param', verified: true, pages: 2, items: 40 } });
     expect(compiled['cost_usd']).toEqual(expect.any(Number));
     expect(compiled['cost_usd']).toBeGreaterThan(0);
     const finished = events.find((e) => e.kind === 'investigation.finished')!.payload as { strategy: Record<string, unknown> };
@@ -475,10 +480,11 @@ describe('enquête (tâche 2.1)', () => {
     fake.reset();
     const { runId } = await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId, ownerId: A, trigger: 'rest' }));
     const replay = await waitRun(runId);
-    expect(replay).toMatchObject({ state: 'succeeded', items: 20, strategy_version: 2 });
+    // Toutes les pages du catalogue (5 × 20), sans LLM ; la page 1 est celle que l'agent avait lue.
+    expect(replay).toMatchObject({ state: 'succeeded', items: 100, strategy_version: 2 });
     expect(fake.requests).toBe(0);
     const delivered = (await pool.query<{ item: unknown }>('SELECT item FROM dataset_items WHERE run_id = $1 ORDER BY seq', [runId])).rows.map((r) => r.item);
-    expect(delivered).toEqual(items);
+    expect(delivered.slice(0, 20)).toEqual(items);
   });
 
   test('assert_html_replay_no_llm (recette UX-30, UX-31) — boutique de livres (note en mot, « In stock », prix en livres) puis citations (champ tableau) : compilées en html, vérifiées sans LLM, rejouées avec 0 appel LLM', async () => {
@@ -579,6 +585,61 @@ describe('enquête (tâche 2.1)', () => {
     expect((await pool.query<{ item: unknown }>('SELECT item FROM dataset_items WHERE run_id = $1 ORDER BY seq', [quoteReplay.id])).rows.map((r) => r.item)).toEqual(quotes);
   });
 
+  test('constat Janssens — essai E4 correct sur la page 1 (champ requis constant sur cette page) : plus jeté en minimal_content ni escaladé ; compilé en html, pagination détectée par le code, vérifiée en page 2, rejeu sans LLM de toutes les pages', async () => {
+    withExtract = true;
+    const op = (name: string) => ({ op: name, pattern: null, group: null, decimal: null, format: null });
+    const items = Array.from({ length: 10 }, (_, k) => {
+      const b = htmlListItem(k + 1);
+      return { title: b.title, sector: b.sector, reference: b.ref, url: `${base(HTML_LIST)}${b.path}` };
+    });
+    // Le secteur est le même sur les 10 cartes de la page 1 : contenu minimal en échec sur les sorties d'E4 seules.
+    expect(new Set(items.map((i) => i.sector)).size).toBe(1);
+    const fields = {
+      fields: [
+        { name: 'title', type: 'string', required: true, personal: false, description: 'Title' },
+        { name: 'sector', type: 'string', required: true, personal: false, description: 'Sector' },
+        { name: 'reference', type: 'string', required: true, personal: false, description: 'Reference' },
+        { name: 'url', type: 'string', required: true, personal: false, description: 'Listing URL' },
+      ],
+      sources: [],
+    };
+    fake.setScenario(MODEL, [
+      scripted.json(fields),
+      scripted.json({
+        records: 'main article.item-bien',
+        fields: [
+          { field: 'title', css: 'h3', attr: null, ops: [op('trim')] },
+          { field: 'sector', css: 'span.flex-none', attr: null, ops: [op('trim')] },
+          { field: 'reference', css: 'a', attr: 'data-ref', ops: [] },
+          { field: 'url', css: 'a', attr: 'href', ops: [op('abs_url')] },
+        ],
+      }),
+    ]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items }), scripted.json({ items }), scripted.json({ items })]);
+    const apiId = await insertApi('zz_test_inv_html_list_e4');
+    const run = await investigate(apiId, { url: `${base(HTML_LIST)}/nos-maisons/`, description: 'liste des biens de cette page, toutes les pages, sans ouvrir les fiches', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded', items: 20 });
+    // Un seul essai, E4, conforme : ni minimal_content ni escalade.
+    const attempts = (await eventsOf(run.id)).filter((e) => e.kind === 'attempt.finished').map((e) => e.payload as { attempt: { execution: string; result: string }; why?: { code: string } });
+    expect(attempts.map((a) => [a.attempt.execution, a.attempt.result])).toEqual([['agent_fetch', 'ok']]);
+    const compiled = (await eventsOf(run.id)).find((e) => e.kind === 'strategy.compiled')!.payload as Record<string, unknown>;
+    expect(compiled).toMatchObject({ ok: true, records: 10, ratio: 1, pagination: { type: 'page_param', verified: true, pages: 2, items: 20 } });
+    // Version courante : la compilée, déclarative html paginée par le chemin ; E4 reste la version de repli.
+    const current = (await pool.query<{ execution: string; spec: { sources: { from: string }[]; pagination?: Record<string, unknown> } }>('SELECT v.execution, v.spec FROM strategy_versions v JOIN apis a ON a.id = v.api_id AND a.current_strategy_version = v.version WHERE v.api_id = $1', [apiId])).rows[0]!;
+    expect(current.execution).toBe('fetch');
+    expect(current.spec.sources[0]).toMatchObject({ from: 'html' });
+    expect(current.spec.pagination).toMatchObject({ type: 'page_param', param: 'url.path', path_pattern: '/nos-maisons/page/{page}/' });
+    expect((await pool.query<{ execution: string }>('SELECT execution FROM strategy_versions WHERE api_id = $1 ORDER BY version', [apiId])).rows.map((r) => r.execution)).toEqual(['agent_fetch', 'fetch']);
+    // LLM de l'enquête : la proposition, la compilation, et les 3 mises en forme E4 ; rien de plus.
+    expect(fake.byRole[MODEL]).toBe(2);
+    expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
+    // Rejeu : toutes les pages, sans aucun appel LLM.
+    fake.reset();
+    const replay = await waitRun((await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId, ownerId: A, trigger: 'rest' }))).runId);
+    expect(replay).toMatchObject({ state: 'succeeded', items: HTML_LIST_TOTAL });
+    expect(fake.requests).toBe(0);
+  });
+
   test('type non compilable (tableau d’objets) : compilation refusée AVANT tout appel (unsupported_field_type), E4 gardé, aucun coût de compilation', async () => {
     withExtract = true;
     const items = { items: [{ title: 'Lampe Zztest 0001', offers: [{ price: 1 }] }, { title: 'Table Zztest 0002', offers: [{ price: 2 }] }] };
@@ -670,6 +731,25 @@ describe('enquête (tâche 2.1)', () => {
     expect(attempt.why).toMatchObject({ code: 'max_cost_usd' });
     expect(await apiRow(apiId)).toMatchObject({ status: 'erreur', status_reason: 'trial_cost_over_cap' });
     expect(await detailOf(run.id)).toBe('trial_cost_over_cap');
+  });
+
+  test('constat Janssens — essai coupé par le RESTE du budget d’enquête (max_cost_usd plus haut) : motif investigation_budget_usd, jamais « max_cost_usd »', async () => {
+    withExtract = true;
+    // Rôle investigate presque gratuit ; budget d'enquête minuscule ; max_cost_usd de l'API à 3 $ (cas des runs a55da9e7, 7cc0533a).
+    price = { in: 0.001, out: 0.001 };
+    fake.setScenario(MODEL, [scripted.json({ fields: [{ name: 'title', type: 'string', required: true, personal: false, description: 'Titre' }], sources: [] })]);
+    const items = { items: [{ title: 'Lampe Zztest 0001' }] };
+    fake.setScenario(EXTRACT_MODEL, [scripted.json(items), scripted.json(items), scripted.json(items)]);
+    const apiId = await insertApi('zz_test_inv_trial_over_budget');
+    await pool.query('UPDATE apis SET max_cost_usd = 3 WHERE id = $1', [apiId]);
+    const run = await investigate(apiId, { url: `${base(SSR_HOST)}/`, description: 'liste des produits du catalogue', auto_validate: true, budget_usd: 0.0002 });
+    expect(run).toMatchObject({ state: 'failed' });
+    expect(fake.byRole[EXTRACT_MODEL] ?? 0).toBe(0);
+    const attempt = (await eventsOf(run.id)).find((e) => e.kind === 'attempt.finished')!.payload as { attempt: { result: string }; why?: { code: string } };
+    expect(attempt.attempt).toMatchObject({ result: 'run_budget_exceeded' });
+    expect(attempt.why).toMatchObject({ code: 'investigation_budget_usd' });
+    expect(await apiRow(apiId)).toMatchObject({ status: 'erreur', status_reason: 'investigation_budget_exhausted' });
+    expect(await detailOf(run.id)).toBe('investigation_budget_usd');
   });
 
   test('page HTML statique, compilation refusée (valeurs divergentes deux fois) : E4 gardé tel quel, raison dans le récit', async () => {

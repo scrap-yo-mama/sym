@@ -86,8 +86,15 @@ export type TrialPorts = {
   /**
    * Contenu minimal (tâche 2.12, r4 R5) : après les N exécutions conformes, un champ requis constant, vide ou en
    * sentinelles sur ces sorties rend le couple non conforme (`extraction`, couple suivant). Absent : aucun contrôle.
+   * Peut être asynchrone : pour un essai E4, la compilation en déclaratif `html` paginé et sa vérification en page 2 y ont
+   * lieu (constat Janssens : une page 1 correcte ne se jette plus en `minimal_content`).
    */
-  contentCheck?(pair: TrialPair): { readonly failure_class: FailureClass; readonly detail: string } | null;
+  contentCheck?(pair: TrialPair): { readonly failure_class: FailureClass; readonly detail: string } | null | Promise<{ readonly failure_class: FailureClass; readonly detail: string } | null>;
+  /**
+   * Dépense de l'enquête faite HORS des exécutions de couples pendant les essais (compilation et vérification de page 2
+   * d'un essai E4) : comptée dans le budget restant et dans la dépense rendue. Absent : 0.
+   */
+  spentOutside?(): number;
 };
 
 export type TrialBudget = {
@@ -135,12 +142,14 @@ export async function runTrials(
 ): Promise<TrialsOutcome> {
   const samples = options.samples ?? INVESTIGATION_SAMPLES;
   let remaining = [...plan];
-  let spent = budget.spentUsd;
+  let runsSpent = budget.spentUsd;
+  /** Dépense de l'enquête : exécutions des couples, plus ce que `contentCheck` a dépensé hors d'elles. */
+  const spentNow = (): number => Math.round((runsSpent + (ports.spentOutside?.() ?? 0)) * 1e6) / 1e6;
   const tried: PairOutcome[] = [];
   /** Conforme déjà trouvé pendant le rattrapage : retenu si aucun moins cher ne l'est. */
   let best: PairOutcome | null = null;
   while (remaining.length > 0) {
-    if (tried.length >= budget.maxAttempts) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spent, tried } : { kind: 'budget_exhausted', reason: 'max_attempts', spentUsd: spent, tried };
+    if (tried.length >= budget.maxAttempts) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spentNow(), tried } : { kind: 'budget_exhausted', reason: 'max_attempts', spentUsd: spentNow(), tried };
     const pair = remaining.shift()!;
     const executions: TrialExecution[] = [];
     let failure: { cls: FailureClass; detail: string | null } | null = null;
@@ -152,7 +161,7 @@ export async function runTrials(
      * exécutions d'échantillon et pour la vérification de la règle d'arrêt.
      */
     const execute = async (index: number, purpose: TrialPurpose): Promise<{ stop: boolean; run: TrialExecution | null; perRunCap: boolean }> => {
-      const left = Math.round((budget.maxUsd - spent) * 1e6) / 1e6;
+      const left = Math.round((budget.maxUsd - spentNow()) * 1e6) / 1e6;
       if (left <= 0) {
         budgetStop = 'investigation_budget_usd';
         return { stop: true, run: null, perRunCap: false };
@@ -165,7 +174,7 @@ export async function runTrials(
       const run = await ports.execute(pair, index, { ceilingUsd, deadlineMs: budget.deadlineMs }, purpose);
       // Un coût inconnu ne se tient pas sous un budget : l'enquête s'arrête là (08 §1, jamais 0 par défaut).
       if (run.cost_usd === null) budgetStop = 'investigation_budget_usd';
-      else spent = Math.round((spent + run.cost_usd) * 1e6) / 1e6;
+      else runsSpent = Math.round((runsSpent + run.cost_usd) * 1e6) / 1e6;
       let perRunCap = false;
       if (!run.ok) {
         const cls = run.failure_class ?? 'code_error';
@@ -213,7 +222,7 @@ export async function runTrials(
       }
     }
     if (failure === null && budgetStop === null && executions.length === samples && ports.contentCheck !== undefined) {
-      const content = ports.contentCheck(pair);
+      const content = await ports.contentCheck(pair);
       if (content !== null) failure = { cls: content.failure_class, detail: content.detail };
     }
     const done = executions.length === samples && failure === null && budgetStop === null;
@@ -233,12 +242,12 @@ export async function runTrials(
     }
     if (done) {
       const cheaper = options.catchUp === true ? cheaperPairs(remaining, pair) : [];
-      if (cheaper.length === 0) return { kind: 'conformant', outcome, spentUsd: spent, tried };
+      if (cheaper.length === 0) return { kind: 'conformant', outcome, spentUsd: spentNow(), tried };
       best = outcome;
       remaining = cheaper;
       continue;
     }
-    if (budgetStop !== null) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spent, tried } : { kind: 'budget_exhausted', reason: budgetStop, spentUsd: spent, tried };
+    if (budgetStop !== null) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spentNow(), tried } : { kind: 'budget_exhausted', reason: budgetStop, spentUsd: spentNow(), tried };
     const cls = failure!.cls;
     const decision = pruneAfter(cls, pair, remaining);
     if (decision.pruned.length > 0) {
@@ -246,8 +255,8 @@ export async function runTrials(
       const skip = new Set(decision.pruned);
       remaining = remaining.filter((p) => !skip.has(p));
     }
-    if (decision.next === 'stop') return { kind: 'stopped', outcome, spentUsd: spent, tried };
-    if (decision.next === 'action_required') return { kind: 'action_required', outcome, spentUsd: spent, tried };
+    if (decision.next === 'stop') return { kind: 'stopped', outcome, spentUsd: spentNow(), tried };
+    if (decision.next === 'action_required') return { kind: 'action_required', outcome, spentUsd: spentNow(), tried };
   }
-  return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spent, tried } : { kind: 'exhausted', spentUsd: spent, tried };
+  return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spentNow(), tried } : { kind: 'exhausted', spentUsd: spentNow(), tried };
 }
