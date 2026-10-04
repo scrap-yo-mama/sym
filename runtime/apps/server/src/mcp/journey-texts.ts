@@ -34,6 +34,8 @@ export type JourneyTexts = {
     requestedMissing: (fields: readonly string[]) => { text: string; carryOn: string; details: string };
     exampleMismatch: (fields: readonly string[]) => { text: string; carryOn: string; other: string };
     cost: (estimateUsd: number, compileUsd: number) => { text: string; carryOn: string; cancel: string };
+    /** Premier run complet (toutes les pages) dont le prix estimé dépasse le seuil, ou est inconnu (`estimateUsd` null). */
+    firstRunCost: (estimateUsd: number | null, pages: number | null) => { text: string; carryOn: string; cancel: string };
     /** « 1) … 2) … ; autre : ajoute une remarque. » */
     render: (text: string, options: readonly string[]) => string;
     reply: (tool: string) => string;
@@ -41,6 +43,8 @@ export type JourneyTexts = {
   /** Suites d'une réponse `choice` autre que « continuer ». */
   choice: {
     declined: string;
+    /** Une question est posée : `choice` est obligatoire, jamais déduit. */
+    required: (valid: string) => string;
     rerun: (what: string) => string;
     unknown: (valid: string) => string;
   };
@@ -79,12 +83,21 @@ const FR: JourneyTexts = {
       carryOn: `Lancer les essais (~${fmtUsd(estimate, 'fr')})`,
       cancel: 'Ne rien lancer',
     }),
+    firstRunCost: (estimate, pages) => {
+      const upTo = pages === null ? '' : ` (jusqu’à ${pages} pages)`;
+      return {
+        text: estimate === null ? `Je ne connais pas le prix de la lecture de toutes les pages${upTo}. On lance ?` : `La lecture de toutes les pages${upTo} coûterait environ ${fmtUsd(estimate, 'fr')}. On lance ?`,
+        carryOn: estimate === null ? 'Lancer la lecture complète' : `Lancer la lecture complète (~${fmtUsd(estimate, 'fr')})`,
+        cancel: 'Ne rien lancer',
+      };
+    },
     render: (text, options) => `${text} ${options.map((o, i) => `${i + 1}) ${o}`).join(' ')}`,
     reply: (tool) => `Réponds avec ${tool} et choice (l’identifiant de l’option).`,
   },
   choice: {
     declined: 'SYM 👻 : D’accord, je ne lance rien. Rien n’a été dépensé pour les essais.',
     rerun: (what) => `SYM 👻 : Noté (${what}). Je repars d’une nouvelle demande avec cette précision ; l’ancienne reste dans le catalogue.`,
+    required: (valid) => `Une question est posée : réponds avec choice (l’identifiant de l’option choisie). Options : ${valid}.`,
     unknown: (valid) => `Cette option n’existe pas. Options : ${valid}.`,
   },
 };
@@ -118,12 +131,21 @@ const EN_TEXTS: JourneyTexts = {
       carryOn: `Start the trials (~${fmtUsd(estimate, 'en')})`,
       cancel: 'Start nothing',
     }),
+    firstRunCost: (estimate, pages) => {
+      const upTo = pages === null ? '' : ` (up to ${pages} pages)`;
+      return {
+        text: estimate === null ? `I do not know the price of reading all the pages${upTo}. Go ahead?` : `Reading all the pages${upTo} would cost about ${fmtUsd(estimate, 'en')}. Go ahead?`,
+        carryOn: estimate === null ? 'Start the full read' : `Start the full read (~${fmtUsd(estimate, 'en')})`,
+        cancel: 'Start nothing',
+      };
+    },
     render: (text, options) => `${text} ${options.map((o, i) => `${i + 1}) ${o}`).join(' ')}`,
     reply: (tool) => `Answer with ${tool} and choice (the option id).`,
   },
   choice: {
     declined: 'SYM 👻: OK, I start nothing. Nothing was spent on the trials.',
     rerun: (what) => `SYM 👻: Noted (${what}). I start again from a new request with this detail; the old one stays in the catalog.`,
+    required: (valid) => `A question is pending: answer with choice (the id of the chosen option). Options: ${valid}.`,
     unknown: (valid) => `This option does not exist. Options: ${valid}.`,
   },
 };

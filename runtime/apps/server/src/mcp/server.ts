@@ -51,7 +51,7 @@ import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
 import { journeyTexts } from './journey-texts.js';
 import { attemptsOf, createdSummary, renderNarrative } from './narrative.js';
 import { createProgressSink, progressMessage, type ProgressSink } from './progress.js';
-import { blockHead, buildResultBlock, firstRunDue, milestoneText, PROGRESS_HEARTBEAT_MS, questionOf, readFirstRun, readGate, stepOf, type Question, type ResultBlock } from './result-block.js';
+import { blockHead, buildResultBlock, firstRunDue, firstRunGateOf, readFirstRunRequested, type FirstRunGate, milestoneText, PROGRESS_HEARTBEAT_MS, questionOf, readFirstRun, readGate, stepOf, type Question, type ResultBlock } from './result-block.js';
 import { promptBody, PROMPT_ARG_SCHEMAS } from './prompts.js';
 import { actionTemplate, blockedTemplate, elicitationCatalog, parseLang, PROMPT_ARGS, PROMPT_MENU, PROMPT_NAMES, type McpLocale } from './texts.js';
 import {
@@ -312,24 +312,32 @@ const ACTIVE_RUN = new Set<string>(['queued', 'running', 'waiting_tunnel']);
 /** Fenêtre après la fin d'une enquête pendant laquelle SYM lance son premier run complet (le client suit l'enquête dans ce délai). */
 const FIRST_RUN_WINDOW_MS = 15 * 60_000;
 
-/** Premiers runs en cours de création, par API : un seul lancement même si deux appels se croisent (instance unique, 03 § 2). */
+/** Premiers runs en cours de création, par API : un seul lancement même si deux appels se croisent (instance unique, 03 § 2). La marque durable est le run lui-même (`readFirstRun`). */
 const firstRunLaunches = new Map<string, Promise<void>>();
+
+/** `read` : lecture pure, ne lance jamais ; `launch` : outil d'écriture, lance si demandé et sous le seuil de coût ; `confirmed` : la personne a confirmé le coût. */
+type FirstRunMode = 'read' | 'launch' | 'confirmed';
+type FirstRunState = { run: RunRow | null; gate: FirstRunGate | null; pending: boolean };
+const NO_FIRST_RUN: FirstRunState = { run: null, gate: null, pending: false };
 
 /**
  * Premier run complet d'une enquête réussie (03 § 2 : « les éléments sont dans le dataset du run », toutes les pages) : l'enquête
  * a validé la stratégie sur un échantillon de pages ; SYM lance lui-même le run ordinaire qui lit tout, avec la même clé (mêmes
  * gardes, mêmes plafonds, canal `mcp`). Idempotent : un run ordinaire déjà lancé après l'enquête est repris, jamais doublé.
- * Rend ce run, ou null (enquête non réussie, API d'autrui, entrée à renseigner, lancement refusé : le résultat de l'enquête reste).
+ * Il ne part que d'un outil d'écriture (`create_api`, `validate_schema`), pour une enquête qui l'a demandé (`request.first_run`,
+ * posé par `create_api`), et jamais au-delà de `CONFIRM_ABOVE_USD` ni sans prix connu : la porte de coût est alors rendue.
  */
-async function ensureFirstRun(ctx: ServerContext, caller: McpCaller, inv: RunRow): Promise<RunRow | null> {
-  if (inv.kind !== 'investigation' || inv.state !== 'succeeded' || inv.finished_at === null) return null;
+async function ensureFirstRun(ctx: ServerContext, caller: McpCaller, inv: RunRow, mode: FirstRunMode): Promise<FirstRunState> {
+  if (inv.kind !== 'investigation' || inv.state !== 'succeeded' || inv.finished_at === null) return NO_FIRST_RUN;
   const api = await withActor(ctx.pool, caller.actor, (db) => readApiById(db, inv.api_id));
-  if (api === null || api.owner_id !== caller.actor.userId) return null;
+  if (api === null || api.owner_id !== caller.actor.userId) return NO_FIRST_RUN;
   const existing = await readFirstRun(ctx, caller.actor, api.id, inv.finished_at);
-  if (existing !== null) return existing;
-  if (!firstRunDue(inv, api)) return null;
+  if (existing !== null) return { run: existing, gate: null, pending: false };
+  if (!firstRunDue(inv, api) || !(await readFirstRunRequested(ctx, caller.actor, api.id))) return NO_FIRST_RUN;
+  const gate = mode === 'confirmed' ? null : await firstRunGateOf(ctx, caller.actor, api, ctx.confirmAboveUsd ?? 0.1);
+  if (gate !== null) return { run: null, gate, pending: false };
   // Seulement dans la foulée de l'enquête : relire plus tard une très ancienne enquête ne lance jamais un run (et sa dépense).
-  if (Date.now() - inv.finished_at.getTime() > FIRST_RUN_WINDOW_MS) return null;
+  if (mode === 'read' || (mode === 'launch' && Date.now() - inv.finished_at.getTime() > FIRST_RUN_WINDOW_MS)) return { run: null, gate: null, pending: true };
   let launch = firstRunLaunches.get(api.id);
   if (launch === undefined) {
     launch = (async () => {
@@ -341,17 +349,24 @@ async function ensureFirstRun(ctx: ServerContext, caller: McpCaller, inv: RunRow
     firstRunLaunches.set(api.id, launch);
   }
   await launch;
-  return readFirstRun(ctx, caller.actor, api.id, inv.finished_at);
+  return { run: await readFirstRun(ctx, caller.actor, api.id, inv.finished_at), gate: null, pending: false };
+}
+
+/** Pose (`true`) ou lève (`false`) la demande de premier run complet de l'enquête de cette API, par son propriétaire. */
+async function setFirstRunRequested(ctx: ServerContext, caller: McpCaller, apiId: string, requested: boolean): Promise<void> {
+  await withActor(ctx.pool, caller.actor, (db) =>
+    db.query("UPDATE apis SET investigation = jsonb_set(investigation, '{request,first_run}', $3::jsonb) WHERE id = $1 AND owner_id = $2 AND investigation #> '{request}' IS NOT NULL", [apiId, caller.actor.userId, JSON.stringify(requested)]),
+  );
 }
 
 /**
  * Attend un run jusqu'à son état terminal, une pause ou l'échéance (comme l'attente de l'API REST) ; pour une enquête, chaque
  * relève publie la progression (numéro du dernier événement de `investigation_events`, strictement croissant) si le client
  * l'a demandée, et un battement toutes les `progressHeartbeatMs` sans événement (03 § 5 : un jalon libellé toutes les 5 s au
- * plus, dans la langue de la personne). Une enquête réussie est suivie de son premier run complet (`ensureFirstRun`), attendu
- * dans la même échéance. Rend la dernière lecture du run d'enquête (null si le run a disparu).
+ * plus, dans la langue de la personne). Une enquête réussie est suivie de son premier run complet (`ensureFirstRun`, lancé seulement si
+ * `launchFirstRun`, donc par un outil d'écriture), attendu dans la même échéance. Rend la dernière lecture du run d'enquête (null si le run a disparu).
  */
-async function waitRun(ctx: ServerContext, caller: McpCaller, call: Call, runId: string, seconds: number) {
+async function waitRun(ctx: ServerContext, caller: McpCaller, call: Call, runId: string, seconds: number, launchFirstRun = false) {
   const deadline = Date.now() + seconds * 1000;
   const beatMs = ctx.rest.progressHeartbeatMs ?? PROGRESS_HEARTBEAT_MS;
   let lastSeq = 0;
@@ -378,7 +393,7 @@ async function waitRun(ctx: ServerContext, caller: McpCaller, call: Call, runId:
     const finished = row === null || isTerminalRunState(row.state) || row.paused_at !== null;
     if (row !== null && row.state === 'succeeded' && row.kind === 'investigation' && !call.signal.aborted) {
       // Premier run complet : lancé ici, puis attendu tant qu'il reste de l'attente.
-      const first = await ensureFirstRun(ctx, caller, row);
+      const first = (await ensureFirstRun(ctx, caller, row, launchFirstRun ? 'launch' : 'read')).run;
       if (first !== null && ACTIVE_RUN.has(first.state) && first.paused_at === null && Date.now() < deadline) {
         await sleep(Math.min(ctx.rest.pollMs, Math.max(1, deadline - Date.now())));
         continue;
@@ -437,7 +452,7 @@ function questionElicitation(question: Question, locale: McpLocale) {
     requestedSchema: {
       type: 'object',
       properties: {
-        choice: { type: 'string', title: c.decision, default: 'continue', enum: question.options.map((o) => o.id), enumNames: question.options.map((o) => o.label) },
+        choice: { type: 'string', title: c.decision, enum: question.options.map((o) => o.id), enumNames: question.options.map((o) => o.label) },
         remark: { type: 'string', title: c.remark, maxLength: 500 },
       },
       required: ['choice'],
@@ -535,8 +550,11 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       case 'running':
         return { tool: 'get_run', args: { run_id: runId, wait_seconds: ctx.rest.maxWaitSeconds } };
       case 'awaiting_decision':
+        // Jamais de `choice` ici : la réponse à une question est un acte de la personne, pas une suite suivie à la lettre.
         return { tool: 'validate_schema', args: { api_id: block.fields['api_id'] } };
       case 'succeeded':
+        // Premier run complet demandé mais pas lancé : la suite est l'outil d'écriture, jamais une lecture.
+        if (block.firstRunPending) return { tool: 'validate_schema', args: { api_id: block.fields['api_id'] } };
         return block.items?.cursor !== undefined && block.items.cursor !== null && block.datasetId !== null ? { tool: 'get_items', args: { dataset_id: block.datasetId, cursor: block.items.cursor } } : null;
       case 'failed':
         // Après un échec : la suite proposée par SYM (ré-enquête par le propriétaire), jamais un nouveau create_api (UXI8).
@@ -568,18 +586,18 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     };
   };
 
-  type AnswerOptions = { existing?: boolean; note?: string; schemaRemark?: boolean; userRemark?: string; created?: boolean; briefLines?: readonly string[]; nextAction?: Json | null };
+  type AnswerOptions = { launchFirstRun?: boolean; existing?: boolean; note?: string; schemaRemark?: boolean; userRemark?: string; created?: boolean; briefLines?: readonly string[]; nextAction?: Json | null };
 
   /**
    * Réponse d'un run d'ENQUÊTE (create_api, get_run, validate_schema, ré-enquête) : le bloc de résultat de 03 § 10.2 dans
    * `structuredContent`, et en texte le succès chiffré avec son aperçu (ou la question unique), le récit, les identifiants.
-   * Le premier run complet qui suit une enquête réussie est lancé ici s'il ne l'est pas encore (`ensureFirstRun`).
+   * Le premier run complet qui suit une enquête réussie n'est lancé ici que par un outil d'écriture (`opts.launchFirstRun`) ; get_run reste une lecture.
    */
   const investigationAnswer = async (runId: string, caller: McpCaller, call: Call, opts: AnswerOptions = {}): Promise<ToolOutput> => {
     const row = await withActor(ctx.pool, caller.actor, (db) => readRunRow(db, runId));
     if (row === null) return notFoundError();
-    const first = await ensureFirstRun(ctx, caller, row);
-    const block = await buildResultBlock({ ctx, actor: caller.actor, locale: call.locale, runId, existing: opts.existing === true, firstRun: first });
+    const first = await ensureFirstRun(ctx, caller, row, opts.launchFirstRun === true ? 'launch' : 'read');
+    const block = await buildResultBlock({ ctx, actor: caller.actor, locale: call.locale, runId, existing: opts.existing === true, firstRun: first.run, firstRunGate: first.gate, firstRunPending: first.pending });
     const base = await runResultOf(ctx, caller.actor, runId);
     if (base === null) return notFoundError();
     if (block === null) return runResultAnswer(base, call);
@@ -659,22 +677,56 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     const answer = await rest(ctx, caller, 'POST', `/api/apis/${apiId}/validate-schema${query({ wait: 0 })}`, body);
     const runId = answer.body['run_id'];
     if ((answer.status === 202 || answer.status === 200) && typeof runId === 'string') {
-      await waitRun(ctx, caller, call, runId, wait(args));
-      return investigationAnswer(runId, caller, call);
+      await waitRun(ctx, caller, call, runId, wait(args), true);
+      return investigationAnswer(runId, caller, call, { launchFirstRun: true });
     }
     return restError(answer);
   };
 
   /**
-   * Réponse à la question unique (03 § 4 et § 9) : « continuer » valide le schéma proposé et lance les essais ; les autres
+   * Suite d'une enquête déjà validée dont le premier run complet est demandé mais pas lancé : porte de coût (confirmation explicite,
+   * `continue` ou `cancel`, jamais par défaut) ou simple reprise (`validate_schema` sans question lance le run). Null : rien de tel.
+   */
+  const chooseFirstRun = async (apiId: string, choice: string | undefined, args: Json, caller: McpCaller, call: Call): Promise<ToolOutput | null> => {
+    if (!UUID.test(apiId)) return null;
+    const api = await withActor(ctx.pool, caller.actor, (db) => readApiById(db, apiId));
+    if (api === null || api.owner_id !== caller.actor.userId || api.investigation_phase === 'awaiting_schema_validation') return null;
+    const latest = await withActor(ctx.pool, caller.actor, async (db) => {
+      const id = (await db.query<{ id: string }>("SELECT id FROM runs WHERE api_id = $1 AND kind = 'investigation' ORDER BY created_at DESC LIMIT 1", [apiId])).rows[0]?.id;
+      return id === undefined ? null : readRunRow(db, id);
+    });
+    if (latest === null) return null;
+    const state = await ensureFirstRun(ctx, caller, latest, 'read');
+    if (state.gate === null && !state.pending) return null;
+    const t = journeyTexts(call.locale);
+    const valid = state.gate === null ? ['continue'] : ['continue', 'cancel'];
+    if (state.gate !== null && choice === undefined) return toolError('invalid_input', t.choice.required(valid.join(', ')));
+    if (choice !== undefined && !valid.includes(choice)) return toolError('invalid_input', t.choice.unknown(valid.join(', ')));
+    if (choice === 'cancel') {
+      await setFirstRunRequested(ctx, caller, apiId, false);
+      return investigationAnswer(latest.id, caller, call, { note: t.choice.declined, created: true, nextAction: null });
+    }
+    // Coût confirmé (ou aucune porte) : le premier run complet part, attendu dans l'échéance.
+    await ensureFirstRun(ctx, caller, latest, 'confirmed');
+    await waitRun(ctx, caller, call, latest.id, wait(args));
+    return investigationAnswer(latest.id, caller, call);
+  };
+
+  /**
+   * Réponse à la question unique (03 § 4 et § 9)
+ : « continuer » valide le schéma proposé et lance les essais ; les autres
    * options ne lancent rien ici : « ne rien lancer » s'arrête, les autres repartent d'une nouvelle demande précisée
    * (`next_action: create_api` avec `force_new`), puisque l'ancienne reste dans le catalogue.
    */
   const choose = async (apiId: string, choice: string | undefined, remark: string, args: Json, caller: McpCaller, call: Call): Promise<ToolOutput> => {
+    const settled = await chooseFirstRun(apiId, choice, args, caller, call);
+    if (settled !== null) return settled;
     const info = await readGate(ctx, caller.actor, apiId);
     const question = questionOf(info.gate, call.locale);
     const valid = question === null ? ['continue'] : question.options.map((o) => o.id);
     const t = journeyTexts(call.locale);
+    // Une question posée : la personne répond, la réponse n'a pas de valeur par défaut (UXI9 : jamais de dépense confirmée par omission).
+    if (question !== null && choice === undefined) return toolError('invalid_input', t.choice.required(valid.join(', ')));
     if (choice === undefined || choice === 'continue') return validateFlow(apiId, {}, args, caller, call);
     if (!valid.includes(choice)) return toolError('invalid_input', t.choice.unknown(valid.join(', ')));
     // Dernier run d'enquête de l'API : le bloc de résultat (la question reste lisible) accompagne la réponse.
@@ -756,12 +808,14 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
           // Création sans attente : l'attente (et la progression) sont ici, pour que le client voie l'enquête avancer.
           const answer = await rest(ctx, caller, 'POST', `/api/apis${query({ wait: 0 })}`, body);
           if (answer.status !== 201) return restError(answer);
+          // Le premier run complet suit cette demande-là seulement (créée par l'outil d'écriture) : drapeau durable dans la demande.
+          await setFirstRunRequested(ctx, caller, String(answer.body['api_id']), true);
           target = { apiId: String(answer.body['api_id']), runId: String(answer.body['run_id']), existing: false };
         }
       } finally {
         release();
       }
-      const row = await waitRun(ctx, caller, call, target.runId, wait(args));
+      const row = await waitRun(ctx, caller, call, target.runId, wait(args), true);
       // UX-07 : le worker clôt le run PUIS applique le statut (transaction suivante) : on attend (borné) qu'il en découle.
       if (row?.state === 'failed') await waitApiLeavesEnquete(ctx, caller.actor, target.apiId, Date.now() + 2_000, call.signal);
       // Décision due (ambiguïté réelle, coût au-delà du seuil, ou `auto_validate: false`) : élicitation si le client la déclare.
@@ -776,13 +830,13 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
           });
         }
       }
-      return investigationAnswer(target.runId, caller, call, { existing: target.existing, created: true });
+      return investigationAnswer(target.runId, caller, call, { existing: target.existing, created: true, launchFirstRun: true });
     },
 
     async validate_schema(args, caller, call) {
       const apiId = String(args['api_id']);
       if (!UUID.test(apiId)) return notFoundError();
-      // Schéma corrigé : la personne a tranché, les essais partent. Sinon `choice` répond à la question unique (« continue » par défaut).
+      // Schéma corrigé : la personne a tranché, les essais partent. Sinon `choice` répond à la question unique (obligatoire quand une question est posée ; « continue » seulement sans question).
       if (args['output_schema'] !== undefined) return validateFlow(apiId, { output_schema: args['output_schema'] }, args, caller, call);
       return choose(apiId, typeof args['choice'] === 'string' ? args['choice'] : undefined, '', args, caller, call);
     },

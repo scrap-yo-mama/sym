@@ -49,6 +49,8 @@ let mcpBase: string;
 let mcp: McpClient;
 /** Seuil `CONFIRM_ABOVE_USD` du worker de ce test : absent (aucune porte de coût) sauf dans le test qui l'exige. */
 const confirmAbove: { value: number | undefined } = { value: undefined };
+/** Seuil `CONFIRM_ABOVE_USD` du serveur (porte de coût du premier run complet), rétabli avant chaque test. */
+const DEFAULT_CONFIRM_ABOVE = 0.1;
 const base = (host: string) => `http://${host}:${client.server.port}`;
 
 const llmConfig = (): LlmConfig => ({
@@ -200,6 +202,7 @@ beforeEach(async () => {
   await client.reset();
   calls.length = 0;
   confirmAbove.value = undefined;
+  srv.started.ctx.confirmAboveUsd = DEFAULT_CONFIRM_ABOVE;
 });
 
 describe('parcours MCP du premier coup (lot A, 03-specs-mcp)', () => {
@@ -317,8 +320,74 @@ describe('parcours MCP du premier coup (lot A, 03-specs-mcp)', () => {
     expect(declined.isError, text(declined)).not.toBe(true);
     expect(await runsOf()).toBe(runs);
     expect(fake.requests).toBe(1);
+    // Sans `choice`, jamais de « continue » par défaut : la question reste posée, aucun essai ne part (UXI9).
+    const attemptsBefore = (await pool.query<{ n: string }>('SELECT count(*) AS n FROM run_attempts WHERE run_id IN (SELECT id FROM runs WHERE api_id = $1)', [apiId])).rows[0]!.n;
+    const noChoice = await tool('validate_schema', { api_id: apiId });
+    expect(noChoice.isError, text(noChoice)).toBe(true);
+    expect(await runsOf()).toBe(runs);
+    expect((await pool.query<{ n: string }>('SELECT count(*) AS n FROM run_attempts WHERE run_id IN (SELECT id FROM runs WHERE api_id = $1)', [apiId])).rows[0]!.n).toBe(attemptsBefore);
+    expect(fake.requests).toBe(1);
     // « Lancer » : les essais partent, les 519 éléments arrivent.
     const confirmed = await followToEnd(await tool('validate_schema', { api_id: apiId, choice: 'continue' }));
     expect(confirmed.structuredContent).toMatchObject({ state: 'succeeded', items_total: 519 });
+  }, 120_000);
+  const ordinaryRuns = async (apiId: string) => Number((await pool.query<{ n: string }>("SELECT count(*) AS n FROM runs WHERE api_id = $1 AND kind = 'run'", [apiId])).rows[0]!.n);
+
+  test('assert_get_run_read_only — get_run (et get_run avec wait_seconds) d’une enquête réussie ne lance jamais de run complet, même dans les 15 minutes de sa fin', async () => {
+    const url = await scriptHtmlList();
+    // Enquête créée en REST (sans le drapeau de l'outil d'écriture) : le premier run complet n'a pas été demandé.
+    const created = await srv.app.inject({ method: 'POST', url: '/api/apis?wait=0', headers: { authorization: `Bearer ${key}` }, payload: { description: `${DESCRIPTION} (lecture)`, url } });
+    expect(created.statusCode, created.body).toBe(201);
+    const { api_id: apiId, run_id: runId } = created.json<{ api_id: string; run_id: string }>();
+    for (let i = 0; i < 200; i += 1) {
+      const state = (await pool.query<{ state: string }>('SELECT state FROM runs WHERE id = $1', [runId])).rows[0]!.state;
+      if (state === 'succeeded') break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const read = await tool('get_run', { run_id: runId });
+    expect(read.isError, text(read)).not.toBe(true);
+    const held = await tool('get_run', { run_id: runId, wait_seconds: 2 });
+    expect(held.isError, text(held)).not.toBe(true);
+    expect(await ordinaryRuns(apiId)).toBe(0);
+    expect(held.structuredContent).not.toHaveProperty('first_run_id');
+  }, 120_000);
+
+  test('assert_cost_announced_before_spend — le premier run complet au-delà de CONFIRM_ABOVE_USD attend une confirmation explicite : sans choice rien ne part, cancel ne lance rien, continue lance', async () => {
+    srv.started.ctx.confirmAboveUsd = 1e-9;
+    const url = await scriptHtmlList();
+    const asked = await tool('create_api', { description: `${DESCRIPTION} (premier run coûteux)`, url, force_new: true });
+    expect(asked.isError, text(asked)).not.toBe(true);
+    expect(asked.structuredContent).toMatchObject({ state: 'awaiting_decision', question: { reason: 'cost_above_cap' }, next_action: { tool: 'validate_schema' } });
+    expect(asked.structuredContent!['next_action']).not.toHaveProperty('args.choice');
+    expect(questionOf(asked)!.options.map((o) => o.id)).toEqual(['continue', 'cancel']);
+    const apiId = String(asked.structuredContent!['api_id']);
+    expect(await ordinaryRuns(apiId)).toBe(0);
+    // Un client qui suit next_action à la lettre (sans choice) n'engage aucune dépense.
+    const noChoice = await tool('validate_schema', { api_id: apiId });
+    expect(noChoice.isError, text(noChoice)).toBe(true);
+    expect(await ordinaryRuns(apiId)).toBe(0);
+    // get_run reste une lecture : la question demeure, rien ne part.
+    const read = await tool('get_run', { run_id: String(asked.structuredContent!['run_id']), wait_seconds: 1 });
+    expect(read.structuredContent).toMatchObject({ state: 'awaiting_decision', question: { reason: 'cost_above_cap' } });
+    expect(await ordinaryRuns(apiId)).toBe(0);
+    // Confirmée : le premier run complet livre les 519 éléments.
+    const confirmed = await followToEnd(await tool('validate_schema', { api_id: apiId, choice: 'continue' }));
+    expect(confirmed.structuredContent).toMatchObject({ state: 'succeeded', items_total: 519 });
+    expect(await ordinaryRuns(apiId)).toBe(1);
+  }, 180_000);
+
+  test('assert_cost_announced_before_spend — « ne rien lancer » sur la porte de coût du premier run complet ne lance aucun run, et la demande reste levée', async () => {
+    srv.started.ctx.confirmAboveUsd = 1e-9;
+    const url = await scriptHtmlList();
+    const asked = await tool('create_api', { description: `${DESCRIPTION} (refus)`, url, force_new: true });
+    const apiId = String(asked.structuredContent!['api_id']);
+    expect(asked.structuredContent).toMatchObject({ state: 'awaiting_decision', question: { reason: 'cost_above_cap' } });
+    const declined = await tool('validate_schema', { api_id: apiId, choice: 'cancel' });
+    expect(declined.isError, text(declined)).not.toBe(true);
+    expect(await ordinaryRuns(apiId)).toBe(0);
+    srv.started.ctx.confirmAboveUsd = DEFAULT_CONFIRM_ABOVE;
+    const read = await tool('get_run', { run_id: String(asked.structuredContent!['run_id']), wait_seconds: 1 });
+    expect(read.isError, text(read)).not.toBe(true);
+    expect(await ordinaryRuns(apiId)).toBe(0);
   }, 120_000);
 });

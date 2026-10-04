@@ -69,6 +69,8 @@ export type ServerContext = {
   mcp: McpRuntime | null;
   /** Dossier d'enquête (tâche 2.14) : bornes `BRIEF_*` ; absent : valeurs par défaut de 19c § 9.2. */
   brief?: BriefConfig;
+  /** Seuil `CONFIRM_ABOVE_USD` : au-delà, le premier run complet lancé par SYM attend une confirmation (UXI9). */
+  confirmAboveUsd?: number;
   /** Fichier du statut « modèle validé » (eval/validated-models.json, 15 § 11) ; tests : un autre fichier. */
   validatedModelsFile?: URL | string;
   /**

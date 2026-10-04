@@ -19,6 +19,7 @@ import {
   type PersistencePolicy,
 } from '@runtime/core';
 import { briefConfigFromEnv, type BriefConfig } from '@runtime/core';
+import { confirmAboveUsdFromEnv } from '@runtime/core/investigation';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { supportedLocales } from './i18n.js';
 import type { McpConfig } from './mcp/runtime.js';
@@ -64,6 +65,8 @@ export type ServerConfig = {
   /** Serveur MCP (tâche 3.2, 05 § 1 et § 3). */
   mcp: McpConfig;
   /** Dossier d'enquête (tâche 2.14, 19c § 9.2) : variables `BRIEF_*` bornées. */
+  /** `CONFIRM_ABOVE_USD` : seuil de dépense estimée au-delà duquel une confirmation précède tout run facturé lancé par SYM. */
+  confirmAboveUsd: number;
   brief?: BriefConfig;
   /**
    * Mode « SYM ne lâche pas » (2.16, D-49) : `PERSISTENCE_*` (14 § 2), mêmes valeurs que le worker. Le serveur s'en sert
@@ -331,5 +334,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     },
     mcp: loadMcpConfig(env, publicUrl),
     brief: briefConfigFromEnv(env),
+    confirmAboveUsd: confirmAboveUsdFromEnv(env),
   };
 }

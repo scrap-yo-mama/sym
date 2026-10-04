@@ -33,6 +33,8 @@ export function stepOf(phase: string | null): { step: 1 | 2 | 3 | 4; phase: Bloc
   switch (phase) {
     case null:
       return { step: 1, phase: 'describe' };
+
+
     case 'access_check':
     case 'reconnaissance':
       return { step: 2, phase: 'recognize' };
@@ -138,6 +140,43 @@ export function firstRunDue(inv: Pick<RunRow, 'kind' | 'state'>, api: Pick<ApiRo
   return !(Array.isArray(required) && required.length > 0);
 }
 
+/** Le premier run complet a-t-il été demandé ? Posé par `create_api` (`investigation.request.first_run`), levé par un refus : une enquête créée ailleurs ne lance jamais de run. */
+export async function readFirstRunRequested(ctx: ServerContext, actor: Actor, apiId: string): Promise<boolean> {
+  const row = await withActor(ctx.pool, actor, async (db) => (await db.query<{ flag: string | null }>("SELECT investigation #>> '{request,first_run}' AS flag FROM apis WHERE id = $1 AND owner_id = $2", [apiId, actor.userId])).rows[0]);
+  return row?.flag === 'true';
+}
+
+/** Porte de coût du premier run complet : estimation au-delà du seuil, ou prix inconnu (`estimateUsd` null). */
+export type FirstRunGate = { estimateUsd: number | null; pages: number | null; confirmAboveUsd: number };
+
+/**
+ * Estimation du premier run complet (UXI9) : `est_cost_usd` de la stratégie retenue × pages attendues, plafonnées par `hard_max_pages`.
+ * Prix inconnu ou plafond de pages absent : pas d'estimation, donc la porte (jamais un run dont on ne connaît pas le prix).
+ * Rend null quand l'estimation tient sous le seuil.
+ */
+export async function firstRunGateOf(ctx: ServerContext, actor: Actor, api: Pick<ApiRow, 'id' | 'current_strategy_version'>, confirmAboveUsd: number): Promise<FirstRunGate | null> {
+  const row =
+    api.current_strategy_version === null
+      ? undefined
+      : await withActor(ctx.pool, actor, async (db) => (await db.query<{ est_cost_usd: string | null; pages: string | null }>("SELECT est_cost_usd, coalesce(jsonb_path_query_first(spec, '$.**.hard_max_pages') #>> '{}', CASE WHEN jsonb_path_exists(spec, '$.**.pagination') THEN NULL ELSE '1' END) AS pages FROM strategy_versions WHERE api_id = $1 AND version = $2", [api.id, api.current_strategy_version])).rows[0]);
+  const perPage = row === undefined ? null : usdOrNull(row.est_cost_usd);
+  const pages = row?.pages === null || row?.pages === undefined ? null : Number(row.pages);
+  if (perPage === null || pages === null || !Number.isFinite(pages) || pages < 1) return { estimateUsd: null, pages: pages !== null && Number.isFinite(pages) ? pages : null, confirmAboveUsd };
+  const estimate = Math.round(perPage * pages * 1e6) / 1e6;
+  return estimate > confirmAboveUsd ? { estimateUsd: estimate, pages, confirmAboveUsd } : null;
+}
+
+/** Question unique de la porte de coût du premier run complet (même forme que les autres portes : `continue` ou `cancel`). */
+export function firstRunQuestion(gate: FirstRunGate, locale: McpLocale): Question {
+  const t = journeyTexts(locale).question;
+  const c = t.firstRunCost(gate.estimateUsd, gate.pages);
+  const options: QuestionOption[] = [
+    { id: 'continue', label: c.carryOn, ...(gate.estimateUsd === null ? {} : { estimate_usd: gate.estimateUsd }) },
+    { id: 'cancel', label: c.cancel },
+  ];
+  return { reason: 'cost_above_cap', text: t.render(c.text, options.map((o) => o.label)), options };
+}
+
 /** Échappe une cellule de tableau Markdown : une ligne, `|` neutralisé, tronquée proprement. */
 function cell(value: unknown): string {
   const raw = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
@@ -178,6 +217,10 @@ export type BlockInput = {
   existing?: boolean;
   /** Corps de la porte déjà lu (évite une seconde lecture), sinon lu ici. */
   gate?: InvestigationGate | null;
+  /** Porte de coût du premier run complet, quand SYM ne le lance pas sans confirmation (UXI9). */
+  firstRunGate?: FirstRunGate | null;
+  /** Premier run complet demandé mais pas encore lancé (lecture seule : un outil d'écriture le lance). */
+  firstRunPending?: boolean;
 };
 
 export type ResultBlock = {
@@ -191,6 +234,8 @@ export type ResultBlock = {
   replayUsd: number | null;
   /** Marque d'un premier run encore en cours : le parcours n'est pas fini. */
   firstRunActive: boolean;
+  /** Premier run complet demandé et pas lancé : la suite est un outil d'écriture (`validate_schema`), jamais une lecture. */
+  firstRunPending: boolean;
   /** Champs du schéma proposé, dans l'ordre déclaré (lus de l'état de l'enquête) ; null sans état. */
   proposedColumns: string[] | null;
 };
@@ -226,7 +271,9 @@ export async function buildResultBlock(input: BlockInput & { firstRun?: RunRow |
   const strategy = api.current_strategy_version === null ? null : await withActor(ctx.pool, actor, async (db) => (await db.query<{ est_cost_usd: string | null }>('SELECT est_cost_usd FROM strategy_versions WHERE api_id = $1 AND version = $2', [api.id, api.current_strategy_version])).rows[0]);
   const replayUsd = strategy === null || strategy === undefined ? null : usdOrNull(strategy.est_cost_usd);
   const { step, phase } = stepOf(state === 'running' && inv.state === 'succeeded' ? 'testing' : api.investigation_phase);
-  const question = awaiting ? questionOf(gate, locale) : null;
+  const firstGate = input.firstRunGate ?? null;
+  if (firstGate !== null && state === 'succeeded' && first === null) state = 'awaiting_decision';
+  const question = awaiting ? questionOf(gate, locale) : state === 'awaiting_decision' && firstGate !== null ? firstRunQuestion(firstGate, locale) : null;
   const invCost = usd(inv.cost_proxy_usd) + (usdOrNull(inv.cost_llm_usd) ?? 0);
   const firstCost = first === null ? 0 : usd(first.cost_proxy_usd) + (usdOrNull(first.cost_llm_usd) ?? 0);
   const active = state === 'running';
@@ -251,7 +298,7 @@ export async function buildResultBlock(input: BlockInput & { firstRun?: RunRow |
     ...(first === null ? {} : { first_run_id: first.id }),
     ...(inv.finished_at === null ? {} : { finished_at: iso(inv.finished_at) }),
   };
-  return { fields, state, question, items, datasetId: items === null || resultRun === null ? null : resultRun.dataset_id, replayUsd, firstRunActive: first !== null && ACTIVE.has(first.state), proposedColumns: read.columns };
+  return { fields, state, question, items, datasetId: items === null || resultRun === null ? null : resultRun.dataset_id, replayUsd, firstRunActive: first !== null && ACTIVE.has(first.state), firstRunPending: input.firstRunPending === true && first === null && state === 'succeeded', proposedColumns: read.columns };
 }
 
 /** Texte du début de la réponse : le succès chiffré et l'aperçu, ou la question unique ; vide sinon. */

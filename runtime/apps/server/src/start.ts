@@ -216,6 +216,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       },
       mcp: config.mcp.disabled ? null : createMcpRuntime(pool, config.mcp, options.mcp),
       ...(config.brief === undefined ? {} : { brief: config.brief }),
+      confirmAboveUsd: config.confirmAboveUsd,
       persistence: { policy: config.persistence, ...(options.persistence?.negativeMemory === undefined ? {} : { negativeMemory: options.persistence.negativeMemory }) },
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),

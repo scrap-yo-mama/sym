@@ -150,3 +150,10 @@ export function detectCostGate(plan: readonly CostPlanEntry[], confirmAboveUsd: 
   const total = Math.round((first.est_cost_usd + compile) * 1e6) / 1e6;
   return total > confirmAboveUsd ? { reason: 'cost_above_cap', estimate_usd: total, compile_usd: compile } : null;
 }
+
+/** `CONFIRM_ABOVE_USD` (défaut 0,10 $) : dépense estimée au-delà de laquelle une confirmation précède toute dépense ; valeur invalide : défaut. */
+export function confirmAboveUsdFromEnv(env: NodeJS.ProcessEnv): number {
+  const raw = env['CONFIRM_ABOVE_USD']?.trim();
+  const value = raw === undefined || raw === '' ? Number.NaN : Number(raw);
+  return Number.isFinite(value) && value >= 0 && value <= 100 ? value : 0.1;
+}

@@ -10,6 +10,7 @@ import { briefConfigFromEnv } from '@runtime/core';
 import { costCapsFromEnv, DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
+import { confirmAboveUsdFromEnv } from '@runtime/core/investigation';
 import { identityFromEnv, instanceContactEnvInvalid, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
 import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
@@ -32,13 +33,7 @@ import { createStrategyRuntime, type AgentPorts } from './strategy-executor.js';
  * Rôles résolus pour l'enquête (schéma, prix des couples E4 et E6). Le rôle `judge` n'en fait PAS partie (revue 2.12) :
  * il est résolu à part (`judgeLlm`), et une erreur de ses réglages n'empêche jamais l'enquête.
  */
-/** `CONFIRM_ABOVE_USD` (défaut 0,10 $) : dépense estimée au-delà de laquelle une confirmation précède les essais ; valeur invalide : défaut. */
-export function confirmAboveUsdFromEnv(env: NodeJS.ProcessEnv): number {
-  const raw = env['CONFIRM_ABOVE_USD']?.trim();
-  const value = raw === undefined || raw === '' ? Number.NaN : Number(raw);
-  return Number.isFinite(value) && value >= 0 && value <= 100 ? value : 0.1;
-}
-
+export { confirmAboveUsdFromEnv };
 export const INVESTIGATION_LLM_ROLES = ['investigate', 'extract', 'agent'] as const;
 
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
