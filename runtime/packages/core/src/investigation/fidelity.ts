@@ -31,7 +31,7 @@ export const FIDELITY_JUDGE_SAMPLES = 3;
 /** Plafond du coût d'un appel du juge (USD), connu avant l'envoi. */
 export const FIDELITY_JUDGE_MAX_USD = 0.01;
 
-export type FidelityIssueCode = 'empty' | 'duplicate' | 'not_a_date' | 'not_a_url' | 'not_an_email' | 'looks_like_url' | 'judge_wrong' | 'judge_missing';
+export type FidelityIssueCode = 'empty' | 'truncated' | 'duplicate' | 'not_a_date' | 'not_a_url' | 'not_an_email' | 'looks_like_url' | 'judge_wrong' | 'judge_missing';
 export type FidelityIssue = {
   readonly field: string;
   readonly code: FidelityIssueCode;
@@ -52,12 +52,13 @@ function isEmpty(v: unknown): boolean {
   return false;
 }
 
-function schemaFields(schema: unknown): { name: string; type: string; description: string }[] {
+function schemaFields(schema: unknown): { name: string; type: string; description: string; uri: boolean }[] {
   const props = isRecord(schema) && isRecord(schema['properties']) ? schema['properties'] : {};
   return Object.entries(props).map(([name, p]) => {
     const t = isRecord(p) ? p['type'] : undefined;
     const type = Array.isArray(t) ? (t.find((x) => x !== 'null') as string | undefined) : (t as string | undefined);
-    return { name, type: typeof type === 'string' ? type : 'string', description: isRecord(p) && typeof p['description'] === 'string' ? p['description'] : '' };
+    const format = isRecord(p) ? p['format'] : undefined;
+    return { name, type: typeof type === 'string' ? type : 'string', description: isRecord(p) && typeof p['description'] === 'string' ? p['description'] : '', uri: format === 'uri' || format === 'url' || format === 'uri-reference' || format === 'iri' };
   });
 }
 
@@ -118,6 +119,8 @@ export function fidelityCheck(input: {
   readonly outputSchema: unknown;
   readonly spec?: DeclarativeSpec | null;
   readonly candidate?: DataCandidate | null;
+  /** La page montre des liens (UX-22) : un champ `format: uri` vide sur plus de 20 % des éléments est alors un défaut. */
+  readonly pageShowsLinks?: boolean;
 }): FidelityCheck {
   const records = input.records;
   const issues: FidelityIssue[] = [];
@@ -131,16 +134,22 @@ export function fidelityCheck(input: {
     if (emptyShare > FIDELITY_MAX_EMPTY_SHARE) {
       const mapped = input.spec?.fields[f.name];
       const slot = slotOfField(input.candidate, mapped);
-      const shown = (slot !== undefined && input.candidate !== null && input.candidate !== undefined && slot.present >= input.candidate.count * 0.8) || (mapped === undefined && unmappedMatch(input.candidate, input.spec, f.name));
+      const shown = (f.uri && input.pageShowsLinks === true) || (slot !== undefined && input.candidate !== null && input.candidate !== undefined && slot.present >= input.candidate.count * 0.8) || (mapped === undefined && unmappedMatch(input.candidate, input.spec, f.name));
       if (shown) issues.push({ field: f.name, code: 'empty', share: round(emptyShare) });
     }
     if (filled.length === 0) continue;
     const share = (pred: (v: unknown) => boolean) => filled.filter((v) => !pred(v)).length / filled.length;
     const name = f.name.toLowerCase();
-    if (f.type === 'string' && (DATE_NAME.test(name) || /\bdate\b/i.test(f.description)) && !URL_NAME.test(name)) {
+    // Valeurs coupées « ... » (UX-27) : le texte d'une liste, tel qu'affiché, au lieu de la valeur complète (attribut, fiche).
+    if (f.type === 'string') {
+      const long = filled.filter((v): v is string => typeof v === 'string' && v.trim().length >= 5);
+      const cut = long.filter((v) => /(?:\.{3}|…)$/.test(v.trim())).length;
+      if (long.length > 0 && cut / long.length > FIDELITY_MAX_EMPTY_SHARE) issues.push({ field: f.name, code: 'truncated', share: round(cut / long.length) });
+    }
+    if (f.type === 'string' && (DATE_NAME.test(name) || /\bdate\b/i.test(f.description)) && !URL_NAME.test(name) && !f.uri) {
       const bad = share(looksLikeDate);
       if (bad > FIDELITY_MAX_EMPTY_SHARE) issues.push({ field: f.name, code: 'not_a_date', share: round(bad) });
-    } else if (f.type === 'string' && URL_NAME.test(name)) {
+    } else if (f.type === 'string' && (URL_NAME.test(name) || f.uri)) {
       const bad = share(looksLikeUrl);
       if (bad > FIDELITY_MAX_EMPTY_SHARE) issues.push({ field: f.name, code: 'not_a_url', share: round(bad) });
     } else if (f.type === 'string' && EMAIL_NAME.test(name)) {
@@ -276,6 +285,7 @@ export function fidelitySamples(spec: DeclarativeSpec, body: string, outputSchem
 // ---------------------------------------------------------------------------------------------------- différentiel
 
 const MESSAGES: Record<FidelityIssueCode, (i: FidelityIssue) => string> = {
+  truncated: (i) => `${Math.round((i.share ?? 1) * 100)}% of values are cut with "...": read the full value (the title or aria-label attribute, or the full text of the element), not the shortened display`,
   empty: (i) => `empty on ${Math.round((i.share ?? 1) * 100)}% of records although the page shows it: map it to the slot or key that holds it`,
   duplicate: (i) => `same values as "${i.other}" on ${Math.round((i.share ?? 1) * 100)}% of records: one of the two reads the wrong slot`,
   not_a_date: (i) => `${Math.round((i.share ?? 1) * 100)}% of values do not look like a date: wrong slot or key`,

@@ -12,3 +12,4 @@ export * from './milestones.js';
 export * from './html-compile.js';
 export * from './dom.js';
 export * from './fidelity.js';
+export * from './data-quality.js';

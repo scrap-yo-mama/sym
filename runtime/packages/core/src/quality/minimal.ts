@@ -10,7 +10,20 @@ export type MinimalContentResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly failure_class: 'extraction'; readonly detail: 'minimal_content'; readonly field: string; readonly reason: 'sentinel' | 'constant' };
 
-export function minimalContentCheck(outputs: readonly (readonly unknown[])[], schema: unknown): MinimalContentResult {
+const LINK_NAME = /(?:^|_)(?:url|urls|link|href|permalink)(?:_|$)/;
+/** Champ lien du schéma : `format: uri` (ou url), ou nom évoquant un lien ; texte seulement. */
+function isLinkField(name: string, sub: unknown): boolean {
+  if (!isRecord(sub)) return false;
+  const type = Array.isArray(sub['type']) ? sub['type'].find((t) => t !== 'null') : sub['type'];
+  if (type !== 'string') return false;
+  return sub['format'] === 'uri' || sub['format'] === 'url' || sub['format'] === 'uri-reference' || LINK_NAME.test(name.toLowerCase());
+}
+
+/**
+ * `pageShowsLinks` (U1.11, UX-22) : la page de l'essai porte des liens. Un champ lien, même facultatif, vide sur TOUS les
+ * éléments est alors un défaut (`sentinel`) : la page donnait le lien et la sortie l'a perdu (42 offres sur 42 sans `url`).
+ */
+export function minimalContentCheck(outputs: readonly (readonly unknown[])[], schema: unknown, options: { readonly pageShowsLinks?: boolean } = {}): MinimalContentResult {
   const required = isRecord(schema) && Array.isArray(schema['required']) ? (schema['required'] as unknown[]).filter((r): r is string => typeof r === 'string') : [];
   const props = isRecord(schema) && isRecord(schema['properties']) ? schema['properties'] : {};
   const items = outputs.flat();
@@ -28,6 +41,14 @@ export function minimalContentCheck(outputs: readonly (readonly unknown[])[], sc
     const multi = outputs.filter((o) => o.length >= 2);
     if (multi.length > 0 && multi.every((o) => new Set(o.map((it) => JSON.stringify(isRecord(it) ? it[field] : undefined))).size === 1)) {
       return { ok: false, failure_class: 'extraction', detail: 'minimal_content', field, reason: 'constant' };
+    }
+  }
+  if (options.pageShowsLinks === true) {
+    for (const [field, sub] of Object.entries(props)) {
+      if (required.includes(field) || !isLinkField(field, sub)) continue;
+      if (items.every((it) => { const v = isRecord(it) ? it[field] : undefined; return v === undefined || v === null || (typeof v === 'string' && SENTINEL_VALUES.includes(v.trim())); })) {
+        return { ok: false, failure_class: 'extraction', detail: 'minimal_content', field, reason: 'sentinel' };
+      }
     }
   }
   return { ok: true };

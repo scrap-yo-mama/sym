@@ -38,7 +38,9 @@ type TimelineStart = { kind: 'investigation'; step: 0; slug: string; domain: str
 /** Rapport d'accès (D-91 : plus de section robots.txt) : la pastille `allowed` ou `review`, sinon null (événement ancien). */
 export type TimelineAccess = { kind: 'access_report'; step: number; signal: 'allowed' | 'review' | null; cost_usd: number; ms: number };
 export type TimelineRecon = { kind: 'reconnaissance'; step: number; mode: string | null; sources: number; failure_class: string | null; cost_usd: number; ms: number };
-type TimelineSchema = { kind: 'schema'; step: null; ok: boolean; fields: number | null };
+/** Écarts du schéma proposé avec le schéma précédent de l'API (UX-25) : noms de champs seulement. */
+type SchemaChanges = { dropped: string[]; added: string[]; retyped: string[]; renamed: { from: string; to: string }[] };
+type TimelineSchema = { kind: 'schema'; step: null; ok: boolean; fields: number | null; changes?: SchemaChanges };
 export type TimelineAttempt = {
   kind: 'attempt';
   step: number;
@@ -50,8 +52,24 @@ export type TimelineAttempt = {
   est_cost_usd: number | null;
   cost_usd: number;
   ms: number | null;
-  /** Motif d'un échec (`why` de l'événement) : code et, pour un refus de la garde des requêtes, son motif (codes seulement, UX-33). */
-  why?: { code: string; reason: string | null } | null;
+  /**
+   * Motif d'un échec (`why` de l'événement) : code et, pour un refus de la garde des requêtes, son motif (codes seulement, UX-33).
+   * `params` (U1.12) : champ du schéma et raison du contenu minimal (UX-21), classe d'erreur du moteur agentique (UX-23).
+   */
+  why?: { code: string; reason: string | null; params?: CauseParams } | null;
+};
+/** Paramètres publiés d'une cause : trois clés fermées, valeurs de la forme d'un code ou d'un nom de champ du schéma. */
+type CauseParams = { field?: string; reason?: string; class?: string };
+/** Compilation du HTML refusée (UX-37) : écart d'ensemble et différentiel par champ (écarts, deux exemples déjà masqués). */
+export type TimelineCompile = {
+  kind: 'compile';
+  step: null;
+  ok: boolean;
+  reason: string | null;
+  expected: number | null;
+  got: number | null;
+  ratio: number | null;
+  fields: { field: string; compared: number; mismatched: number; examples: { expected: string | null; got: string | null }[]; masked?: true }[];
 };
 type TimelinePruned = { kind: 'pruned'; step: null; by: { execution: string; network: string } | null; reason: string | null; count: number };
 type TimelineAction = { kind: 'action_required'; step: null; cause: string };
@@ -63,8 +81,40 @@ export type TimelineFinished = {
   items: number | null;
   stop_reason: string | null;
   failure_class: string | null;
+  /** Cause exacte de la fin (`detail` du worker, code) et ses paramètres : `llm_settings_unreadable` + raison (UX-15). */
+  detail?: string | null;
+  detail_params?: CauseParams;
+  /** Pages demandées par la description et ce qui en a été fait (UX-26) : `max_pages_default` ou `not_paginated`. */
+  pages_requested?: { pages: number; outcome: 'max_pages_default' | 'not_paginated' };
 };
-export type TimelineEntry = TimelineStart | TimelineAccess | TimelineRecon | TimelineSchema | TimelineAttempt | TimelinePruned | TimelineAction | TimelineFinished;
+export type TimelineEntry = TimelineStart | TimelineAccess | TimelineRecon | TimelineSchema | TimelineAttempt | TimelinePruned | TimelineAction | TimelineFinished | TimelineCompile;
+
+/** Nom de champ du schéma de sortie (identifiant), borné : jamais un texte libre. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+/** Paramètres d'une cause : `field`, `reason` et `class` seulement, chacun filtré (codes ; noms de champs). */
+function causeParams(raw: unknown): CauseParams | undefined {
+  const p = rec(raw);
+  const field = typeof p['field'] === 'string' && FIELD_NAME.test(p['field']) ? p['field'] : null;
+  const reason = codeOrNull(p['reason']);
+  const klass = codeOrNull(p['class']);
+  if (field === null && reason === null && klass === null) return undefined;
+  return { ...(field === null ? {} : { field }), ...(reason === null ? {} : { reason }), ...(klass === null ? {} : { class: klass }) };
+}
+
+const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((n): n is string => typeof n === 'string' && FIELD_NAME.test(n)).slice(0, 50) : []);
+/** Écarts de schéma publiés : listes de noms de champs filtrés ; absents si rien n'a changé. */
+function schemaChanges(raw: unknown): SchemaChanges | undefined {
+  const c = rec(raw);
+  const renamed = (Array.isArray(c['renamed']) ? c['renamed'].map(rec) : [])
+    .filter((r) => typeof r['from'] === 'string' && FIELD_NAME.test(r['from']) && typeof r['to'] === 'string' && FIELD_NAME.test(r['to']))
+    .slice(0, 50)
+    .map((r) => ({ from: r['from'] as string, to: r['to'] as string }));
+  const out: SchemaChanges = { dropped: names(c['dropped']), added: names(c['added']), retyped: names(c['retyped']), renamed };
+  return out.dropped.length + out.added.length + out.retyped.length + out.renamed.length === 0 ? undefined : out;
+}
+
+/** Exemple publié d'un différentiel : texte borné ou absence (le worker a déjà masqué les valeurs personnelles). */
+const sample = (v: unknown): string | null => (typeof v === 'string' ? v.slice(0, 81) : null);
 
 /** Phase courante d'une enquête, d'après ses événements (codes de `phase.started`, `done`, `stopped`, `failed`). */
 function phaseOf(events: readonly EventRow[]): string {
@@ -126,7 +176,8 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
       }
       case EV.schemaProposed: {
         const schema = rec(p['output_schema']);
-        out.push({ kind: 'schema', step: null, ok: p['ok'] === true, fields: p['ok'] === true ? Object.keys(rec(schema['properties'])).length : null });
+        const changes = schemaChanges(p['changes']);
+        out.push({ kind: 'schema', step: null, ok: p['ok'] === true, fields: p['ok'] === true ? Object.keys(rec(schema['properties'])).length : null, ...(changes === undefined ? {} : { changes }) });
         break;
       }
       case EV.attemptFinished: {
@@ -144,7 +195,12 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
           est_cost_usd: num(a['est_cost_usd']),
           cost_usd: num(a['cost_usd']) ?? delta,
           ms: num(a['ms']),
-          ...(str(rec(p['why'])['code']) === null ? {} : { why: { code: codeOf(rec(p['why'])['code']), reason: codeOrNull(rec(rec(p['why'])['params'])['reason']) } }),
+          ...(str(rec(p['why'])['code']) === null
+            ? {}
+            : (() => {
+                const params = causeParams(rec(p['why'])['params']);
+                return { why: { code: codeOf(rec(p['why'])['code']), reason: codeOrNull(rec(rec(p['why'])['params'])['reason']), ...(params === undefined ? {} : { params }) } };
+              })()),
         });
         break;
       }
@@ -156,6 +212,28 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
           by: str(by['execution']) === null ? null : { execution: codeOf(by['execution']), network: codeOf(by['network']) },
           reason: codeOrNull(p['reason']),
           count: Array.isArray(p['pruned']) ? p['pruned'].length : 0,
+        });
+        break;
+      }
+      case EV.strategyCompiled: {
+        // Seule une compilation REFUSÉE entre dans la chronologie (la réussite est dite par la fin d'enquête).
+        if (p['ok'] === true) break;
+        const fields = Array.isArray(p['fields']) ? p['fields'].map(rec).filter((f) => typeof f['field'] === 'string' && FIELD_NAME.test(f['field'])).slice(0, 12) : [];
+        out.push({
+          kind: 'compile',
+          step: null,
+          ok: false,
+          reason: codeOrNull(p['reason']),
+          expected: num(p['expected']),
+          got: num(p['got']),
+          ratio: num(p['ratio']),
+          fields: fields.map((f) => ({
+            field: f['field'] as string,
+            compared: num(f['compared']) ?? 0,
+            mismatched: num(f['mismatched']) ?? 0,
+            examples: (Array.isArray(f['examples']) ? f['examples'] : []).slice(0, 2).map((e) => ({ expected: sample(rec(e)['expected']), got: sample(rec(e)['got']) })),
+            ...(f['masked'] === true ? { masked: true as const } : {}),
+          })),
         });
         break;
       }
@@ -172,6 +250,14 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
           items: num(p['items']),
           stop_reason: codeOrNull(p['stop_reason']),
           failure_class: codeOrNull(p['failure_class']),
+          ...(typeof p['detail'] === 'string' && CODE.test(p['detail']) ? { detail: p['detail'] } : {}),
+          ...(() => {
+            const asked = rec(p['pages_requested']);
+            const pages = num(asked['pages']);
+            const outcome = asked['outcome'];
+            return pages !== null && (outcome === 'max_pages_default' || outcome === 'not_paginated') ? { pages_requested: { pages, outcome } } : {};
+          })(),
+          ...(causeParams(p['detail_params']) === undefined ? {} : { detail_params: causeParams(p['detail_params'])! }),
         });
         break;
       }

@@ -399,6 +399,11 @@ export function alignHtmlStrategy(spec: DeclarativeSpec, html: string, expected:
 export type HtmlMismatch = { readonly index: number; readonly field: string; readonly expected: unknown; readonly got: unknown };
 /** Motif d'extraction par champ (code de l'interpréteur, nombre d'éléments touchés) : jamais de valeur. */
 export type HtmlProblem = { readonly field: string | null; readonly code: string; readonly records: number };
+/**
+ * Différentiel d'UN champ (UX-37) : valeurs comparées, valeurs en écart et deux exemples attendu/obtenu au plus. Les
+ * exemples sont des valeurs de la page : DONNÉES NON FIABLES ; l'appelant les masque avant toute publication.
+ */
+export type HtmlFieldDiff = { readonly field: string; readonly compared: number; readonly mismatched: number; readonly examples: readonly { readonly expected: unknown; readonly got: unknown }[] };
 export type HtmlDiff = {
   /** Éléments rendus par l'agent, puis par la stratégie. */
   readonly expected: number;
@@ -409,6 +414,8 @@ export type HtmlDiff = {
   readonly ratio: number;
   /** Premières différences (au plus 10) : valeurs de la page, DONNÉES NON FIABLES, jamais journalisées. */
   readonly mismatches: readonly HtmlMismatch[];
+  /** Différentiel par champ du schéma (UX-37) : tous les champs comparés, dans l'ordre du schéma ; vide si rien n'a été comparé. */
+  readonly fields: readonly HtmlFieldDiff[];
   /** Motifs de l'interpréteur par champ (au plus 10), en mode strict : opérateur en échec, type, champ requis absent… */
   readonly problems: readonly HtmlProblem[];
   /** Raison du refus (code stable), `null` si la stratégie est acceptée. */
@@ -417,6 +424,8 @@ export type HtmlDiff = {
 export type HtmlVerification = { readonly ok: boolean; readonly records: readonly Record<string, unknown>[]; readonly diff: HtmlDiff };
 
 const MAX_MISMATCHES = 10;
+/** Exemples attendu/obtenu publiés par champ (UX-37). */
+const MAX_FIELD_EXAMPLES = 2;
 
 /** Valeur comparable : espaces normalisés, nombre et booléen en texte ; absence = `null`. */
 function normalized(value: unknown): string | null {
@@ -452,7 +461,7 @@ export function verifyHtmlStrategy(spec: DeclarativeSpec, html: string, expected
   const fail = (reason: HtmlDiff['reason'], got: number, problems: HtmlProblem[] = []): HtmlVerification => ({
     ok: false,
     records: [],
-    diff: { expected: expected.length, got, compared: 0, matched: 0, ratio: 0, mismatches: [], problems, reason },
+    diff: { expected: expected.length, got, compared: 0, matched: 0, ratio: 0, mismatches: [], fields: [], problems, reason },
   });
   let strict: ExtractResult;
   try {
@@ -469,6 +478,7 @@ export function verifyHtmlStrategy(spec: DeclarativeSpec, html: string, expected
   let compared = 0;
   let matched = 0;
   const mismatches: HtmlMismatch[] = [];
+  const perField = new Map<string, { compared: number; mismatched: number; examples: { expected: unknown; got: unknown }[] }>();
   for (const [index, record] of got.entries()) {
     if (index >= expected.length) break;
     const want = (expected[index] ?? {}) as Record<string, unknown>;
@@ -477,8 +487,15 @@ export function verifyHtmlStrategy(spec: DeclarativeSpec, html: string, expected
       const b = normalized(record[field]);
       if (a === null && b === null) continue;
       compared += 1;
+      const stat = perField.get(field) ?? { compared: 0, mismatched: 0, examples: [] };
+      perField.set(field, stat);
+      stat.compared += 1;
       if (a === b) matched += 1;
-      else if (mismatches.length < MAX_MISMATCHES) mismatches.push({ index, field, expected: want[field] ?? null, got: record[field] ?? null });
+      else {
+        stat.mismatched += 1;
+        if (stat.examples.length < MAX_FIELD_EXAMPLES) stat.examples.push({ expected: want[field] ?? null, got: record[field] ?? null });
+        if (mismatches.length < MAX_MISMATCHES) mismatches.push({ index, field, expected: want[field] ?? null, got: record[field] ?? null });
+      }
     }
   }
   const ratio = compared === 0 ? 0 : Math.round((matched / compared) * 1e4) / 1e4;
@@ -486,5 +503,6 @@ export function verifyHtmlStrategy(spec: DeclarativeSpec, html: string, expected
   const schemaOk = got.every((r) => validateOutput(outputSchema, r).ok);
   const reason: HtmlDiff['reason'] =
     (options.sampled === true ? got.length < expected.length : got.length !== expected.length) ? 'count' : !valuesOk ? 'values' : !schemaOk || problems.some((p) => p.code === 'schema_mismatch') ? 'schema' : !strict.ok ? 'extraction' : null;
-  return { ok: reason === null, records: got, diff: { expected: expected.length, got: got.length, compared, matched, ratio, mismatches, problems, reason } };
+  const fields: HtmlFieldDiff[] = names.filter((n) => perField.has(n)).map((n) => ({ field: n, ...perField.get(n)! }));
+  return { ok: reason === null, records: got, diff: { expected: expected.length, got: got.length, compared, matched, ratio, mismatches, fields, problems, reason } };
 }

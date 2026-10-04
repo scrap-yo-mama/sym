@@ -27,6 +27,22 @@ const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string; inves
       'Ask the user to enter the price of model {model} (USD per million tokens: input, output, optional cached input) in the console (Settings > AI models, /settings/models), then call again: no model call was made and nothing was spent.',
     retryable: true,
   },
+  // UX-15 (U1.12) : le worker n'a pas pu LIRE les réglages IA (clé maîtresse différente, fournisseur inconnu, rôle incomplet).
+  // Détail `llm_settings_unreadable:<raison>` (code fermé du worker) ; ni « prix manquant » ni « non configuré ».
+  llm_settings_unreadable: {
+    message: 'Le worker ne lit pas la configuration IA ({reason}) : vérifie-la dans Ma stack (Réglages > Modèles IA).',
+    what_to_do:
+      'The worker could not read the AI settings (reason: {reason}). Ask the user to check the AI configuration in the console (Settings > AI models, /settings/models) and that the web and the worker share the same MASTER_KEY, then call again: no model call was made and nothing was spent.',
+    retryable: true,
+  },
+  // U3.4 : l'extension servait le run puis a disparu au-delà de la grâce (redéploiement, veille, réseau) ; le run est arrêté
+  // (`skipped_tunnel_offline`), rien n'est perdu : « Relancer ».
+  tunnel_lost: {
+    message: 'Ton navigateur connecté a disparu pendant le run : vérifie l’extension, puis relance le run.',
+    what_to_do:
+      'The user\'s browser extension was serving this run, then disconnected and did not come back in time, so the run was stopped. Ask the user to check that the extension is connected (the panel shows the state of the instance), then run it again (run_api): nothing was lost, the run restarts from the beginning.',
+    retryable: true,
+  },
   instance_contact_invalid: {
     code: 'instance_contact_missing',
     message: 'Le contact du robot est invalide : corrige-le dans Réglages > Identité du robot, ou corrige la variable INSTANCE_CONTACT (adresse e-mail ou URL http(s)).',
@@ -86,6 +102,9 @@ const LLM_PRICE_UNKNOWN_AFTER_CALL: Omit<RunError, 'code'> = {
   retryable: true,
 };
 
+/** Raison fermée publiable (code de la forme `key_unreadable`) : jamais un détail libre. */
+const REASON_CODE = /^[a-z][a-z0-9_]{0,39}$/;
+
 /** Nom de modèle publiable (identifiants de fournisseurs : `claude-opus-4-8`, `zai-org/GLM-5.3`, `qwen3:8b`) : jamais un détail libre (INV8). */
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 
@@ -96,7 +115,8 @@ function describe(code: string, detail: string): RunError | null {
   if (code === 'llm_price_missing' && detail === code) return { code, ...LLM_PRICE_UNKNOWN_AFTER_CALL };
   const suffix = detail.slice(code.length + 1);
   const model = detail.startsWith(`${code}:`) && MODEL_NAME.test(suffix) && !/^[a-z]+:\/\//i.test(suffix) ? suffix : null;
-  const fill = (text: string) => text.replaceAll('{model}', model ?? (text.startsWith('Renseigne') ? 'utilisé' : 'used'));
+  const reason = detail.startsWith(`${code}:`) && REASON_CODE.test(suffix) ? suffix : null;
+  const fill = (text: string) => text.replaceAll('{model}', model ?? (text.startsWith('Renseigne') ? 'utilisé' : 'used')).replaceAll('{reason}', reason ?? 'unknown');
   return { code: known.code ?? code, message: fill(known.message), what_to_do: fill(known.what_to_do), retryable: known.retryable };
 }
 
@@ -117,7 +137,10 @@ export function runInvestigationFailed(run: { state: string; error_detail?: stri
 
 /** Cause d'un run terminé en échec (`failed`), ou null si elle n'est pas nommée. */
 export function runErrorOf(run: { state: string; error_detail?: string | null }): RunError | null {
-  if (run.state !== 'failed' || typeof run.error_detail !== 'string') return null;
+  // Tunnel perdu en cours de run (U3.4) : le run est ignoré (`skipped_tunnel_offline`), sa cause reste lisible. « Hors ligne » (jamais
+  // connecté) garde sa phrase propre ailleurs.
+  const lostTunnel = run.state === 'skipped_tunnel_offline' && run.error_detail === 'tunnel_lost';
+  if ((run.state !== 'failed' && !lostTunnel) || typeof run.error_detail !== 'string') return null;
   // Un détail `code:modèle` (UX-11) nomme le modèle ; tout autre détail non listé reste hors de la réponse.
   return describe(run.error_detail.split(':', 1)[0]!, run.error_detail);
 }

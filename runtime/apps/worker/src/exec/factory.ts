@@ -17,6 +17,7 @@ import { launchAgentBrowser } from '../browser/agent-browser.js';
 import { installedEngineIdentity } from '../browser/engine-identity.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool, playwrightLauncher } from '../browser/pool.js';
+import { probeAgentBrowser, type BrowserProbe } from '../browser/agent-browser-probe.js';
 import { chromiumSandboxCheck, seccompMode, type ChromiumSandboxStatus } from '../browser/sandbox-check.js';
 import { ProcessSandboxEngine, sandboxOptionsFromEnv, type IsolationProbe } from '../sandbox/index.js';
 import type { ExecutorFactory } from '../worker.js';
@@ -89,6 +90,8 @@ export type ProductionFactoryOverrides = {
   readonly sandboxEngine?: (options: { production: boolean }) => FactoryEngine;
   /** Vérification du bac à sable de Chromium au démarrage (tests) ; défaut : `chromiumSandboxCheck()`. */
   readonly chromiumSandbox?: () => Promise<ChromiumSandboxStatus>;
+  /** Test « Navigateur » au démarrage (UX-23, tests) ; défaut : `probeAgentBrowser()`, qui lance le Chromium dédié de l'agent puis le ferme. */
+  readonly agentBrowser?: () => Promise<BrowserProbe>;
 };
 
 export function productionExecutorFactory(env: Readonly<Record<string, string | undefined>> = process.env, overrides: ProductionFactoryOverrides = {}): ExecutorFactory {
@@ -156,6 +159,20 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
             { alert: 'chromium_sandbox_unavailable', seccomp, detail: status.detail },
             "Chromium : bac à sable indisponible (espaces de noms utilisateur refusés par le profil seccomp ou AppArmor de l'hôte) : les runs navigateur échoueront (« No usable sandbox! »). Docker : profil seccomp-chromium.json (security_opt du worker), voir docs/deploiement.md",
           );
+        }
+        // Test « Navigateur » (UX-23), SUR DEMANDE (`AGENT_BROWSER_PROBE=true`, désactivé par défaut) : le Chromium dédié de l'agent
+        // démarre-t-il sur ce worker (HOME, bac à sable, binaire) ? Dit au démarrage, avec la classe d'erreur en code fermé, au lieu
+        // d'un essai d'enquête muet après 60 s ; n'empêche aucun run. Un lancement de Chromium coûte plusieurs secondes : jamais
+        // imposé à chaque démarrage (ni aux processus de test), c'est le déploiement qui l'active (Ma stack, `check:stack`).
+        if (env['AGENT_BROWSER_PROBE'] === 'true') {
+          const agentBrowser = await (overrides.agentBrowser ?? probeAgentBrowser)();
+          if (agentBrowser.ok) logger.info({ ms: agentBrowser.ms }, 'Chromium agentique : démarre');
+          else {
+            logger.error(
+              { alert: 'agent_browser_unavailable', class: agentBrowser.class, ms: agentBrowser.ms },
+              "Chromium agentique : ne démarre pas (classe d'erreur dans le champ class) : les essais agent (E4 par le navigateur, E5 délégué, E6) échoueront en agent_engine_error",
+            );
+          }
         }
       }
     }

@@ -240,7 +240,10 @@ function messageOf(r: RunRow, status: string, total: number, awaitingSchema: boo
     return r.kind === 'investigation' ? 'The investigation is still running; poll get_run for its progress.' : 'The run is still running; poll get_run for its result.';
   }
   if (r.state === 'cancelled') return 'The run was cancelled; incurred costs remain charged.';
-  if (r.state.startsWith('skipped_')) return `The run was skipped (${r.state}).`;
+  if (r.state.startsWith('skipped_')) {
+    const lost = runErrorOf(r);
+    return lost === null ? `The run was skipped (${r.state}).` : `The run was stopped (${lost.code}): ${lost.what_to_do}`;
+  }
   if (r.state === 'failed') {
     // Cause nommée (UX-04) : la phrase la dit, au lieu de la seule classe d'échec.
     const error = runErrorOf(r);

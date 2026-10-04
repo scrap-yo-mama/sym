@@ -103,11 +103,14 @@ import {
   type ReconCapture,
   type StepsCompileContext,
   type TokenPrice,
+  type CauseParams,
   type TrialExecution,
   type TrialPair,
   type TrialPurpose,
   type TrialsOutcome,
   detectHtmlPagination,
+  requestedPageLimit,
+  schemaAnchorChanges,
   htmlCompileSupport,
   paginateHtmlSpec,
   capturedBody,
@@ -212,11 +215,15 @@ import {
   type CatalogMemory,
   type InvestigationState,
   type RunTarget,
+  withActor,
 } from '@runtime/db';
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
 import { ChromiumLaunchError } from '../browser/agent-browser.js';
+import { agentEngineErrorClass } from './agent-error-class.js';
+import { publishedFieldDiff } from './compile-diff.js';
+import { readLlmConfig } from './llm-settings-read.js';
 import type { BrowserPool } from '../browser/pool.js';
 import type { TunnelPort } from '../tunnel/client.js';
 import { runReconnaissancePass } from './browser-executors.js';
@@ -357,6 +364,28 @@ function internalErrorDetail(error: unknown): string {
 function trialErrorLog(runId: string, execution: string, error: unknown): Record<string, unknown> {
   if (error instanceof ChromiumLaunchError) return { runId, execution, err: error.name, detail: error.message, stderr: error.stderr };
   return { runId, execution, err: internalErrorDetail(error) };
+}
+
+/** La page porte au moins un lien navigable (hors ancre, `javascript:` et `mailto:`). */
+function htmlShowsLinks(html: string | undefined): boolean {
+  return html !== undefined && /<a\s[^>]*\bhref\s*=\s*["']?(?!#|javascript:|mailto:|["']?\s*>)[^"'\s>]/i.test(html);
+}
+
+/**
+ * Schéma de sortie précédent de l'API (UX-25, ré-enquête) : celui de sa dernière version validée ; `undefined` pour une API
+ * sans schéma (première enquête : colonne vide `{}`) ou si la lecture échoue (l'ancre est un plus, jamais une condition).
+ */
+async function readPreviousOutputSchema(pool: pg.Pool, ids: { apiId: string; ownerId: string }): Promise<Record<string, unknown> | undefined> {
+  try {
+    const schema = await withActor(pool, { userId: ids.ownerId, role: 'member' }, async (tx) => {
+      const { rows } = await tx.query<{ output_schema: unknown }>('SELECT output_schema FROM apis WHERE id = $1 AND owner_id = $2', [ids.apiId, ids.ownerId]);
+      return rows[0]?.output_schema;
+    });
+    const props = typeof schema === 'object' && schema !== null ? (schema as { properties?: unknown }).properties : undefined;
+    return typeof props === 'object' && props !== null && Object.keys(props).length > 0 ? (schema as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -512,8 +541,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       await save('done');
       if (ACTION.has(cls)) await event(EV.actionRequired, { cause: cls, domain: host });
       await applyStatus(statusEvent);
-      await event(EV.finished, { outcome: 'failed', failure_class: cls, detail: failure.detail, at, budget: budgetView() });
-      return { state: 'failed', failure_class: cls, retryable: failure.retryable, error_detail: failure.detail };
+      await event(EV.finished, { outcome: 'failed', failure_class: cls, detail: failure.detail, ...(failure.params === undefined ? {} : { detail_params: failure.params }), at, budget: budgetView() });
+      return { state: 'failed', failure_class: cls, retryable: failure.retryable, error_detail: failure.params?.['reason'] === undefined ? failure.detail : `${failure.detail}:${failure.params['reason']}` };
     };
     /**
      * Arrêt sans classe d'échec (04 §6, transition 3) : proxy requis non configuré, extension hors ligne. Phase close, récit
@@ -697,7 +726,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     const tunnelOutcome = async (at: string): Promise<RunResult | null> => {
       const t = ports.tunnel;
       if (t === null) return null;
-      if (t.stop === 'tunnel_offline') return finishStopped('tunnel_offline', 'tunnel_offline', at);
+      if (t.stop === 'tunnel_offline') return finishStopped('tunnel_offline', t.lost ? 'tunnel_lost' : 'tunnel_offline', at);
       if (t.stop === 'challenge_in_tunnel') return finishFailed({ failure_class: 'blocked_by_protection', retryable: false, detail: 'challenge_in_tunnel' }, at);
       if (t.needsUser) return finishFailed({ failure_class: 'auth_required', retryable: false, detail: 'site_not_connected' }, at);
       return null;
@@ -796,6 +825,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             })
       ).filter((p) => !excluded.has(p.execution));
       let config: LlmConfig | null = null;
+      /** Schéma de sortie précédent de l'API (ré-enquête) : ancre de la proposition et base du signalement des changements (UX-25). */
+      let previousSchema: Record<string, unknown> | undefined;
       let builtStrategies: readonly BuiltStrategy[] = [];
       let proposal = state.proposal;
       let rulesUsed = state.rules;
@@ -929,11 +960,18 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         if (timedOut()) return await budgetExhausted('investigation_timeout_s');
 
         // --- 2. Schéma de sortie d'abord ------------------------------------------------------------------------------
-        config = deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
+        const configRead = await readLlmConfig(deps.llm);
+        config = configRead.kind === 'ok' ? configRead.config : null;
         // Voies agentiques essayables (E4 par le réseau, E6 avec Chromium) : un schéma sans gisement de données leur reste ouvert.
         const agenticOnly = deps.agentic === true && (rolePrice(config, 'extract') !== undefined || (deps.browsers !== null && rolePrice(config, 'agent') !== undefined));
         const fixed = state.validated_schema;
         const remap = proposal !== undefined && fixed !== undefined && JSON.stringify(fixed) !== JSON.stringify(state.proposed_schema);
+        if (configRead.kind === 'unreadable') {
+          // UX-15 : une lecture impossible n'est ni « aucun réglage » ni « prix manquant ». Le schéma à proposer en a besoin : arrêt
+          // avec la cause exacte (code fermé) ; en phase d'essais (schéma déjà validé), les essais sans LLM continuent.
+          await ctx.log('warn', 'llm_settings_unreadable', { code: configRead.code, role: 'investigate' });
+          if (proposal === undefined || remap) return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'llm_settings_unreadable', params: { reason: configRead.code } }, 'setup');
+        }
         if (proposal === undefined || remap) {
           if (deps.llm === undefined || config === null || config.roles.investigate === undefined) {
             return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }, 'setup');
@@ -957,8 +995,11 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           const ruled = await resolveRulesForApi(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, role: 'investigate', host });
           await logRuleBudgets(ctx, ruled.resolved);
           const reader = new SkillReader(ruled.resolved.skills);
+          // UX-25 : le schéma précédent de l'API (ré-enquête) est l'ancre de la proposition ; premier passage : rien.
+          previousSchema = fixed === undefined ? await readPreviousOutputSchema(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId }) : undefined;
           let args: Parameters<typeof investigateMessages>[0] = {
             description: request.description,
+            ...(previousSchema === undefined ? {} : { previousSchema }),
             ...(exampleOutput === undefined ? {} : { exampleOutput }),
             candidates,
             accessFacts: accessFactsForPrompt(report),
@@ -1047,9 +1088,14 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           for (const item of built.sample) ctx.personal.addFromItem(built.outputSchema, item);
           const { kept: sample, dropped } = ctx.excludeSubjects(built.outputSchema, built.sample);
           if (dropped > 0) await ctx.log('info', 'subjects_excluded', { dropped, at: 'schema_sample' });
+          // UX-25 : tout champ perdu, ajouté, retypé ou renommé par rapport au schéma précédent est dit (jamais en silence).
+          const changes = previousSchema === undefined ? null : schemaAnchorChanges(previousSchema, built.outputSchema);
+          const changed = changes !== null && (changes.dropped.length > 0 || changes.added.length > 0 || changes.retyped.length > 0);
+          if (changed) await ctx.log('info', 'schema_changes_vs_previous', { dropped: changes.dropped.length, added: changes.added.length, retyped: changes.retyped.length, renamed: changes.renamed.length });
           await event(EV.schemaProposed, {
             ok: true,
             output_schema: built.outputSchema,
+            ...(changed ? { changes } : {}),
             sample,
             sources: built.strategies.map((s) => s.candidate.id),
             rejected: built.rejected,
@@ -1147,7 +1193,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       ): Promise<{ spec: DeclarativeSpec; estCostUsd: number | null; proposals: number; records: number; ratio: number; costUsd: number } | null> => {
         const refuse = async (reason: string, extra: Record<string, unknown> = {}) => {
           await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: false, reason, ...extra, budget: budgetView() });
-          await ctx.log('info', 'html_compile_skipped', { reason });
+          await ctx.log('info', 'html_compile_skipped', { reason, ...(typeof extra['code'] === 'string' ? { code: extra['code'] } : {}) });
           return null;
         };
         const page = pageFor.get(pair);
@@ -1155,7 +1201,11 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         // Types du schéma vérifiés AVANT tout appel (constat UX-31) : une compilation impossible n'est jamais payée.
         const support = htmlCompileSupport(outputSchema);
         if (!support.ok) return refuse('unsupported_field_type', { fields: support.fields.slice(0, 10) });
-        config ??= deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
+        if (config === null) {
+          const again = await readLlmConfig(deps.llm);
+          if (again.kind === 'unreadable') return refuse('llm_settings_unreadable', { code: again.code });
+          config = again.config;
+        }
         const role = config?.roles.investigate;
         if (deps.llm === undefined || config === null || role === undefined) return refuse('llm_not_configured');
         const price = rolePrice(config, 'investigate');
@@ -1211,7 +1261,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         account(usage.cost_usd);
         if (out === null) return refuse(failure ?? 'proposal_unreadable', { cost_usd: usage.cost_usd });
         if (!out.ok) {
-          return refuse(out.reason, { proposals: out.proposals, cost_usd: usage.cost_usd, ...(out.diff === null ? {} : { expected: out.diff.expected, got: out.diff.got, ratio: out.diff.ratio }) });
+          // UX-37 : le différentiel PAR CHAMP (écarts et deux exemples, valeurs personnelles masquées) part avec le refus.
+          const fields = out.diff === null ? [] : publishedFieldDiff(out.diff, outputSchema, ctx.personal);
+          return refuse(out.reason, { proposals: out.proposals, cost_usd: usage.cost_usd, ...(out.diff === null ? {} : { expected: out.diff.expected, got: out.diff.got, ratio: out.diff.ratio }), ...(fields.length === 0 ? {} : { fields }) });
         }
         // Coût d'un rejeu : E1 sans LLM (octets de la page au prix du réseau du couple, calcul).
         const perGbUsd = networks.find((n) => n.mode === entry.network)?.perGbUsd ?? 0;
@@ -1311,7 +1363,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const remapped = new Set<string>();
       const autoValidated = state.validated_by === 'auto';
       const investigateClient = async (): Promise<{ client: LlmClient; price: TokenPrice; model: string } | null> => {
-        config ??= deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
+        if (config === null) {
+          const again = await readLlmConfig(deps.llm);
+          if (again.kind === 'ok') config = again.config;
+        }
         const role = config?.roles.investigate;
         if (deps.llm === undefined || config === null || role === undefined) return null;
         const price = rolePrice(config, 'investigate');
@@ -1497,6 +1552,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
                 // masque que les secrets, INV8, pas le registre des valeurs personnelles du run). Seul un lancement Chromium raté
                 // (messages construits par agent-browser.ts : code fermé, stderr de Chromium) garde son diagnostic (UX-23).
                 logger.warn(trialErrorLog(ctx.runId, entry.execution, error), 'enquête : essai en erreur');
+                // UX-23 : un essai agentique en erreur dit la classe d'erreur du moteur (code fermé), pas un « trial_error » muet.
+                if (error instanceof ChromiumLaunchError || entry.execution === 'agent' || entry.execution === 'agent_fetch') {
+                  return execution(false, 'code_error', 'agent_engine_error', 0, 0, 0, null, { class: agentEngineErrorClass(error) });
+                }
                 return execution(false, 'code_error', 'trial_error', 0, 0, 0, null);
               }
               const acc = spend.get(pair) ?? { proxy: 0, llm: 0, tokens: { in: 0, cached: 0, out: 0, reasoning: 0, estimated: false }, model: null, prompt: null, engine: null };
@@ -1540,7 +1599,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               if (!r.ok) {
                 const f = trial.guardedFailure ?? r.failure;
                 const detail = f.failure_class === 'run_budget_exceeded' && f.detail === 'max_cost_usd' ? capDetail : f.detail;
-                return execution(false, f.failure_class, detail, r.pages, cost, trial.ms, null);
+                return execution(false, f.failure_class, detail, r.pages, cost, trial.ms, null, f.params);
               }
               if (quarantineStop && !(await relaxMissing(r.records))) return execution(false, 'extraction', 'missing_required', r.pages, cost, trial.ms, null);
               // E6 réussi sans trace compilable en E5 : jamais retenu (04 §3.1, pas d'agent à chaque run sans `instructed_mode`).
@@ -1578,7 +1637,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               await decide(EV.attemptFinished, {
                 attempt: { execution: o.pair.execution, network: o.pair.network, est_cost_usd: o.pair.est_cost_usd, result: o.result, cost_usd: o.cost_usd, ms: o.ms },
                 source: o.pair.source,
-                ...(o.detail === null ? {} : { why: { code: o.detail, params: o.detail === 'agent_request_blocked' ? blockedParams(blockedFor.get(o.pair)) : {} } }),
+                ...(o.detail === null ? {} : { why: { code: o.detail, params: o.detail === 'agent_request_blocked' ? blockedParams(blockedFor.get(o.pair)) : (o.params ?? {}) } }),
                 executions: o.executions.map((e) => ({ ok: e.ok, records: e.records, pages: e.pages, stop: e.stop, cost_usd: e.cost_usd, ms: e.ms })),
                 ...(stopCheckView(o) === undefined ? {} : { pagination: stopCheckView(o) }),
                 budget: budgetView(),
@@ -1587,13 +1646,14 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             // Essai E4 en échantillon conforme dès sa 1re exécution : compilé et vérifié sans LLM, il n'en paie pas d'autre.
             acceptEarly: async (pair) => entries.get(pair)?.execution === 'agent_fetch' && pageFor.has(pair) && (await promote(pair))?.verified === true,
             contentCheck: async (pair) => {
-              const check = minimalContentCheck(sampleOutputs.get(pair) ?? [], outputSchema);
+              // UX-22 : une page E4 qui porte des liens et dont le champ lien sort vide est un défaut nommé (champ, raison).
+              const check = minimalContentCheck(sampleOutputs.get(pair) ?? [], outputSchema, { pageShowsLinks: htmlShowsLinks(pageFor.get(pair)?.html) });
               // Essai E4 conforme : compilé en `html`, paginé et vérifié en page 2 (ou sur sa page) avant d'être jugé (Janssens).
               if (entries.get(pair)?.execution === 'agent_fetch' && pageFor.has(pair)) {
                 const promoted = await promote(pair);
                 if (promoted?.verified === true) return null;
               }
-              if (!check.ok) return { failure_class: check.failure_class, detail: check.detail };
+              if (!check.ok) return { failure_class: check.failure_class, detail: check.detail, params: { field: check.field, reason: check.reason } };
               // Stratégie déclarative née d'un gisement : contrôle de fidélité, puis une nouvelle carte au plus (banc réel).
               const entry = entries.get(pair)!;
               if (!declarativeExecutions.has(entry.execution) || (entry.spec as { kind?: unknown }).kind !== 'declarative' || !reconCandidates.some((c) => c.id === entry.source)) return null;
@@ -1654,6 +1714,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           const retained = html === null ? { execution: kept.execution, network: kept.network, spec: kept.spec, estCostUsd: kept.estCostUsd } : { execution: 'fetch' as const, network: kept.network, spec: html.spec, estCostUsd: html.estCostUsd };
           // Stratégie retenue paginée : la sienne (déclarative), ou la compilée d'E4 vérifiée en page 2.
           const retainedPaginated = html === null ? entry.paginated : html.paginated;
+          // UX-26 : un nombre de pages demandé en toutes lettres est lu par le code ; honoré par l'entrée `max_pages` (défaut annoncé)
+          // si la stratégie pagine, SIGNALÉ (`not_paginated`) sinon : jamais ignoré en silence.
+          const pagesAsked = imported !== undefined ? null : requestedPageLimit(request.description);
           // Source (18 §4.6) : règles injectées et skills lus ; règles embarquées si le compilé porte un prompt (E4) ou vient
           // d'une trace E6 (E5 : `compiled_with` par étape, 19 §4).
           const agentic = entry.execution === 'agent_fetch' || entry.execution === 'agent';
@@ -1679,7 +1742,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             outputSchema,
             ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
             // Import : le schéma d'entrée du fichier (contrôlé à l'import) ; sinon celui que propose l'enquête (2.2).
-            inputSchema: imported !== undefined ? imported.input_schema : buildInputSchema({ paginated: retainedPaginated, maxPages: hardMaxPagesOf(retained.spec) }),
+            inputSchema: imported !== undefined ? imported.input_schema : buildInputSchema({ paginated: retainedPaginated, maxPages: hardMaxPagesOf(retained.spec), ...(pagesAsked !== null && retainedPaginated ? { requestedPages: pagesAsked } : {}) }),
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
             createdBy: state.validated_by === 'import' ? 'import' : recompile ? 'recompile' : 'investigation',
             source: buildStrategySource({
@@ -1738,6 +1801,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             },
             items: records.length,
             ...(stopCheckView(outcome.outcome) === undefined ? {} : { pagination: stopCheckView(outcome.outcome) }),
+            ...(pagesAsked === null ? {} : { pages_requested: { pages: pagesAsked, outcome: retainedPaginated ? 'max_pages_default' : 'not_paginated' } }),
             budget: budgetView(),
           });
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: records.length, dataset_id: dataset.datasetId, strategy_version: saved.version };
@@ -1863,8 +1927,8 @@ class LlmPriceStop extends Error {
 }
 
 /** Exécution d'un couple (forme de `TrialExecution`). */
-function execution(ok: boolean, cls: FailureClass | null, detail: string | null, pages: number, cost: number | null, ms: number, stop: string | null): TrialExecution {
-  return { ok, failure_class: cls, detail, records: 0, pages, stop, cost_usd: cost, ms };
+function execution(ok: boolean, cls: FailureClass | null, detail: string | null, pages: number, cost: number | null, ms: number, stop: string | null, params?: CauseParams): TrialExecution {
+  return { ok, failure_class: cls, detail, ...(params === undefined ? {} : { params }), records: 0, pages, stop, cost_usd: cost, ms };
 }
 
 /** Impute au run un coût hors couple (étape 0, reconnaissance, rôle `investigate`). */

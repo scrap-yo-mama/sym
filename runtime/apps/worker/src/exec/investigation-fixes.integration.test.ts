@@ -33,7 +33,7 @@ import {
   validateInvestigationSchema,
   withActor,
 } from '@runtime/db';
-import { createLlmClient, type LlmConfig } from '@runtime/llm';
+import { createLlmClient, llmConfigFromSettings, type LlmConfig } from '@runtime/llm';
 import { createFakeProvider, scripted, type FakeProvider } from '@runtime/llm/testing';
 import pg from 'pg';
 import { Writable } from 'node:stream';
@@ -55,7 +55,12 @@ const PEOPLE = 'zz_test_people.localhost';
 const SLOW = 'zz_test_slow.localhost';
 // Site connecté dans l'extension : un nom public (le tunnel refuse `*.localhost`, 07 §2), jamais résolu hors du test.
 const TUN = 'zz-test-tun.example';
-const HOSTS = [SIB, SIB_API, FLAKY, PEOPLE, SLOW, TUN];
+/** U1.12 : liste dont le titre est constant (contenu minimal) ; page HTML dont l'agence lue par l'agent diverge de la page (compilation refusée). */
+const CONST = 'zz_test_const.localhost';
+const DIFF = 'zz_test_diff.localhost';
+/** U1.11 : liste d'offres dont chaque lien porte un jeton de suivi dans sa requête (UX-22). */
+const LINKS = 'zz_test_links.localhost';
+const HOSTS = [SIB, SIB_API, FLAKY, PEOPLE, SLOW, TUN, CONST, DIFF, LINKS];
 const MODEL = 'zz_investigate';
 const EXTRACT_MODEL = 'zz_extract';
 const ERASED_EMAIL = 'zz_test_person_02@example.invalid';
@@ -80,6 +85,16 @@ const FALLBACK_MODEL = 'zz_fallback_unpriced';
 let instanceContact: string | null = 'mailto:ops@zz-test.example';
 /** Panne inattendue au départ de l'enquête (UX-24) : exception hors des fins prévues par l'exécuteur. */
 let crash: Error | null = null;
+/** Réglages IA illisibles par le worker (UX-15) : la clé du fournisseur ne se déchiffre pas (clé maîtresse différente de celle du web). */
+let settingsBroken = false;
+/** Lecture des réglages telle que la fait le worker : `llmConfigFromSettings` sur `settings.llm`, secret illisible si `settingsBroken`. */
+async function workerLlmConfig(): Promise<LlmConfig> {
+  if (!settingsBroken) return llmConfig();
+  const value = { providers: [{ id: 'fake', base_url: fake.baseUrl, api_key_secret_id: 'zz-sec-key', models: {} }], roles: { investigate: { provider: 'fake', model: MODEL } } };
+  return llmConfigFromSettings(value, async () => {
+    throw new Error('bad decrypt zz_secret_detail');
+  });
+}
 /** Exception d'un essai de stratégie (UX-24, journal de l'opérateur) et lignes écrites par le journal de l'exécuteur d'enquête. */
 let trialCrash: Error | null = null;
 const logLines: string[] = [];
@@ -196,6 +211,17 @@ beforeAll(async () => {
           : undefined;
       case SLOW:
         return req.path === '/' ? { ...page(''), delayMs: 4_000 } : undefined;
+      case CONST:
+        if (req.path === '/') return page('fetch("/api/items")');
+        return req.path === '/api/items' ? json({ items: Array.from({ length: 6 }, (_, i) => ({ id: `zz_test_c${i + 1}`, title: 'Titre identique Zztest', price_cents: 100 * (i + 1) })), has_more: false }) : undefined;
+      case LINKS:
+        return req.path === '/'
+          ? { body: `<html><body><ul>${Array.from({ length: 5 }, (_, i) => `<li class="job"><a href="/jobs/zz-${i + 1}?utm=zz_secret_token#apply">Offre Zztest ${i + 1}</a></li>`).join('')}</ul></body></html>` }
+          : undefined;
+      case DIFF:
+        return req.path === '/'
+          ? { body: `<html><body><main>${Array.from({ length: 10 }, (_, i) => `<article class="it"><h3>Offre Zztest ${i + 1}</h3><span class="ag">Agence ${i % 2 === 0 ? 'Nord' : 'Sud'}</span></article>`).join('')}</main></body></html>` }
+          : undefined;
       case TUN:
         if (req.path === '/') return page('fetch("/api/items")');
         return req.path === '/api/items' ? json(products(5)) : undefined;
@@ -246,7 +272,7 @@ beforeAll(async () => {
     },
     logger: pino({ level: 'info' }, new Writable({ write: (chunk, _enc, done) => (logLines.push(String(chunk)), done()) })),
     tunnel,
-    llm: { config: async () => llmConfig(), client: (config) => createLlmClient(config) },
+    llm: { config: workerLlmConfig, client: (config) => createLlmClient(config) },
     agentic: true,
     instanceContact: async () => instanceContact,
     version: '9.9.9',
@@ -284,6 +310,7 @@ beforeEach(() => {
   extractPrice = { in: 1, out: 1 };
   unpricedFallback = false;
   crash = null;
+  settingsBroken = false;
   trialCrash = null;
   logLines.length = 0;
 });
@@ -626,3 +653,139 @@ function directCtx(apiId: string, runId: string) {
     writeItems: async () => ({ dataset_id: '', written: 0, new_items: null, dropped: 0, skipped: 0 }),
   };
 }
+
+describe('causes exactes côté worker (U1.12, assert_reason_matches_cause)', () => {
+  const finishedOf = async (runId: string) => (await eventsOf(runId)).find((e) => e.kind === 'investigation.finished')!.payload as Record<string, unknown>;
+  const attemptWhy = async (runId: string) => (await eventsOf(runId)).filter((e) => e.kind === 'attempt.finished').map((e) => (e.payload as { why?: { code: string; params: Record<string, unknown> } }).why);
+
+  test('UX-15 — clé maîtresse différente : llm_settings_unreadable:key_unreadable (ni prix manquant, ni non configuré), 0 appel, 0 requête, sans le détail du déchiffrement', async () => {
+    settingsBroken = true;
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_cause_settings');
+    const run = await investigate(apiId, { url: site.url(SIB, '/'), description: 'liste', auto_validate: true });
+    expect(await runRow(run.id)).toMatchObject({ state: 'failed', failure_class: 'code_error', error_detail: 'llm_settings_unreadable:key_unreadable' });
+    expect(await finishedOf(run.id)).toMatchObject({ outcome: 'failed', failure_class: 'code_error', detail: 'llm_settings_unreadable', detail_params: { reason: 'key_unreadable' } });
+    await apiStatusSettled(apiId, { status: 'erreur', investigation_phase: 'done' });
+    expect(fake.requests).toBe(0);
+    expect(JSON.stringify(await eventsOf(run.id))).not.toContain('zz_secret_detail');
+    expect(logLines.join('')).not.toContain('zz_secret_detail');
+  });
+
+  test('UX-21 — champ requis constant : l’essai dit le champ et la raison (why.params), plus un « minimal_content » muet', async () => {
+    fake.setScenario(MODEL, [scripted.json({ ...PRODUCTS_PROPOSAL })]);
+    const apiId = await insertApi('zz_test_cause_constant');
+    const run = await investigate(apiId, { url: site.url(CONST, '/'), description: 'liste des produits', auto_validate: true });
+    expect(run).toMatchObject({ state: 'failed' });
+    const whys = await attemptWhy(run.id);
+    expect(whys).toContainEqual({ code: 'minimal_content', params: { field: 'title', reason: 'constant' } });
+  });
+
+  test('UX-23 — Chromium qui échoue : l’essai dit la classe d’erreur du moteur (agent_engine_error, chromium_launch_signal), sans stderr', async () => {
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    trialCrash = new ChromiumLaunchError('chromium_launch_signal:SIGTRAP', 'zz_stderr_marker : /home/pwuser/.config');
+    const apiId = await insertApi('zz_test_cause_engine');
+    const run = await investigate(apiId, { url: site.url(SIB, '/'), description: 'liste', auto_validate: true });
+    expect(await attemptWhy(run.id)).toContainEqual({ code: 'agent_engine_error', params: { class: 'chromium_launch_signal' } });
+    expect(JSON.stringify(await eventsOf(run.id))).not.toContain('zz_stderr_marker');
+  });
+
+  test('UX-37 — compilation html refusée pour écarts de valeurs : le différentiel PAR CHAMP part dans strategy.compiled (écarts, deux exemples)', async () => {
+    withExtract = true;
+    const op = (name: string) => ({ op: name, pattern: null, group: null, decimal: null, format: null });
+    const proposal = {
+      fields: [
+        { name: 'title', type: 'string', required: true, personal: false, description: 'Titre' },
+        { name: 'agency', type: 'string', required: true, personal: false, description: 'Agence' },
+      ],
+      sources: [],
+    };
+    const recipe = { records: 'article.it', fields: [{ field: 'title', css: 'h3', attr: null, ops: [op('trim')] }, { field: 'agency', css: 'span.ag', attr: null, ops: [op('trim')] }] };
+    // L'agent lit une agence que la page ne donne pas : 10 écarts sur « agency », aucun sur « title ».
+    const items = { items: Array.from({ length: 10 }, (_, i) => ({ title: `Offre Zztest ${i + 1}`, agency: `Siège ${i + 1}` })) };
+    fake.setScenario(MODEL, [scripted.json(proposal), scripted.json(recipe), scripted.json(recipe)]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json(items), scripted.json(items), scripted.json(items)]);
+    const apiId = await insertApi('zz_test_cause_diff');
+    const run = await investigate(apiId, { url: site.url(DIFF, '/'), description: 'liste des offres', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded' });
+    const compiled = (await eventsOf(run.id)).find((e) => e.kind === 'strategy.compiled')!.payload as { ok: boolean; reason: string; fields: { field: string; compared: number; mismatched: number; examples: { expected: string; got: string }[] }[] };
+    expect(compiled).toMatchObject({ ok: false, reason: 'values' });
+    expect(compiled.fields.map((f) => f.field)).toEqual(['agency']);
+    expect(compiled.fields[0]).toMatchObject({ compared: 10, mismatched: 10 });
+    expect(compiled.fields[0]!.examples).toHaveLength(2);
+    expect(compiled.fields[0]!.examples[0]).toEqual({ expected: 'Siège 1', got: 'Agence Nord' });
+  });
+});
+
+describe('qualité visible des données (U1.11)', () => {
+  test('UX-22 — lien rempli : le texte de la page donne l’URL absolue de chaque offre (sans jeton de suivi), le modèle la reprend, le champ format:uri est rempli', async () => {
+    withExtract = true;
+    const proposal = {
+      fields: [
+        { name: 'title', type: 'string', required: true, personal: false, description: 'Intitulé' },
+        { name: 'url', type: 'string', required: false, personal: false, description: 'Lien de l’offre' },
+      ],
+      sources: [],
+    };
+    fake.setScenario(MODEL, [scripted.json(proposal)]);
+    // Le faux modèle lit la page comme un vrai : « Offre Zztest N (URL) » → un élément par ligne.
+    const read = ({ body }: { body: Record<string, unknown> }) => {
+      const user = String((body['messages'] as { content: string }[]).at(-1)!.content);
+      const items = [...user.matchAll(/^(Offre Zztest \d+) \((https?:\/\/\S+)\)$/gm)].map((m) => ({ title: m[1]!, url: m[2]! }));
+      return scripted.json({ items });
+    };
+    fake.setScenario(EXTRACT_MODEL, [read, read, read]);
+    const apiId = await insertApi('zz_test_quality_links');
+    const run = await investigate(apiId, { url: site.url(LINKS, '/'), description: 'offres et lien', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded', items: 5 });
+    const items = (await pool.query<{ item: { title: string; url: string } }>('SELECT item FROM dataset_items WHERE run_id = $1 ORDER BY seq', [run.id])).rows.map((r) => r.item);
+    expect(items).toHaveLength(5);
+    for (const [i, item] of items.entries()) expect(item.url).toBe(site.url(LINKS, `/jobs/zz-${i + 1}`));
+    // Jamais un jeton d'URL dans le prompt (08 §4 mesure 5) : requête et fragment retirés.
+    const extractPrompts = fake.calls.filter((c) => c.role === EXTRACT_MODEL).map((c) => JSON.stringify(c.body));
+    expect(extractPrompts.length).toBeGreaterThan(0);
+    expect(extractPrompts.join('')).not.toContain('zz_secret_token');
+  });
+
+  test('UX-22 — lien perdu : la page porte des liens et le champ url sort vide : l’essai le dit (minimal_content, champ url) au lieu de livrer 5 offres sans lien', async () => {
+    withExtract = true;
+    const proposal = {
+      fields: [
+        { name: 'title', type: 'string', required: true, personal: false, description: 'Intitulé' },
+        { name: 'url', type: 'string', required: false, personal: false, description: 'Lien de l’offre' },
+      ],
+      sources: [],
+    };
+    fake.setScenario(MODEL, [scripted.json(proposal)]);
+    const noLinks = { items: Array.from({ length: 5 }, (_, i) => ({ title: `Offre Zztest ${i + 1}`, url: null })) };
+    fake.setScenario(EXTRACT_MODEL, [scripted.json(noLinks), scripted.json(noLinks), scripted.json(noLinks)]);
+    const apiId = await insertApi('zz_test_quality_links_lost');
+    const run = await investigate(apiId, { url: site.url(LINKS, '/'), description: 'offres et lien', auto_validate: true });
+    expect(run).toMatchObject({ state: 'failed' });
+    const whys = (await eventsOf(run.id)).filter((e) => e.kind === 'attempt.finished').map((e) => (e.payload as { why?: unknown }).why);
+    expect(whys).toContainEqual({ code: 'minimal_content', params: { field: 'url', reason: 'sentinel' } });
+  });
+
+  test('UX-25 — ré-enquête : le schéma précédent ancre la proposition (consigne au modèle) et chaque renommage est dit dans schema.proposed', async () => {
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_quality_anchor');
+    const previous = { type: 'object', properties: { title: { type: 'string' }, price: { type: 'integer' }, availability: { type: 'string' } } };
+    await pool.query('UPDATE apis SET output_schema = $2::jsonb WHERE id = $1', [apiId, JSON.stringify(previous)]);
+    const run = await investigate(apiId, { url: site.url(SIB, '/'), description: 'liste des produits' });
+    expect(run).toMatchObject({ state: 'succeeded' });
+    const prompt = JSON.stringify(fake.calls.find((c) => c.role === MODEL)!.body);
+    expect(prompt).toContain('PREVIOUS OUTPUT SCHEMA');
+    expect(prompt).toContain('availability');
+    const proposed = (await eventsOf(run.id)).find((e) => e.kind === 'schema.proposed')!.payload as { changes?: { dropped: string[]; added: string[]; renamed: { from: string; to: string }[] } };
+    expect(proposed.changes?.dropped).toEqual(['price', 'availability']);
+    expect(proposed.changes?.added).toEqual(['sku', 'price_cents']);
+    expect(proposed.changes?.renamed).toContainEqual({ from: 'price', to: 'price_cents' });
+  });
+
+  test('UX-25 — première enquête (aucun schéma précédent) : aucune ancre dans le prompt, aucun changement dit', async () => {
+    fake.setScenario(MODEL, [scripted.json(PRODUCTS_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_quality_no_anchor');
+    const run = await investigate(apiId, { url: site.url(SIB, '/'), description: 'liste des produits' });
+    expect(JSON.stringify(fake.calls.find((c) => c.role === MODEL)!.body)).not.toContain('PREVIOUS OUTPUT SCHEMA');
+    expect(((await eventsOf(run.id)).find((e) => e.kind === 'schema.proposed')!.payload as { changes?: unknown }).changes).toBeUndefined();
+  });
+});

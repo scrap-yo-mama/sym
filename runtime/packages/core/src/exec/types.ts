@@ -35,6 +35,8 @@ export type ExecFailure = {
   readonly retryable: boolean;
   readonly detail: string;
   readonly status?: number;
+  /** Paramètres de la cause (U1.12) : codes fermés seulement (classe d'erreur du moteur agentique, champ du schéma). */
+  readonly params?: Readonly<Record<string, string | number>>;
 };
 
 /** Cadence (1.9) vue par l'interpréteur : une réservation avant chaque requête, un compte rendu après. */

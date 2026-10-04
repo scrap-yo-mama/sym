@@ -74,6 +74,12 @@ export type InvestigateArgs = {
    * Proposition précédente refusée par le contrôle de fidélité du code (banc réel) : chemins proposés et différentiel en CODES
    * (champ, motif, part des éléments, autre champ ; `fidelityDiff`), jamais une valeur du site. Le modèle refait la carte.
    */
+  /**
+   * Schéma de sortie précédent de l'API (ré-enquête, UX-25) : ancre de la proposition, pour que les colonnes de ses
+   * consommateurs (CSV, intégrations, planifications) ne changent pas de nom sans raison. Noms, types et descriptions de
+   * champs seulement : aucune valeur du site.
+   */
+  readonly previousSchema?: unknown;
   readonly previousMapping?: { readonly paths: readonly { readonly candidate: string; readonly field: string; readonly path: string }[]; readonly diff: string };
 };
 
@@ -128,6 +134,7 @@ export function investigateMessages(args: InvestigateArgs, token = randomBytes(1
     `REQUEST (from the API owner): ${maskTextForLlm(args.description).slice(0, MAX_REQUEST_CHARS)}`,
     example === '' ? '' : `EXAMPLE OUTPUT (from the API owner): ${example}`,
     args.fixedSchema === undefined ? '' : `VALIDATED OUTPUT SCHEMA (use exactly these field names and types): ${JSON.stringify(args.fixedSchema).slice(0, 8_000)}`,
+    args.previousSchema === undefined ? '' : `PREVIOUS OUTPUT SCHEMA of this API (its consumers read these columns): keep the same field names and types for every field the page still gives; rename, retype or drop a field only when the page no longer has that value, and say nothing else about it: ${JSON.stringify(args.previousSchema).slice(0, 8_000)}`,
     args.accessFacts === undefined ? '' : `ACCESS FACTS: ${JSON.stringify(args.accessFacts)}`,
     args.allowedCouples === undefined ? '' : `ALLOWED COUPLES (computed by the code; est_cost_usd per run): ${JSON.stringify(args.allowedCouples.slice(0, 40))}`,
     args.previousMapping === undefined
