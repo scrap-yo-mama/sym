@@ -62,16 +62,36 @@ export function selectElements(selector: string, root: Document | Element, maxRe
   return found;
 }
 
-/** Texte de l'élément (parcours itératif, hors <script> et <style>), plafonné à `maxLength` caractères. */
+/** Balises dont la frontière sépare deux mots (`84000<br>84140`, deux cellules, deux paragraphes) : jamais collés. */
+const WORD_BREAK_TAGS = new Set(['br', 'p', 'div', 'li', 'td', 'th', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'dl', 'dt', 'dd', 'table', 'section', 'article', 'header', 'footer', 'blockquote', 'figcaption', 'hr']);
+const SEPARATOR = Symbol('separator');
+
+/**
+ * Texte de l'élément (parcours itératif, hors <script> et <style>), plafonné à `maxLength` caractères. Un `<br>` ou la
+ * frontière d'un bloc (paragraphe, cellule, élément de liste…) sépare les textes voisins d'une espace (banc réel R06 :
+ * « 84000<br>84140 » rendait « 8400084140 ») ; aucune espace n'est ajoutée en tête ni en fin, ni à côté d'une espace.
+ */
 export function elementText(element: Element, maxLength: number): string {
   let out = '';
-  const stack: AnyNode[] = [element];
+  let pending = false;
+  const stack: (AnyNode | typeof SEPARATOR)[] = [element];
   while (stack.length > 0) {
-    const node = stack.pop() as AnyNode;
+    const node = stack.pop() as AnyNode | typeof SEPARATOR;
+    if (node === SEPARATOR) {
+      pending = true;
+      continue;
+    }
     if (node.type === 'text') {
+      if (pending && out !== '' && node.data !== '' && !/\s$/.test(out) && !/^\s/.test(node.data)) out += ' ';
+      if (node.data !== '') pending = false;
       out += node.data;
       if (out.length > maxLength) throw new DslError('value_too_large', 'texte extrait trop long');
     } else if (node.type === 'tag' || node === element || node.type === 'root') {
+      const breaks = node !== element && node.type === 'tag' && WORD_BREAK_TAGS.has((node as Element).name);
+      if (breaks) {
+        pending = true;
+        stack.push(SEPARATOR);
+      }
       const kids = childrenOf(node);
       for (let i = kids.length - 1; i >= 0; i -= 1) stack.push(kids[i] as AnyNode);
     }

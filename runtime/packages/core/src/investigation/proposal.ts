@@ -12,11 +12,11 @@ import { extractRecords } from '../dsl/extract.js';
 import type { BlobLocator } from '../dsl/blobs.js';
 import { validateDeclarativeSpec, type DeclarativeSpec, type PaginationSpec, type StopCondition } from '../dsl/spec.js';
 import { assertSchemaAcceptable, DRAFT_2020_12, SchemaError, validateOutput } from '../schema/validator.js';
-import { HTML_LIST_HARD_MAX_PAGES, type DomPagination, type DomSlot } from './dom.js';
+import { classValueOps, HTML_LIST_HARD_MAX_PAGES, type DomPagination, type DomSlot } from './dom.js';
 import type { DataCandidate, ReconCapture } from './recon.js';
 
-/** Types d'un champ proposé (scalaires seulement en V1). */
-export const PROPOSAL_FIELD_TYPES = ['string', 'number', 'integer', 'boolean'] as const;
+/** Types d'un champ proposé : scalaires, ou `array` (liste de chaînes : étiquettes, banc réel R10). */
+export const PROPOSAL_FIELD_TYPES = ['string', 'number', 'integer', 'boolean', 'array'] as const;
 export type ProposalFieldType = (typeof PROPOSAL_FIELD_TYPES)[number];
 
 /** Opérateurs sans paramètre que le LLM peut demander (sous-ensemble de la liste fermée de 04b §2). */
@@ -148,7 +148,7 @@ export const SAMPLE_SIZE = 5;
 export function outputSchemaOf(fields: readonly ProposalField[]): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   for (const f of fields) {
-    properties[f.name] = { type: f.type, ...(f.description.trim() === '' ? {} : { description: f.description.trim().slice(0, 500) }), ...(f.personal ? { 'x-personal': true } : {}) };
+    properties[f.name] = { type: f.type, ...(f.type === 'array' ? { items: { type: 'string' }, maxItems: 200 } : {}), ...(f.description.trim() === '' ? {} : { description: f.description.trim().slice(0, 500) }), ...(f.personal ? { 'x-personal': true } : {}) };
   }
   return {
     $schema: DRAFT_2020_12,
@@ -213,6 +213,10 @@ const slotNameOf = (path: string): string | null => /^\$\.([a-z][a-z0-9_]{0,63})
  * espaces (aucune conversion de sa main).
  */
 function domField(slot: DomSlot, type: string, required: boolean, proposed: readonly string[], pageUrl: string): Record<string, unknown> {
+  // Valeur en classe (« star-rating Three ») : opérateurs du code (classe voisine, table des mots-nombres), jamais du modèle.
+  if (slot.classValue !== undefined) return { ...(slot.css === null ? {} : { css: slot.css }), attr: 'class', type, ...(required ? { required: true } : {}), ops: classValueOps(slot.classValue, type) };
+  // Liste (étiquettes) : tous les éléments du sélecteur, chacun nettoyé.
+  if (type === 'array') return { ...(slot.css === null ? {} : { css: slot.css }), attr: slot.attr, ...(slot.up === undefined ? {} : { up: slot.up }), type, reduce: 'all', ...(required ? { required: true } : {}), ops: ['collapse_spaces', 'trim'] };
   const ops: (string | Record<string, unknown>)[] = ['collapse_spaces', 'trim'];
   if (type === 'number' || type === 'integer') {
     ops.push({ op: 'regex_extract', pattern: FIRST_NUMBER, group: 0 }, 'trim', { op: type === 'number' ? 'to_number' : 'to_integer', decimal: slot.decimal });
@@ -220,10 +224,12 @@ function domField(slot: DomSlot, type: string, required: boolean, proposed: read
     ops.push('to_boolean');
   } else {
     if (slot.attr === 'href' || slot.attr === 'src') ops.push({ op: 'abs_url', base: pageUrl });
+    // Séparateur final de toutes les valeurs (« Hybrid — ») : la valeur s'arrête au dernier caractère qui n'en est pas un.
+    else if (slot.trailing !== undefined) ops.push({ op: 'regex_extract', pattern: `(.*[^ ${/[-|^\\\]]/.test(slot.trailing) ? '\\' : ''}${slot.trailing}])`, group: 1 });
     else if (slot.shape.split('|')[0] === 'paren_code') ops.push({ op: 'regex_extract', pattern: '[^()]+', group: 0 }, 'trim');
     for (const op of proposed) if (op === 'lower' || op === 'upper') ops.push(op);
   }
-  return { ...(slot.css === null ? {} : { css: slot.css }), attr: slot.attr, type, ...(required ? { required: true } : {}), ops };
+  return { ...(slot.css === null ? {} : { css: slot.css }), attr: slot.attr, ...(slot.up === undefined ? {} : { up: slot.up }), type, ...(required ? { required: true } : {}), ops };
 }
 
 /**
@@ -281,8 +287,9 @@ function domRelaxedFields(proposal: InvestigationProposal, candidates: readonly 
       const field = proposal.fields.find((f) => f.name === p.field);
       if (slot === undefined || field === undefined) continue;
       const numeric = field.type === 'number' || field.type === 'integer';
-      const identifying = slot.attr === 'href' || slot.attr.startsWith('data-') || /^h[1-6](?![a-z0-9])/.test(slot.css ?? '');
-      if (slot.present < candidate.count || !identifying || (numeric && slot.shape.includes('|'))) relaxed.add(field.name);
+      const identifying = slot.attr === 'href' || slot.attr.startsWith('data-') || /^h[1-6](?![a-z0-9])/.test(slot.css ?? '') || (slot.attr === 'text' && /^h[1-6]$/.test(slot.tag ?? '') && slot.up === undefined);
+      // Libellé constant de la page 1 (« In stock ») : une autre page peut dire autre chose ou rien ; jamais requis.
+      if (slot.present < candidate.count || !identifying || slot.constant !== undefined || (numeric && slot.shape.includes('|'))) relaxed.add(field.name);
     }
   }
   return relaxed;
@@ -308,7 +315,7 @@ export type ProposalOutcome =
   | { readonly ok: false; readonly reason: 'invalid_schema' | 'no_valid_source' | 'no_conformant_sample'; readonly rejected: readonly { readonly candidate: string; readonly reason: string }[] };
 
 /** Corps capturé d'un gisement : réponse JSON (`response`), document servi (`embedded`, `dom`) ou rendu (`dom` vu après rendu). */
-function capturedBody(candidate: DataCandidate, capture: ReconCapture): string | undefined {
+export function capturedBody(candidate: DataCandidate, capture: ReconCapture): string | undefined {
   if (candidate.from === 'dom') return candidate.dom?.rendered === true ? (capture.document?.renderedHtml ?? undefined) : capture.document?.html;
   if (candidate.from === 'embedded') return capture.document?.html;
   return capture.exchanges.find((e) => e.url === candidate.request.url && e.method.toUpperCase() === candidate.request.method)?.body;
@@ -379,7 +386,8 @@ export function buildFromProposal(
         if (slot !== undefined) fields[p.field] = domField(slot, t.type, t.required, p.ops, candidate.request.url);
         continue;
       }
-      fields[p.field] = { path: p.path, type: t.type, ...(t.required ? { required: true } : {}), ...(p.ops.length === 0 ? {} : { ops: [...p.ops] }) };
+      // Liste lue par un joker (`$.tags[*]`) : toutes les valeurs ; par la clé du tableau (`$.tags`) : le tableau lui-même.
+      fields[p.field] = { path: p.path, type: t.type, ...(t.type === 'array' && /\[\*\]$/.test(p.path) ? { reduce: 'all' } : {}), ...(t.required ? { required: true } : {}), ...(p.ops.length === 0 ? {} : { ops: [...p.ops] }) };
     }
     if (dom !== undefined && Object.keys(fields).length === 0) {
       rejected.push({ candidate: candidate.id, reason: 'no_known_slot' });

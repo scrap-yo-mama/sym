@@ -15,7 +15,7 @@
 import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { createLogger, DomainPacer, generateExtensionToken, Secret, validateOutput, type RunExecutor } from '@runtime/core';
-import { analyzeCapture } from '@runtime/core/investigation';
+import { analyzeCapture, type DataCandidate } from '@runtime/core/investigation';
 import type { CommandFrame } from '@runtime/core/tunnel';
 import * as net from '@runtime/core/net';
 import { createRun, listInvestigationEvents, PgBossJobQueue, PgPacingStore, readRun, runQueueDefinition, startInvestigation, withActor } from '@runtime/db';
@@ -31,6 +31,7 @@ import { createStrategyRuntime } from '../../apps/worker/src/exec/strategy-execu
 import { TunnelJobClient } from '../../apps/worker/src/tunnel/client.js';
 import { startWorker, type Worker } from '../../apps/worker/src/worker.js';
 import { startClient, type Client } from '../../fixtures/src/test-helpers.ts';
+import { AGENCY_DUPES_DISTINCT, CATALOGUE_PAGES_TOTAL, cataloguePagesItem, jobsGrouped, TABLE_PAGES_TOTAL, tablePagesRow, WIKI_TABLE_ROWS, wikiTableRow } from '../../fixtures/src/sites/case-sites.ts';
 import { fixtureGuard } from '../helpers/fixture-net.js';
 import { closeTestPool, createTestPool } from '../helpers/pg.js';
 import { createUser, runSetup, startTestServer, type TestServer, type TestUser } from '../helpers/server.js';
@@ -39,6 +40,12 @@ import { SimExtension } from '../helpers/tunnel-sim.js';
 const BOOKS = 'zz_test_books.localhost';
 /** Liste HTML statique paginée par le chemin (constat Janssens) : 519 biens, 52 pages, fixture `html_list`. */
 const HTML_LIST = 'zz_test_html_list.localhost';
+/** Banc de cas réels (passage 1), structures fictives : R07, R08, R06, R02, R04. */
+const CATALOGUE = 'zz_test_catalogue_pages.localhost';
+const TABLE = 'zz_test_table_pages.localhost';
+const WIKI = 'zz_test_wiki_table.localhost';
+const AGENCY = 'zz_test_agency_dupes.localhost';
+const JOBS = 'zz_test_jobs_grouped.localhost';
 const SEARCH = 'zz_test_search_guarded.localhost';
 const LOGIN = 'zz_test_login.localhost';
 const CONTACTS = 'zz_test_api_json.localhost';
@@ -228,7 +235,7 @@ beforeAll(async () => {
   await queue.createQueue(runQueueDefinition());
   tunnel = new TunnelJobClient({ pool, sessionUrl: srv.db.url, logger: silent, pollMs: 100, offlineGraceMs: 2500 });
   await tunnel.start();
-  const guard = fixtureGuard(client.server.port, [BOOKS, SEARCH, LOGIN, CONTACTS, ACCOUNT, HTML_LIST], net);
+  const guard = fixtureGuard(client.server.port, [BOOKS, SEARCH, LOGIN, CONTACTS, ACCOUNT, HTML_LIST, CATALOGUE, TABLE, WIKI, AGENCY, JOBS], net);
   const pacer = new DomainPacer(new PgPacingStore(pool));
   const agent = {
     llmConfig: async () => llmConfig(),
@@ -365,6 +372,8 @@ describe('cas de référence en version fixtures, au niveau du worker (gate M2)'
         fields: fields.map(({ path: _path, ...f }) => f),
         sources: [{ candidate: dom.id, paths: fields.map((f) => ({ field: f.name, path: f.path, ops: [] })), pagination: { type: 'none', param: null, start: null, has_more_path: null, next_path: null } }],
       }),
+      // Juge de fidélité (banc réel) : 3 cartes et leur fragment HTML, tous les champs justes.
+      scripted.json({ fields: fields.map((f) => ({ name: f.name, verdict: 'ok' })) }),
     ]);
     const apiId = await insertApi('zz_test_case_html_list', { networkPolicy: { allow: ['direct', 'dc_proxy'] } });
     const run = await investigate(apiId, { url, description: 'Liste des biens de cette page, toutes les pages, sans ouvrir les fiches' });
@@ -374,9 +383,9 @@ describe('cas de référence en version fixtures, au niveau du worker (gate M2)'
     expect(sv).toMatchObject({ execution: 'fetch', network: 'direct' });
     expect(sv.spec.sources[0]).toMatchObject({ from: 'html', records: dom.records });
     expect(sv.spec.pagination).toMatchObject({ type: 'page_param', param: 'url.path', path_pattern: '/nos-maisons/page/{page}/', limits: { hard_max_pages: 200 } });
-    // Un seul essai (E1) ; ni E4 ni navigateur ; un seul appel LLM (le rôle investigate) pour toute l'enquête.
+    // Un seul essai (E1) ; ni E4 ni navigateur ; deux appels LLM (rôle investigate) : le schéma, puis le juge de fidélité.
     expect(await attemptsOf(run.id)).toEqual([{ execution: 'fetch', network: 'direct', result_class: 'ok' }]);
-    expect(fake.requests).toBe(1);
+    expect(fake.requests).toBe(2);
     expect(run.cost.proxy_usd).toBe(0);
     // Page 2 atteinte par les essais ; règle d'arrêt constatée sur la page vide qui suit la dernière (53).
     const finished = (await eventsOf(run.id)).filter((e) => e.kind === 'attempt.finished').map((e) => e.payload as { executions: { pages: number }[]; pagination?: { verified: boolean; stop: string | null; pages: number } });
@@ -410,6 +419,173 @@ describe('cas de référence en version fixtures, au niveau du worker (gate M2)'
     expect(items.find((i) => i['reference'] === 'ZZ0013va')).not.toHaveProperty('price_eur');
     expect(items.find((i) => i['reference'] === 'ZZ0014va')).not.toHaveProperty('bedrooms');
     expect(items.find((i) => i['reference'] === 'ZZ0011va')).not.toHaveProperty('surface_m2');
+  });
+
+  // ---------------------------------------------------------------- banc de cas réels (passage 1), structures fictives
+  /** Gisement `dom` de la page servie, tel que le voit la reconnaissance statique du worker (DISABLE_BROWSER). */
+  const domOf = async (host: string, path: string) => {
+    const url = `${base(host)}${path}`;
+    const html = (await client.get(host, path)).body;
+    const candidates = analyzeCapture({ mode: 'static', pageUrl: url, document: { url, status: 200, html, renderedHtml: null, bytes: html.length }, exchanges: [], totalBytes: html.length }, [host]);
+    return { url, dom: candidates.find((c) => c.from === 'dom')! };
+  };
+  const slotIn = (dom: DataCandidate, pred: (key: string, description: string) => boolean): string => {
+    const hit = Object.entries(dom.skeleton).find(([k, d]) => pred(k, d));
+    if (hit === undefined) throw new Error(`zz_test : aucun emplacement dans ${JSON.stringify(dom.skeleton)}`);
+    return hit[0];
+  };
+  const domProposal = (dom: DataCandidate, fields: { name: string; type: string; path: string; required?: boolean }[]) => ({
+    fields: fields.map((f) => ({ name: f.name, type: f.type, required: f.required ?? true, personal: false, description: `Field ${f.name}` })),
+    sources: [{ candidate: dom.id, paths: fields.map((f) => ({ field: f.name, path: f.path, ops: [] })), pagination: { type: 'none', param: null, start: null, has_more_path: null, next_path: null } }],
+  });
+  /** Verdict du juge de fidélité : tous les champs justes. */
+  const allOk = (names: readonly string[]) => scripted.json({ fields: names.map((name) => ({ name, verdict: 'ok' })) });
+  const logsOf = async (runId: string, message: string) =>
+    (await pool.query<{ data: Record<string, unknown> }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = $2 ORDER BY seq", [runId, message])).rows.map((r) => r.data);
+
+  test('assert_case_banc_r07_catalogue_pages — catalogue page-N.html (lien « next » relatif) : pagination par le chemin, note en classe, titre complet, 152 livres au rejeu', async () => {
+    const { url, dom } = await domOf(CATALOGUE, '/catalogue/category/books/zz-default_15/index.html');
+    expect(dom.count).toBe(20);
+    const fields = [
+      { name: 'title', type: 'string', path: slotIn(dom, (k, d) => k === '$.a' && d.startsWith('attribute title')) },
+      { name: 'price_gbp', type: 'number', path: slotIn(dom, (_k, d) => d.includes('shape=money')) },
+      { name: 'rating', type: 'integer', path: slotIn(dom, (_k, d) => d.includes('shape=class_number')) },
+      { name: 'availability', type: 'string', path: slotIn(dom, (_k, d) => d.includes('value=In stock')) },
+      { name: 'url', type: 'string', path: slotIn(dom, (_k, d) => d.startsWith('link')) },
+    ];
+    fake.setScenario(MODEL, [scripted.json(domProposal(dom, fields)), allOk(fields.map((f) => f.name))]);
+    const apiId = await insertApi('zz_test_banc_r07');
+    const run = await investigate(apiId, { url, description: 'Tous les livres de cette catégorie, toutes les pages : titre, prix, note, disponibilité, lien' });
+    expect(run).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    const sv = await strategyOf(apiId);
+    expect(sv).toMatchObject({ execution: 'fetch', network: 'direct' });
+    expect(sv.spec.pagination).toMatchObject({ type: 'page_param', param: 'url.path', path_pattern: '/catalogue/category/books/zz-default_15/page-{page}.html', start: 1, limits: { hard_max_pages: 200 } });
+    expect(await attemptsOf(run.id)).toEqual([{ execution: 'fetch', network: 'direct', result_class: 'ok' }]);
+    // Un appel pour le schéma, un pour le juge de fidélité (contrôle déterministe passé) ; rien d'autre.
+    expect(fake.requests).toBe(2);
+    expect(await logsOf(run.id, 'fidelity_check')).toMatchObject([{ ok: true, judge: 'judged', issues: [] }]);
+    const finished = (await eventsOf(run.id)).filter((e) => e.kind === 'attempt.finished').map((e) => e.payload as { pagination?: { verified: boolean; stop: string | null; pages: number } });
+    expect(finished[0]!.pagination).toEqual({ verified: true, stop: 'no_next', pages: 8 });
+    await client.reset();
+    const calls = fake.requests;
+    const again = await replay(apiId);
+    expect(again).toMatchObject({ state: 'succeeded', items: CATALOGUE_PAGES_TOTAL, outcome: 'clean' });
+    expect(fake.requests).toBe(calls);
+    const hits = await hitsOf(CATALOGUE);
+    expect(hits['/catalogue/category/books/zz-default_15/index.html']).toBe(1);
+    expect(hits['/catalogue/category/books/zz-default_15/page-8.html']).toBe(1);
+    expect(hits['/catalogue/category/books/zz-default_15/page-9.html']).toBe(1);
+    const items = await itemsOf(again.dataset_id);
+    const first = items.find((i) => i['url'] === `${base(CATALOGUE)}${cataloguePagesItem(1).path}`)!;
+    expect(first).toMatchObject({ title: cataloguePagesItem(1).title, rating: cataloguePagesItem(1).rating, availability: 'In stock' });
+    expect(items.every((i) => !String(i['title']).endsWith('...'))).toBe(true);
+    expect(new Set(items.map((i) => i['rating']))).toEqual(new Set([1, 2, 3, 4, 5]));
+  });
+
+  test('assert_case_banc_r08_table_pages — tableau paginé, page de base puis _1, _2 : lignes du tableau sans l’en-tête, départ 0, 137 salons au rejeu', async () => {
+    const { url, dom } = await domOf(TABLE, '/fairs/zz_trade-shows_fr.html');
+    expect(dom.count).toBe(50);
+    const venue = dom.dom!.slots.find((s) => s.name.startsWith('venue_a') && s.attr === 'text' && (s.css ?? '').includes('nth-of-type(2)'))!;
+    const fields = [
+      { name: 'name', type: 'string', path: '$.exhibition_name_b' },
+      { name: 'cycle', type: 'string', path: '$.cycle', required: false },
+      { name: 'venue', type: 'string', path: `$.${venue.name}`, required: false },
+      { name: 'date', type: 'string', path: '$.date', required: false },
+    ];
+    fake.setScenario(MODEL, [scripted.json(domProposal(dom, fields)), allOk(fields.map((f) => f.name))]);
+    const apiId = await insertApi('zz_test_banc_r08');
+    const run = await investigate(apiId, { url, description: 'Tous les salons sur toutes les pages : nom, périodicité, lieu, date' });
+    expect(run).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    const sv = await strategyOf(apiId);
+    expect(sv.spec.pagination).toMatchObject({ type: 'page_param', param: 'url.path', path_pattern: '/fairs/zz_trade-shows_fr_{page}.html', start: 0 });
+    await client.reset();
+    const again = await replay(apiId);
+    expect(again).toMatchObject({ state: 'succeeded', items: TABLE_PAGES_TOTAL });
+    const hits = await hitsOf(TABLE);
+    expect(Object.keys(hits).filter((p) => p.startsWith('/fairs/')).sort()).toEqual(['/fairs/zz_trade-shows_fr.html', '/fairs/zz_trade-shows_fr_1.html', '/fairs/zz_trade-shows_fr_2.html', '/fairs/zz_trade-shows_fr_3.html']);
+    const items = await itemsOf(again.dataset_id);
+    expect(items.find((i) => i['name'] === tablePagesRow(1).name)).toMatchObject({ cycle: tablePagesRow(1).cycle, venue: tablePagesRow(1).venue });
+    expect(items.some((i) => i['name'] === 'Exhibition Name')).toBe(false);
+  });
+
+  test('assert_case_banc_r06_wiki_table — tableau Wikipédia : une stratégie html sans LLM au rejeu, 151 lignes, ni en-tête ni total, aucun essai agentique', async () => {
+    const { url, dom } = await domOf(WIKI, '/wiki/Liste_des_communes_de_Zztest');
+    expect(dom.count).toBe(WIKI_TABLE_ROWS);
+    const fields = [
+      { name: 'name', type: 'string', path: '$.nom_a' },
+      { name: 'insee_code', type: 'string', path: '$.code_insee' },
+      { name: 'postal_code', type: 'string', path: '$.code_postal', required: false },
+      { name: 'area_km2', type: 'number', path: '$.superficie_km2', required: false },
+      { name: 'population', type: 'integer', path: '$.population_derniere_pop_de_ref', required: false },
+    ];
+    fake.setScenario(MODEL, [scripted.json(domProposal(dom, fields)), allOk(fields.map((f) => f.name))]);
+    const apiId = await insertApi('zz_test_banc_r06');
+    const run = await investigate(apiId, { url, description: 'Le tableau des communes : nom, code INSEE, code postal, superficie, population' });
+    expect(run).toMatchObject({ state: 'succeeded', items: WIKI_TABLE_ROWS });
+    expect(await attemptsOf(run.id)).toEqual([{ execution: 'fetch', network: 'direct', result_class: 'ok' }]);
+    expect(run.cost.llm_usd).toBeLessThan(0.3);
+    const items = await itemsOf(run.dataset_id);
+    expect(items.find((i) => i['insee_code'] === wikiTableRow(1).insee)).toEqual({ name: wikiTableRow(1).name, insee_code: '99001', postal_code: '99000 99140', area_km2: 1.07, population: wikiTableRow(1).population });
+    expect(items.some((i) => i['insee_code'] === '99')).toBe(false);
+  });
+
+  test('assert_case_banc_r02_agency_dupes — ?page=N à doublons et second gabarit : champ requis absent des pages suivantes relâché (schéma validé par l’agent), doublons écartés, 76 annonces', async () => {
+    const { url, dom } = await domOf(AGENCY, '/achat/40');
+    const city = dom.dom!.slots.find((s) => (s.css ?? '').includes('c-card-property__address') && s.attr === 'text' && (s.css ?? '').endsWith('b'))!;
+    const fields = [
+      { name: 'title', type: 'string', path: slotIn(dom, (k) => k.startsWith('$.h2')) },
+      { name: 'city', type: 'string', path: `$.${city.name}`, required: false },
+      { name: 'listing_url', type: 'string', path: slotIn(dom, (_k, d) => d.startsWith('link')) },
+    ];
+    fake.setScenario(MODEL, [scripted.json(domProposal(dom, fields)), allOk(fields.map((f) => f.name))]);
+    const apiId = await insertApi('zz_test_banc_r02');
+    const run = await investigate(apiId, { url, description: 'Toutes les annonces, toutes les pages : titre, ville, lien' });
+    expect(run).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    expect(await attemptsOf(run.id)).toEqual([{ execution: 'fetch', network: 'direct', result_class: 'ok' }]);
+    expect(await logsOf(run.id, 'required_relaxed')).toMatchObject([{ fields: [{ field: 'title', records: 12 }] }]);
+    const schema = (await apiRow(apiId)).output_schema as { required: string[] };
+    expect(schema.required).toEqual(['listing_url']);
+    await client.reset();
+    const again = await replay(apiId);
+    expect(again).toMatchObject({ state: 'succeeded', items: AGENCY_DUPES_DISTINCT });
+    const items = await itemsOf(again.dataset_id);
+    expect(new Set(items.map((i) => i['listing_url'])).size).toBe(AGENCY_DUPES_DISTINCT);
+    expect(items.find((i) => i['listing_url'] === 'https://zz_test_agency_dupes_neuf.localhost/prog/300')).toMatchObject({ city: 'VILLEZZ0' });
+    // Fin de liste : la page 6 n'apporte que des doublons ; les pages 7 et 8 ne sont jamais lues.
+    const hits = await hitsOf(AGENCY);
+    expect(hits['/achat/40']).toBe(6);
+  });
+
+  test('assert_case_banc_r04_jobs_fidelity — équipe affectée au mode de travail : contrôle de fidélité refusé, UNE nouvelle carte (titre du groupe), essayée puis jugée, retenue', async () => {
+    const { url, dom } = await domOf(JOBS, '/zzentreprise');
+    expect(dom.count).toBe(18);
+    const workMode = slotIn(dom, (k) => k.includes('workplacetypes'));
+    const team = slotIn(dom, (_k, d) => d.includes('scope=group'));
+    const base_ = [
+      { name: 'title', type: 'string', path: '$.h5' },
+      { name: 'work_mode', type: 'string', path: workMode, required: false },
+      { name: 'url', type: 'string', path: slotIn(dom, (k) => k.includes('posting_title_href')) },
+    ];
+    const wrong = domProposal(dom, [...base_, { name: 'team', type: 'string', path: workMode, required: false }]);
+    const right = domProposal(dom, [...base_, { name: 'team', type: 'string', path: team, required: false }]);
+    fake.setScenario(MODEL, [scripted.json(wrong), scripted.json(right), allOk(['title', 'work_mode', 'url', 'team'])]);
+    const apiId = await insertApi('zz_test_banc_r04');
+    const run = await investigate(apiId, { url, description: 'Toutes les offres : intitulé, équipe, mode de travail, lien' });
+    expect(run).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    // Schéma, nouvelle carte, juge : trois appels ; le différentiel de la nouvelle carte ne porte aucune valeur du site.
+    expect(fake.requests).toBe(3);
+    const remapPrompt = JSON.stringify(fake.calls[1]!.body);
+    expect(remapPrompt).toContain('PREVIOUS MAPPING');
+    expect(remapPrompt).toContain('same values as');
+    expect(remapPrompt).not.toContain('Hybrid');
+    const checks = await logsOf(run.id, 'fidelity_check');
+    expect(checks[0]).toMatchObject({ ok: false, issues: expect.arrayContaining([expect.objectContaining({ field: 'team', code: 'duplicate', other: 'work_mode' })]) });
+    expect(checks[1]).toMatchObject({ ok: true, judge: 'judged' });
+    expect(await logsOf(run.id, 'fidelity_remap')).toMatchObject([{ ok: true }]);
+    const items = await itemsOf(run.dataset_id);
+    const expected = jobsGrouped();
+    expect(items).toHaveLength(expected.length);
+    for (const job of expected) expect(items.find((i) => String(i['url']).endsWith(job.id))).toMatchObject({ title: job.title, team: job.team, work_mode: job.workMode });
   });
 
   test('assert_case_c1_fixture — C1 : recherche paginée dont la page 2 sert un défi → bloquee, arrêt de toute escalade : 0 essai proxy ni tunnel, rien après la détection', async () => {

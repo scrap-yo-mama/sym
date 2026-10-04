@@ -110,6 +110,14 @@ import {
   detectHtmlPagination,
   htmlCompileSupport,
   paginateHtmlSpec,
+  capturedBody,
+  fidelityCheck,
+  fidelityDiff,
+  fidelitySamples,
+  missingRequiredFields,
+  relaxRequired,
+  relaxSpecRequired,
+  type FidelityIssue,
 } from '@runtime/core/investigation';
 import {
   buildNetworkRungs,
@@ -167,6 +175,8 @@ import {
 } from '@runtime/core';
 import {
   compileHtmlStrategy,
+  fidelityJudgePromptVersion,
+  judgeFidelity,
   htmlCompilePromptVersion,
   investigateCallCeilingUsd,
   investigateMessages,
@@ -584,6 +594,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     let dossier: CatalogDossier | null = null;
     /** HTML de la page vue à la reconnaissance de ce passage (signature de la version retenue) ; null sinon. */
     let reconHtml: string | null = null;
+    /** Gisements et capture de la reconnaissance de ce passage : contrôle de fidélité (emplacements, fragments du juge). */
+    let reconCandidates: readonly DataCandidate[] = [];
+    let reconCapture: ReconCapture | null = null;
 
     // --- réseau autorisé (politique de l'API, proxys de l'admin) et identité du robot ------------------------------
     let rungs: NetworkRung[];
@@ -867,6 +880,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         reconHtml = capture.document?.renderedHtml ?? capture.document?.html ?? null;
         const fresh = recon.failure === null ? analyzeCapture(capture, apiHostsOf(capture, host, scope)) : [];
         const candidates: readonly DataCandidate[] = firstRun ? fresh : rematchCandidates(state.candidates ?? [], fresh);
+        reconCandidates = candidates;
+        reconCapture = capture;
         if (briefDigest !== null) {
           briefMatch = matchBriefHints(briefDigest, briefProbes, {
             candidates: candidates.map((c) => ({ id: c.id, from: c.from, method: c.request.method, url: c.request.url, locator: c.locator?.kind ?? null, ...(c.from === 'dom' ? { records: c.records } : {}) })),
@@ -1284,6 +1299,172 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         return promoted;
       };
 
+      // --- Contrôle de fidélité (banc réel, passage 1) --------------------------------------------------------------------
+      // Une stratégie déclarative conforme au schéma n'est retenue que si ses valeurs sont fidèles à la page : (a) contrôle
+      // déterministe (remplissage, doublons, formes), puis (b), pour une liste HTML, un juge LLM court sur 3 cartes et leur
+      // fragment HTML, appelé seulement si (a) passe, au plus 0,01 $ par appel. Refus : UNE nouvelle proposition des emplacements avec le
+      // différentiel (codes seulement), essayée par une exécution du même couple ; sinon l'échelon suivant. Coûts imputés à
+      // l'enquête (compte « hors couples » des essais).
+      const declarativeExecutions = new Set(['fetch', 'fetch_in_page', 'playwright']);
+      const fidelityBySpec = new Map<string, { ok: boolean; issues: readonly FidelityIssue[] }>();
+      const remapped = new Set<string>();
+      const autoValidated = state.validated_by === 'auto';
+      const investigateClient = async (): Promise<{ client: LlmClient; price: TokenPrice; model: string } | null> => {
+        config ??= deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
+        const role = config?.roles.investigate;
+        if (deps.llm === undefined || config === null || role === undefined) return null;
+        const price = rolePrice(config, 'investigate');
+        if (price === null || price === undefined) return null;
+        try {
+          return { client: deps.llm.client({ ...config, roles: { investigate: role } }), price, model: role.model };
+        } catch {
+          return null;
+        }
+      };
+      const chargeOutside = async (client: LlmClient): Promise<number | null> => {
+        const usage = client.meter.snapshot();
+        await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
+        if (usage.cost_usd !== null) promotionUsd = round6(promotionUsd + usage.cost_usd);
+        return usage.cost_usd;
+      };
+      /** Contrôle de fidélité d'une stratégie déclarative sur ses éléments ; verdict gardé par spécification (même spec, même verdict). */
+      const fidelityOf = async (spec: DeclarativeSpec, source: string, records: readonly Record<string, unknown>[]): Promise<{ ok: boolean; issues: readonly FidelityIssue[] }> => {
+        const key = JSON.stringify(spec);
+        const known = fidelityBySpec.get(key);
+        if (known !== undefined) return known;
+        const candidate = reconCandidates.find((c) => c.id === source) ?? null;
+        const det = fidelityCheck({ records, outputSchema, spec, candidate });
+        let verdict: { ok: boolean; issues: readonly FidelityIssue[] } = det;
+        let judged: string = 'not_needed';
+        // Juge LLM : cartes HTML seulement (le fragment montré est le bloc de la carte) ; une source JSON a ses clés pour
+        // le contrôle déterministe (clé au nom du champ laissée de côté, forme des valeurs).
+        if (det.ok && spec.sources[0]?.from !== 'html') judged = 'json_source';
+        else if (det.ok) {
+          const body = candidate === null || reconCapture === null ? undefined : capturedBody(candidate, reconCapture);
+          const samples = body === undefined ? [] : fidelitySamples(spec, body, outputSchema);
+          const llm = samples.length === 0 ? null : await investigateClient();
+          if (samples.length === 0) judged = 'no_samples';
+          else if (llm === null) judged = 'llm_unavailable';
+          else if (liveTrialSpent() >= budgetUsd || timedOut()) judged = 'investigation_budget_usd';
+          else {
+            try {
+              const out = await judgeFidelity(llm.client, {
+                description: request.description,
+                outputSchema,
+                samples,
+                price: llm.price,
+                signal,
+                beforeCall: (ceiling) => {
+                  if (liveTrialSpent() + (llm.client.meter.snapshot().cost_usd_known ?? 0) + ceiling > budgetUsd) throw new BudgetGuardError();
+                },
+              });
+              judged = out.judged ? 'judged' : out.reason;
+              if (out.judged) verdict = { ok: out.issues.length === 0, issues: out.issues };
+            } catch (error) {
+              if (ctx.signal.aborted) throw error;
+              // Juge indisponible (erreur du fournisseur, budget) : le contrôle déterministe a passé, l'essai suit son cours.
+              judged = error instanceof BudgetGuardError ? 'investigation_budget_usd' : 'judge_failed';
+            }
+            const cost = await chargeOutside(llm.client);
+            await ctx.log('info', 'fidelity_judge_call', { model: llm.model, prompt_version: fidelityJudgePromptVersion, llm_usd: cost, outcome: judged });
+          }
+        }
+        await ctx.log(verdict.ok ? 'info' : 'warn', 'fidelity_check', { source, ok: verdict.ok, judge: judged, issues: verdict.issues.map((i) => ({ field: i.field, code: i.code, ...(i.share === undefined ? {} : { share: i.share }), ...(i.other === undefined ? {} : { other: i.other }) })) });
+        fidelityBySpec.set(key, verdict);
+        return verdict;
+      };
+      /**
+       * Nouvelle proposition des emplacements d'UN gisement après un refus de fidélité (une fois par gisement) : rôle
+       * `investigate` avec le schéma validé, la carte précédente et le différentiel (codes) ; la nouvelle stratégie est
+       * essayée par UNE exécution du même couple (2 pages si elle pagine), puis jugée comme la première. Acceptée, elle
+       * remplace la spécification du couple (retenue avec lui).
+       */
+      const remap = async (pair: TrialPair, entry: PlanEntry, issues: readonly FidelityIssue[]): Promise<boolean> => {
+        if (remapped.has(entry.source)) return false;
+        remapped.add(entry.source);
+        const llm = await investigateClient();
+        if (llm === null || proposal === undefined) return false;
+        const previous = proposal.sources.find((s) => s.candidate === entry.source);
+        const args: Parameters<typeof proposeInvestigation>[1] = {
+          description: request.description,
+          candidates: reconCandidates,
+          accessFacts: accessFactsForPrompt(report),
+          fixedSchema: outputSchema,
+          ...(ctx.proseLocale === undefined ? {} : { proseLocale: ctx.proseLocale }),
+          previousMapping: { paths: (previous?.paths ?? []).map((p) => ({ candidate: entry.source, field: p.field, path: p.path })), diff: fidelityDiff(issues) },
+        };
+        const ceiling = investigateCallCeilingUsd(args, llm.price);
+        if (liveTrialSpent() + ceiling > budgetUsd || timedOut()) {
+          await ctx.log('info', 'fidelity_remap_skipped', { source: entry.source, reason: timedOut() ? 'investigation_timeout_s' : 'investigation_budget_usd' });
+          return false;
+        }
+        let next: typeof proposal | undefined;
+        try {
+          next = (await proposeInvestigation(llm.client, { ...args, signal, beforeCall: () => {
+            if (liveTrialSpent() + (llm.client.meter.snapshot().cost_usd_known ?? 0) + ceiling > budgetUsd) throw new BudgetGuardError();
+          } })).proposal;
+        } catch (error) {
+          if (ctx.signal.aborted) throw error;
+          next = undefined;
+        }
+        const cost = await chargeOutside(llm.client);
+        await ctx.log('info', 'investigate_call', { model: llm.model, prompt_version: investigatePromptVersion, llm_usd: cost, purpose: 'fidelity_remap' });
+        if (next === undefined) return false;
+        const built = buildFromProposal(next, reconCandidates, null, { fixedSchema: outputSchema });
+        const strategy = built.ok ? built.strategies.find((s) => s.candidate.id === entry.source) : undefined;
+        if (strategy === undefined || JSON.stringify(strategy.spec) === JSON.stringify(entry.spec)) {
+          await ctx.log('info', 'fidelity_remap', { source: entry.source, ok: false, reason: strategy === undefined ? 'no_strategy' : 'same_mapping' });
+          return false;
+        }
+        const spec = strategy.spec as unknown as Record<string, unknown>;
+        const ceilingUsd = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - liveTrialSpent()));
+        const checkTarget: RunTarget = {
+          api: { ...target.api, outputSchema, maxCostUsd: ceilingUsd },
+          strategy: { version: 0, execution: entry.execution, network: entry.network, spec, scriptRef: null, estCostUsd: entry.est_cost_usd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
+        };
+        let checked: StrategyTrial | null = null;
+        try {
+          const timeout = AbortSignal.timeout(Math.max(1, deadlineMs - now()));
+          checked = await deps.strategy.trial({ ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(strategy.paginated, 'sample') }, checkTarget, checkTarget.strategy!);
+        } catch (error) {
+          if (ctx.signal.aborted) throw error;
+          logger.warn(trialErrorLog(ctx.runId, entry.execution, error), 'enquête : essai de la nouvelle carte en erreur');
+        }
+        if (checked !== null) promotionUsd = round6(promotionUsd + checked.proxyUsd + (checked.llmUsd ?? 0));
+        const r = checked?.result;
+        const natural = r?.ok === true && r.pages === 1 && (r.stop === 'records_empty' || r.stop === 'no_next' || r.stop === 'no_pagination');
+        const pagesOk = r?.ok === true && (!strategy.paginated || r.pages >= 2 || natural);
+        const minimal = r?.ok === true ? minimalContentCheck([r.records], outputSchema) : null;
+        const verdict = r?.ok === true && pagesOk && minimal?.ok === true ? await fidelityOf(strategy.spec, entry.source, r.records) : null;
+        const ok = verdict?.ok === true && r?.ok === true;
+        await ctx.log('info', 'fidelity_remap', { source: entry.source, ok, reason: ok ? null : r === undefined ? 'trial_error' : !r.ok ? (r.failure.detail ?? r.failure.failure_class) : !pagesOk ? 'pagination_page2' : minimal?.ok === false ? minimal.detail : 'fidelity' });
+        if (!ok || r?.ok !== true) return false;
+        entries.set(pair, { ...entry, spec, paginated: strategy.paginated });
+        lastRecords.set(pair, r.records);
+        sampleOutputs.set(pair, [r.records]);
+        proposal = next;
+        await save(phase, { proposal: next });
+        return true;
+      };
+      /**
+       * Règle d'arrêt vérifiée en politique `quarantine` : un champ requis absent d'éléments des pages suivantes (second
+       * gabarit de carte, R02) devient facultatif si le schéma a été validé par l'agent (`auto_validate`) : schéma et
+       * spécifications du plan relâchés, état enregistré. Un schéma validé par l'appelant reste le contrat (refus
+       * `missing_required`).
+       */
+      const relaxMissing = async (records: readonly Record<string, unknown>[]): Promise<boolean> => {
+        const missing = missingRequiredFields(records, outputSchema);
+        if (missing.length === 0) return true;
+        if (!autoValidated) return false;
+        const fields = missing.map((m) => m.field);
+        outputSchema = relaxRequired(outputSchema, fields);
+        for (const [p, e] of entries) if ((e.spec as { kind?: unknown }).kind === 'declarative') entries.set(p, { ...e, spec: relaxSpecRequired(e.spec as unknown as DeclarativeSpec, fields) as unknown as Record<string, unknown> });
+        const columns = schemaColumns(outputSchema);
+        await save(phase, { validated_schema: outputSchema, proposed_schema: outputSchema, validated_columns: columns, proposed_columns: columns });
+        await ctx.log('info', 'required_relaxed', { fields: missing.map((m) => ({ field: m.field, records: m.records })), of: records.length });
+        return true;
+      };
+
       let outcome: TrialsOutcome;
       try {
         outcome = await runTrials(
@@ -1303,8 +1484,11 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               const timeout = AbortSignal.timeout(Math.max(1, limits.deadlineMs - now()));
               const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(entry.paginated, purpose, hardMaxPagesOf(entry.spec)) };
               let trial: StrategyTrial;
+              // Règle d'arrêt d'une stratégie déclarative : lue en politique `quarantine` (des pages suivantes peuvent servir un
+              // second gabarit sans un champ requis : R02) ; les champs requis absents sont jugés par `relaxMissing`.
+              const quarantineStop = purpose === 'stop_check' && declarativeExecutions.has(entry.execution);
               try {
-                trial = await deps.strategy.trial(trialCtx, trialTarget, trialTarget.strategy!);
+                trial = await deps.strategy.trial(trialCtx, trialTarget, trialTarget.strategy!, quarantineStop ? 'quarantine' : undefined);
               } catch (error) {
                 if (ctx.signal.aborted) throw error;
                 if (timeout.aborted) return execution(false, 'run_budget_exceeded', 'investigation_timeout_s', 0, null, 0, null);
@@ -1357,6 +1541,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
                 const detail = f.failure_class === 'run_budget_exceeded' && f.detail === 'max_cost_usd' ? capDetail : f.detail;
                 return execution(false, f.failure_class, detail, r.pages, cost, trial.ms, null);
               }
+              if (quarantineStop && !(await relaxMissing(r.records))) return execution(false, 'extraction', 'missing_required', r.pages, cost, trial.ms, null);
               // E6 réussi sans trace compilable en E5 : jamais retenu (04 §3.1, pas d'agent à chaque run sans `instructed_mode`).
               if (entry.execution === 'agent') {
                 const compiled = trial.outcome.agent?.compiled;
@@ -1407,7 +1592,15 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
                 const promoted = await promote(pair);
                 if (promoted?.verified === true) return null;
               }
-              return check.ok ? null : { failure_class: check.failure_class, detail: check.detail };
+              if (!check.ok) return { failure_class: check.failure_class, detail: check.detail };
+              // Stratégie déclarative née d'un gisement : contrôle de fidélité, puis une nouvelle carte au plus (banc réel).
+              const entry = entries.get(pair)!;
+              if (!declarativeExecutions.has(entry.execution) || (entry.spec as { kind?: unknown }).kind !== 'declarative' || !reconCandidates.some((c) => c.id === entry.source)) return null;
+              const records = (sampleOutputs.get(pair) ?? []).flat();
+              const verdict = await fidelityOf(entry.spec as unknown as DeclarativeSpec, entry.source, records);
+              if (verdict.ok) return null;
+              if (await remap(pair, entry, verdict.issues)) return null;
+              return { failure_class: 'extraction', detail: 'fidelity' };
             },
             spentOutside: () => promotionUsd,
             pruned: async (pairs, by, cls) => {

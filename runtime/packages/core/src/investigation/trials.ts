@@ -263,9 +263,13 @@ export async function runTrials(
     if (budgetStop !== null) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spentNow(), tried } : { kind: 'budget_exhausted', reason: budgetStop, spentUsd: spentNow(), tried };
     const cls = failure!.cls;
     const decision = pruneAfter(cls, pair, remaining);
-    if (decision.pruned.length > 0) {
-      await ports.pruned(decision.pruned, pair, cls);
-      const skip = new Set(decision.pruned);
+    // Contrôle de fidélité refusé (banc réel) : la carte des champs du gisement est en cause, pas le niveau d'exécution ; les
+    // autres niveaux déclaratifs du même gisement liraient les mêmes emplacements : élagués avec lui.
+    const sameSource = (failure as { detail: string | null } | null)?.detail === 'fidelity' ? remaining.filter((p) => p.source === pair.source && !decision.pruned.includes(p)) : [];
+    const pruned = [...decision.pruned, ...sameSource];
+    if (pruned.length > 0) {
+      await ports.pruned(pruned, pair, cls);
+      const skip = new Set(pruned);
       remaining = remaining.filter((p) => !skip.has(p));
     }
     if (decision.next === 'stop') return { kind: 'stopped', outcome, spentUsd: spentNow(), tried };
