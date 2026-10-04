@@ -156,3 +156,43 @@ describe('assert_agent_request_policy : gabarits, URL de départ et valeurs sens
     expect(bodyHasSensitiveValue('nom=martin', sensitive, {})).toBe(false);
   });
 });
+
+// Recette 2026-10-04 (UX-33, équipe Janssens, enquête f63aed70) : la 1re exécution E4 rend 57 membres, dont des « Janssens »
+// (nom marqué x-personal, inscrit au registre du run) ; la 2e exécution, même URL de départ, est refusée en 10 ms
+// (`sensitive_value`) parce que « janssens » figure dans l'hôte ET dans le chemin de l'URL déclarée. Aucune donnée ne sortait :
+// l'hôte est fixé par `allowed_hosts` et l'URL déclarée était connue avant que la valeur ne soit vue.
+describe('assert_agent_request_policy : valeur vue pendant le run, présente dans l’hôte ou l’URL déclarée (UX-33)', () => {
+  const START = 'https://www.janssens-immobilier.com/le-groupe-janssens-immobilier/';
+  const ctx = (over: Partial<AgentRequestContext> = {}): AgentRequestContext => ({
+    targetHosts: ['www.janssens-immobilier.com'],
+    targetSuffixes: [],
+    domUrls: [START, 'https://www.janssens-immobilier.com/contact/', 'https://www.janssens-immobilier.com/equipe/julie-janssens/'],
+    trafficUrls: [],
+    templates: [],
+    runInputs: {},
+    sensitiveValues: ['ZZ-TEST-SESSION-SECRET-7731'],
+    declaredUrls: [START],
+    seenValues: ['Janssens', 'Julie Janssens', 'Rudi'],
+    ...over,
+  });
+  const decide = (url: string, over: Partial<AgentRequestContext> = {}) => agentRequestPolicy({ method: 'GET', url }, ctx(over));
+
+  test('hôte exact de l’API : jamais lu comme une fuite (une valeur y figure sans que l’agent l’y ait mise)', () => {
+    expect(decide('https://www.janssens-immobilier.com/contact/')).toEqual({ allowed: true });
+    // Même règle pour une valeur sensible au sens strict : l'hôte exact ne porte aucune donnée choisie par l'agent.
+    expect(decide('https://www.janssens-immobilier.com/contact/', { sensitiveValues: ['Janssens'], seenValues: [] })).toEqual({ allowed: true });
+  });
+
+  test('URL déclarée identique (départ) : admise malgré une valeur vue pendant le run', () => {
+    expect(decide(START)).toEqual({ allowed: true });
+  });
+
+  test('sans affaiblir la garde : une valeur vue reste refusée dans toute URL composée, et un secret même dans l’URL déclarée', () => {
+    expect(decide(`${START}?q=janssens`, { domUrls: [START, `${START}?q=rudi`] })).toMatchObject({ allowed: false, reason: 'sensitive_value' });
+    expect(decide('https://www.janssens-immobilier.com/equipe/julie-janssens/')).toMatchObject({ allowed: false, reason: 'sensitive_value' });
+    const declaredSecret = `${START}?d=ZZ-TEST-SESSION-SECRET-7731`;
+    expect(decide(declaredSecret, { declaredUrls: [declaredSecret], domUrls: [declaredSecret] })).toMatchObject({ allowed: false, reason: 'sensitive_value' });
+    // Hôte admis par suffixe (sous-domaine libre) : le sous-domaine peut porter une donnée, il reste contrôlé.
+    expect(decide('https://janssens.immo.example/x', { targetHosts: [], targetSuffixes: ['immo.example'], domUrls: ['https://janssens.immo.example/x'] })).toMatchObject({ allowed: false, reason: 'sensitive_value' });
+  });
+});

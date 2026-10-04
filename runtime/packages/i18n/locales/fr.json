@@ -214,6 +214,7 @@
   },
   "reason": {
     "unknown": "Raison : {code}",
+    "agent_request_blocked": "Requête de l’agent refusée par la garde des requêtes (motif : {reason}).",
     "retried": "Il a fallu réessayer {n} fois.",
     "escalated": "Une méthode plus chère que d'habitude a été nécessaire.",
     "repaired": "La stratégie a été réparée (v{a} vers v{b}).",

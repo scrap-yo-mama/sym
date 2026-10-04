@@ -87,6 +87,7 @@ const contracts: Record<string, Contract> = {
     const quotes = (await fx.get(H('ssr'), '/citations')).body;
     expect(quotes.match(/class="quote"/g)).toHaveLength(10);
     expect(quotes).toContain('<a class="tag"');
+    expect((await fx.get(H('ssr'), '/le-groupe-dupontzz/equipe')).body.match(/class="member"/g)).toHaveLength(6);
   },
 
   async spa() {

@@ -32,8 +32,14 @@ export type AgentRequestGateOptions = {
   readonly templates?: readonly string[];
   /** Entrées du run (seules valeurs librement admises vers le domaine cible). */
   readonly runInputs?: Readonly<Record<string, unknown>>;
-  /** Valeurs sensibles du run (registre de masquage RGPD, secrets) : jamais dans une URL. Relues à chaque requête. */
+  /** Valeurs sensibles (secrets du processus et leurs encodages) : jamais dans une URL ni un corps. Relues à chaque requête. */
   readonly sensitiveValues?: () => readonly string[];
+  /**
+   * Valeurs personnelles VUES pendant le run (registre de masquage RGPD) : jamais dans une URL composée ni un corps ; admises
+   * dans l'URL de départ ou un `goto` littéral identique, connus avant qu'elles ne soient vues (constat UX-33). Relues à
+   * chaque requête.
+   */
+  readonly seenValues?: () => readonly string[];
   /** Consigne du propriétaire de l'API : ses mots sont des valeurs de confiance (recherche demandée par la tâche). */
   readonly trustedText?: string;
   readonly allowWriteActions: boolean;
@@ -177,6 +183,7 @@ export function createAgentRequestGate(options: AgentRequestGateOptions): AgentR
   };
 
   const sensitive = (): readonly string[] => options.sensitiveValues?.() ?? [];
+  const seenValues = (): readonly string[] => options.seenValues?.() ?? [];
   const context = (domUrls: readonly string[], trafficUrls: readonly string[]): AgentRequestContext => ({
     targetHosts: options.allowedHosts,
     targetSuffixes: [],
@@ -185,6 +192,8 @@ export function createAgentRequestGate(options: AgentRequestGateOptions): AgentR
     templates,
     runInputs: options.runInputs ?? {},
     sensitiveValues: sensitive(),
+    seenValues: seenValues(),
+    declaredUrls: declared,
     trustedValues: trusted,
   });
   /** Trafic de la page : seules les valeurs sensibles sont contrôlées (ni plafond de paramètres ni exigence d'origine). */
@@ -204,7 +213,7 @@ export function createAgentRequestGate(options: AgentRequestGateOptions): AgentR
       if (!options.allowWriteActions) return refuse('method_not_allowed');
       const decision = agentRequestPolicy({ method: 'GET', url: hop.url }, trafficContext(hop.url));
       if (!decision.allowed) return refuse(decision.reason);
-      if (hop.body !== undefined && hop.body !== '' && bodyHasSensitiveValue(hop.body, sensitive(), options.runInputs ?? {})) return refuse('sensitive_value');
+      if (hop.body !== undefined && hop.body !== '' && bodyHasSensitiveValue(hop.body, [...sensitive(), ...seenValues()], options.runInputs ?? {})) return refuse('sensitive_value');
       return true;
     }
     const navigation = hop.resourceType === 'Document' && !hop.redirect;
@@ -244,7 +253,11 @@ export function createAgentRequestGate(options: AgentRequestGateOptions): AgentR
   };
 }
 
-/** Valeurs sensibles du run pour la politique : données personnelles vues (registre du run), secrets du processus et leurs encodages (base64, URL…). */
-export function runSensitiveValues(personal: { values(): string[] }): () => string[] {
-  return () => [...personal.values(), ...secretValues.values(), ...secretValues.variants()];
+/**
+ * Valeurs contrôlées par la politique pour un run : `sensitiveValues`, les secrets du processus et leurs encodages (base64,
+ * URL…), refusés partout ; `seenValues`, les données personnelles vues pendant le run (registre du run), refusées partout
+ * sauf dans une URL déclarée identique (constat UX-33).
+ */
+export function runRequestValues(personal: { values(): string[] }): { readonly sensitiveValues: () => string[]; readonly seenValues: () => string[] } {
+  return { sensitiveValues: () => [...secretValues.values(), ...secretValues.variants()], seenValues: () => personal.values() };
 }

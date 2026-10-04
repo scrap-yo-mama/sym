@@ -89,7 +89,8 @@ export function entryText(entry: TimelineEntry, locale: McpLocale, cause: string
     }
     case 'attempt': {
       const e: TimelineAttempt = entry;
-      return `${c.trial(pathLabel(e), e.result === 'ok', codeOf(e.result), e.records, e.pages)} ${cost(e)}`;
+      const why = e.result === 'ok' || e.why === undefined || e.why === null ? null : { code: codeOf(e.why.code), reason: codeOrNull(e.why.reason) };
+      return `${c.trial(pathLabel(e), e.result === 'ok', codeOf(e.result), e.records, e.pages)}${why === null ? '' : ` — ${c.why(why.code, why.reason)}`} ${cost(e)}`;
     }
     case 'schema':
       return c.schema(entry.ok, entry.fields);

@@ -144,13 +144,30 @@ function quotesPage(products: readonly Product[]): string {
   return `<h1>Citations</h1>\n${quotes.join('\n')}`;
 }
 
+/**
+ * Équipe d'un groupe qui porte le nom de sa famille fondatrice (constat UX-33, équipe Janssens) : le nom de famille des
+ * fondateurs figure dans le chemin de la page. Noms factices `Zztest`.
+ */
+const TEAM = [
+  ['Julie', 'Dupontzz', 'Directrice'],
+  ['Rudi', 'Dupontzz', 'Fondateur'],
+  ['Alice', 'Martinzz', 'Négociatrice'],
+  ['Bruno', 'Leroyzz', 'Gestionnaire locatif'],
+  ['Chloé', 'Moreauzz', 'Assistante'],
+  ['David', 'Petitzz', 'Négociateur'],
+] as const;
+function teamPage(): string {
+  const cards = TEAM.map(([first, last, role]) => `<div class="member"><h3><span class="first">${first}</span> <span class="last">${last}</span></h3><p class="role">${role}</p></div>`);
+  return `<h1>L'équipe du groupe Dupontzz Zztest</h1>\n<section class="team">${cards.join('\n')}</section>`;
+}
+
 const ssr: SiteFactory = (env) => {
   const products = makeProducts(env.seed, 'ssr', 100);
   const perPage = 20;
   return {
     id: 'ssr',
     lot: 'base',
-    description: 'Catalogue rendu côté serveur : 100 produits, 5 pages, liens rel=next ; /moved : page saine qui se déplace par meta refresh vers / ; /livres : 20 livres (note en mot, « In stock », prix en livres) ; /citations : 10 citations à étiquettes',
+    description: 'Catalogue rendu côté serveur : 100 produits, 5 pages, liens rel=next ; /moved : page saine qui se déplace par meta refresh vers / ; /livres : 20 livres (note en mot, « In stock », prix en livres) ; /citations : 10 citations à étiquettes ; /le-groupe-dupontzz/equipe : 6 membres, dont deux du nom de famille du groupe',
     hosts: ['zz_test_ssr.localhost'],
     smoke: { path: '/', status: 200 },
     handle(req) {
@@ -166,6 +183,7 @@ const ssr: SiteFactory = (env) => {
       }
       if (req.path === '/livres') return html(200, page('Livres zz_test', booksPage(products)));
       if (req.path === '/citations') return html(200, page('Citations zz_test', quotesPage(products)));
+      if (req.path === '/le-groupe-dupontzz/equipe') return html(200, page('Équipe zz_test', teamPage()));
       if (req.path !== '/') return html(404, page('Introuvable', '<h1>Introuvable</h1>'));
       const pageNo = intParam(req, 'page', 1, 1, 1000);
       const cards = slicePage(products, pageNo, perPage)

@@ -45,6 +45,28 @@ export function fmtUsd(value: number | null, locale: McpLocale): string {
 /** E1 à E6 (04 § 1) : le code d'exécution du récit. */
 export const EXECUTION_CODE: Readonly<Record<string, string>> = Object.freeze({ fetch: 'E1', fetch_in_page: 'E2', playwright: 'E3', agent_fetch: 'E4', hybrid: 'E5', agent: 'E6' });
 
+/** Motifs de la garde des requêtes de l'agent (19 §7, codes de `agentRequestPolicy`) : phrases fermées, sans URL ni valeur. */
+const REQUEST_REASON_EN: Readonly<Record<string, string>> = Object.freeze({
+  sensitive_value: 'a value seen during the run in the URL',
+  url_not_from_page: 'URL absent from the page',
+  param_value_untrusted: 'parameter value absent from the page',
+  host_not_allowed: 'host outside the API domains',
+  method_not_allowed: 'write request',
+  tool_not_in_phase: 'navigation not allowed in this phase',
+  too_many_params: 'too many parameters',
+  param_too_long: 'parameter too long',
+});
+const REQUEST_REASON_FR: Readonly<Record<string, string>> = Object.freeze({
+  sensitive_value: 'valeur vue pendant le run dans l’URL',
+  url_not_from_page: 'URL absente de la page',
+  param_value_untrusted: 'valeur de paramètre absente de la page',
+  host_not_allowed: 'hôte hors des domaines de l’API',
+  method_not_allowed: 'requête d’écriture',
+  tool_not_in_phase: 'navigation interdite dans cette phase',
+  too_many_params: 'trop de paramètres',
+  param_too_long: 'paramètre trop long',
+});
+
 type NarrativeCatalog = {
   title: (slug: string, domain: string | null, phase: string) => string;
   /** Pastille du rapport d'accès (D-91 : plus de section robots.txt, `allowed` ou `review`). */
@@ -52,6 +74,8 @@ type NarrativeCatalog = {
   recon: (sources: number, mode: string | null) => string;
   reconFailed: (failureClass: string) => string;
   trial: (label: string, ok: boolean, result: string, records: number | null, pages: number | null) => string;
+  /** Motif d'un essai en échec (UX-33) : phrase fermée pour les codes connus, sinon le code ; `reason` : motif de la garde. */
+  why: (code: string, reason: string | null) => string;
   schema: (ok: boolean, fields: number | null) => string;
   pruned: (label: string | null, reason: string | null, count: number) => string;
   strategy: (label: string, code: string, perRun: string) => string;
@@ -94,6 +118,11 @@ const EN: NarrativeCatalog = {
   reconFailed: (c) => `failed (${c})`,
   trial: (label, ok, result, records, pages) =>
     `Trial ${label}: ${ok ? 'conformant' : result}${records === null ? '' : `, ${records} item${records === 1 ? '' : 's'}`}${pages === null ? '' : `, ${pages} page${pages === 1 ? '' : 's'}`}`,
+  why: (code, reason) => {
+    if (code === 'agent_request_blocked') return `agent request refused by the request guard${reason === null ? '' : `: ${REQUEST_REASON_EN[reason] ?? reason}${reason in REQUEST_REASON_EN ? ` (${reason})` : ''}`}`;
+    if (code === 'max_cost_usd') return 'the trial reached its cost cap (max_cost_usd)';
+    return `(${code})`;
+  },
   schema: (ok, fields) => (ok ? `Output schema proposed${fields === null ? '' : `: ${fields} fields`}` : 'No usable output schema could be proposed'),
   pruned: (label, reason, count) => `Skipped ${count} more expensive trial${count === 1 ? '' : 's'}${label === null ? '' : ` after ${label}`}${reason === null ? '' : ` (${reason})`}`,
   strategy: (label, code, perRun) => `Strategy kept: ${label} (${code}, ${perRun} per run)`,
@@ -138,6 +167,11 @@ const FR: NarrativeCatalog = {
   reconFailed: (c) => `échec (${c})`,
   trial: (label, ok, result, records, pages) =>
     `Essai ${label} : ${ok ? 'conforme' : result}${records === null ? '' : `, ${records} item${records === 1 ? '' : 's'}`}${pages === null ? '' : `, ${pages} page${pages === 1 ? '' : 's'}`}`,
+  why: (code, reason) => {
+    if (code === 'agent_request_blocked') return `requête de l’agent refusée par la garde${reason === null ? '' : ` : ${REQUEST_REASON_FR[reason] ?? reason}${reason in REQUEST_REASON_FR ? ` (${reason})` : ''}`}`;
+    if (code === 'max_cost_usd') return 'l’essai a atteint son plafond de coût (max_cost_usd)';
+    return `(${code})`;
+  },
   schema: (ok, fields) => (ok ? `Schéma de sortie proposé${fields === null ? '' : ` : ${fields} champs`}` : 'Aucun schéma de sortie exploitable n’a pu être proposé'),
   pruned: (label, reason, count) => `${count} essai${count === 1 ? '' : 's'} plus coûteux écarté${count === 1 ? '' : 's'}${label === null ? '' : ` après ${label}`}${reason === null ? '' : ` (${reason})`}`,
   strategy: (label, code, perRun) => `Stratégie retenue : ${label} (${code}, ${perRun} par run)`,

@@ -117,7 +117,7 @@ import { runFetchInPageExecutor, runPlaywrightExecutor } from './browser-executo
 import { robotIdentity, type RobotIdentity } from './robot-identity.js';
 import { runScriptExecutor, type ScriptPort } from './script-executor.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
-import { runSensitiveValues, type AgentRequestGate } from '../browser/agent-request-gate.js';
+import { runRequestValues, type AgentRequestGate } from '../browser/agent-request-gate.js';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type AgentOutcome, type EngineFactory, type LlmSpend } from './agent-executors.js';
 import { AttemptCost } from './attempt-cost.js';
 import { runTunnelExecutor, TunnelSession, type TunnelStop } from './tunnel-executor.js';
@@ -790,9 +790,9 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
           signal: ctx.signal,
           maxCostUsd: target.api.maxCostUsd,
           cost,
-          // Politique de requêtes de l'agent (19 §7, PA-01) : jamais de valeur sensible du run (données personnelles vues,
-          // secrets) dans une URL de l'agent ; relues à chaque requête.
-          sensitiveValues: runSensitiveValues(ctx.personal),
+          // Politique de requêtes de l'agent (19 §7, PA-01) : jamais de secret dans une URL de l'agent, jamais de donnée
+          // personnelle vue pendant le run hors de l'URL déclarée (UX-33) ; relues à chaque requête.
+          ...runRequestValues(ctx.personal),
           ...(pacer === undefined ? {} : { pacer }),
           ...(maxRequests === undefined ? {} : { maxRequests }),
           ...(deps.classify === undefined ? {} : { classify: deps.classify }),

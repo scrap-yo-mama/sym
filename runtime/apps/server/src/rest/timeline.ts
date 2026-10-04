@@ -50,6 +50,8 @@ export type TimelineAttempt = {
   est_cost_usd: number | null;
   cost_usd: number;
   ms: number | null;
+  /** Motif d'un échec (`why` de l'événement) : code et, pour un refus de la garde des requêtes, son motif (codes seulement, UX-33). */
+  why?: { code: string; reason: string | null } | null;
 };
 type TimelinePruned = { kind: 'pruned'; step: null; by: { execution: string; network: string } | null; reason: string | null; count: number };
 type TimelineAction = { kind: 'action_required'; step: null; cause: string };
@@ -142,6 +144,7 @@ export function buildTimeline(events: readonly EventRow[], slug: string): Timeli
           est_cost_usd: num(a['est_cost_usd']),
           cost_usd: num(a['cost_usd']) ?? delta,
           ms: num(a['ms']),
+          ...(str(rec(p['why'])['code']) === null ? {} : { why: { code: codeOf(rec(p['why'])['code']), reason: codeOrNull(rec(rec(p['why'])['params'])['reason']) } }),
         });
         break;
       }

@@ -95,6 +95,14 @@ export type AgentRequestContext = {
   readonly runInputs: Readonly<Record<string, unknown>>;
   /** Valeurs sensibles connues (mémoire, items d'autres API, secrets) : jamais dans une URL ni un corps. */
   readonly sensitiveValues: readonly string[];
+  /**
+   * Valeurs personnelles VUES pendant le run (registre du run, items du site cible) : jamais dans une URL composée ni un
+   * corps, comme les valeurs sensibles, sauf dans une URL déclarée identique (`declaredUrls`) : connue avant que la valeur
+   * ne soit vue, elle n'en emporte aucune (constat UX-33 : « Janssens » dans l'URL de départ de l'équipe Janssens).
+   */
+  readonly seenValues?: readonly string[];
+  /** URL littérales connues avant le run (départ de la stratégie, étapes `goto`) : jamais composées depuis ses données. */
+  readonly declaredUrls?: readonly string[];
   /** Valeurs de confiance supplémentaires (texte de la consigne du propriétaire de l'API) : admises comme valeur de paramètre. */
   readonly trustedValues?: readonly string[];
   readonly maxParams?: number;
@@ -205,12 +213,36 @@ export function bodyHasSensitiveValue(body: string, sensitiveValues: readonly st
 }
 
 /**
+ * Partie de l'URL qui peut porter une donnée choisie par l'agent : tout sauf l'hôte quand il est EXACTEMENT un hôte de
+ * l'API (fixé par `allowed_hosts`, il ne peut rien emporter ; constat UX-33 : « janssens » dans www.janssens-immobilier.com
+ * refusait toute requête du site dès qu'un membre « Janssens » était vu). Un hôte admis par suffixe (sous-domaine libre)
+ * reste dans le texte contrôlé.
+ */
+function carriedPart(u: URL, raw: string, ctx: AgentRequestContext): string {
+  const exact = ctx.targetHosts.some((t) => t.toLowerCase() === u.hostname.toLowerCase());
+  return exact ? `${u.pathname}${u.search}${u.hash}` : raw;
+}
+
+/** L'URL est-elle, à l'identique, une URL déclarée avant le run ? */
+function isDeclared(u: URL, ctx: AgentRequestContext): boolean {
+  return (ctx.declaredUrls ?? []).some((d) => {
+    try {
+      return new URL(d).href === u.href;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
  * Une requête de l'agent n'est permise que si : GET (aucun corps), hôte dans le domaine cible, URL venue du DOM ou du
  * trafic du run (à l'identique, ou mêmes paramètres) ou d'un gabarit `{param}` déclaré, paramètres plafonnés en nombre et
  * en taille, aucune valeur sensible (mémoire, autres items, secrets ; `+` lu comme espace, valeurs normalisées) dans l'URL,
  * sauf une entrée du run vers le domaine cible, et chaque valeur de paramètre de confiance (PA-09) : même clé et même valeur
  * qu'une URL connue, entrée du run, mot de la consigne, nombre ; dans un gabarit, seul un emplacement `{param}` admet une
- * entrée du run ou un nombre. Une URL littérale (départ, `goto`) est une URL connue, jamais un gabarit.
+ * entrée du run ou un nombre. Une URL littérale (départ, `goto`) est une URL connue, jamais un gabarit. Les valeurs sont
+ * cherchées hors de l'hôte exact de l'API ; une valeur VUE pendant le run (`seenValues`) est admise dans une URL déclarée
+ * identique, jamais ailleurs ; une valeur sensible (`sensitiveValues` : secrets, mémoire) ne l'est nulle part.
  */
 export function agentRequestPolicy(req: { readonly method: string; readonly url: string; readonly body?: string }, ctx: AgentRequestContext): AgentRequestDecision {
   let u: URL;
@@ -229,7 +261,9 @@ export function agentRequestPolicy(req: { readonly method: string; readonly url:
   if (params.length > maxParams) return blocked('too_many_params');
   if (params.some(([k, v]) => k.length > 64 || v.length > maxLen)) return blocked('param_too_long');
   const inputs = inputSet(ctx.runInputs);
-  if (hasSensitiveValue(haystacks(req.url, u.search), ctx.sensitiveValues, inputs)) return blocked('sensitive_value');
+  const carried = haystacks(carriedPart(u, req.url, ctx), u.search);
+  if (hasSensitiveValue(carried, ctx.sensitiveValues, inputs)) return blocked('sensitive_value');
+  if (!isDeclared(u, ctx) && hasSensitiveValue(carried, ctx.seenValues ?? [], inputs)) return blocked('sensitive_value');
   const known = [...ctx.domUrls, ...ctx.trafficUrls];
   const fromPage = known.some((k) => {
     try {

@@ -1048,6 +1048,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const compileContextFor = new Map<TrialPair, StepsCompileContext>();
       /** Dernière page servie à un essai E4 réussi et ses éléments : source de la compilation en déclaratif `html`. */
       const pageFor = new Map<TrialPair, { html: string; url: string; items: readonly unknown[] }>();
+      /** Motifs de la garde des requêtes de l'agent par couple (codes seulement) : publiés avec `agent_request_blocked` (UX-33). */
+      const blockedFor = new Map<TrialPair, readonly string[]>();
       const spend = new Map<TrialPair, { proxy: number; llm: number | null; tokens: { in: number; cached: number; out: number; reasoning: number; estimated: boolean }; model: string | null; prompt: string | null; engine: string | null }>();
       const spentBeforeTrials = spent;
       let trialsUsd = 0;
@@ -1092,6 +1094,14 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
                 acc.engine = trial.llm.engine ?? acc.engine;
               }
               spend.set(pair, acc);
+              // Requêtes de l'agent refusées par la garde (19 §7) : le code et les motifs au journal, jamais l'URL ni la valeur ;
+              // le motif part aussi dans le récit de l'essai (`why.params.reason`, constat UX-33 : refus « sans motif »).
+              const policy = trial.outcome.agent?.requestPolicy;
+              if (policy !== undefined && policy.blocked > 0) {
+                const reasons = [...new Set(policy.reasons)];
+                blockedFor.set(pair, [...new Set([...(blockedFor.get(pair) ?? []), ...reasons])]);
+                await ctx.log('warn', 'agent_request_blocked', { code: 'agent_request_blocked', execution: entry.execution, count: policy.blocked, reasons });
+              }
               for (const read of trial.outcome.skillReads ?? []) {
                 const seen = skillReads.get(pair) ?? [];
                 if (seen.some((r) => r.ref === read.ref)) continue;
@@ -1147,7 +1157,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               await decide(EV.attemptFinished, {
                 attempt: { execution: o.pair.execution, network: o.pair.network, est_cost_usd: o.pair.est_cost_usd, result: o.result, cost_usd: o.cost_usd, ms: o.ms },
                 source: o.pair.source,
-                ...(o.detail === null ? {} : { why: { code: o.detail, params: {} } }),
+                ...(o.detail === null ? {} : { why: { code: o.detail, params: o.detail === 'agent_request_blocked' ? blockedParams(blockedFor.get(o.pair)) : {} } }),
                 executions: o.executions.map((e) => ({ ok: e.ok, records: e.records, pages: e.pages, stop: e.stop, cost_usd: e.cost_usd, ms: e.ms })),
                 ...(stopCheckView(o) === undefined ? {} : { pagination: stopCheckView(o) }),
                 budget: budgetView(),
@@ -1393,6 +1403,11 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       await ports.close();
     }
   };
+}
+
+/** Paramètres du motif `agent_request_blocked` d'un essai : premier motif de la garde et liste des motifs (codes seulement). */
+function blockedParams(reasons: readonly string[] | undefined): Record<string, string> {
+  return reasons === undefined || reasons.length === 0 ? {} : { reason: reasons[0]!, reasons: reasons.join(',') };
 }
 
 /** Prix des rôles agentiques (E4 : `extract`, E6 : `agent`) pour l'ensemble des couples autorisés. */

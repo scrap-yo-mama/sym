@@ -214,6 +214,7 @@
   },
   "reason": {
     "unknown": "Reason: {code}",
+    "agent_request_blocked": "Agent request refused by the request guard (reason: {reason}).",
     "retried": "It took {n} retries.",
     "escalated": "A more expensive method than usual was needed.",
     "repaired": "The strategy was repaired (v{a} to v{b}).",

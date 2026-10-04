@@ -128,3 +128,34 @@ describe('assert_agent_request_policy : trafic de la page, E4/E5 sans agent, for
     expect(g.summary()).toEqual({ blocked: 2, reasons: ['method_not_allowed', 'method_not_allowed'] });
   });
 });
+
+// Recette 2026-10-04 (UX-33) : E4 de l'équipe Janssens refusé à la 2e exécution, sans motif, parce qu'un membre « Janssens »
+// vu à la 1re (registre du run) figure dans l'hôte et le chemin de l'URL de départ déclarée.
+describe('assert_agent_request_policy : valeurs vues pendant le run (UX-33)', () => {
+  const SITE = 'www.janssens-immobilier.zz-test.example';
+  const START = `https://${SITE}/le-groupe-janssens-immobilier/`;
+  const e4 = (seen: string[]) =>
+    createAgentRequestGate({ phase: 'e4_extract', allowedHosts: [SITE], startUrl: START, allowWriteActions: false, sensitiveValues: () => ['ZZ-SECRET-HEADER-VALUE'], seenValues: () => seen });
+
+  test('E4 : l’URL de départ déclarée reste permise quand une valeur vue y figure (2e exécution du même essai)', async () => {
+    const g = e4(['Janssens', 'Julie Janssens']);
+    expect(await g.check(hop({ url: START }))).toBe(true);
+    expect(g.summary()).toEqual({ blocked: 0, reasons: [] });
+  });
+
+  test('sans affaiblir la garde : valeur vue dans une URL composée ou un corps refusée, motif journalisé par code', async () => {
+    const g = createAgentRequestGate({
+      phase: 'e5_e6',
+      allowedHosts: [SITE],
+      startUrl: START,
+      allowWriteActions: true,
+      sensitiveValues: () => [],
+      seenValues: () => ['Julie Janssens'],
+      domUrls: async () => [`${START}?q=a`],
+    });
+    expect(await g.check(hop({ url: `${START}?q=julie+janssens` }))).toBe(false);
+    expect(await g.check(hop({ url: `https://${SITE}/contact`, method: 'POST', body: 'nom=Julie+Janssens', resourceType: 'XHR', mainFrame: false }))).toBe(false);
+    expect(g.summary()).toEqual({ blocked: 2, reasons: ['sensitive_value', 'sensitive_value'] });
+    expect(JSON.stringify(g.summary())).not.toContain('Janssens');
+  });
+});

@@ -30,7 +30,7 @@ import { runStepAgent, type StepAgentOutcome } from '@runtime/agent';
 import { readHealthyItems } from '@runtime/db';
 import { roleTarget, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
-import { createAgentRequestGate, runSensitiveValues } from '../browser/agent-request-gate.js';
+import { createAgentRequestGate, runRequestValues } from '../browser/agent-request-gate.js';
 import type { CandidateCheck, RepairOutcome, RepairPort } from './strategy-executor.js';
 
 type Request = Parameters<RepairPort>[0];
@@ -137,7 +137,7 @@ export async function repairStepsUnderLease(deps: StepRepairDeps, request: Reque
         templates: req.spec.steps.flatMap((st) => (st.op === 'goto' && st.url !== undefined ? [st.url] : [])),
         allowWriteActions: target.api.allowWriteActions,
         agentActive: false,
-        sensitiveValues: runSensitiveValues(ctx.personal),
+        ...runRequestValues(ctx.personal),
         runInputs,
       });
       const check = await stepTrial(

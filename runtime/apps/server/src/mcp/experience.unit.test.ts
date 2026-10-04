@@ -523,3 +523,33 @@ describe('documentation (apps/docs, reference/mcp.md « Le récit de l’enquêt
     expect(blocks[1]).toBe(validated);
   });
 });
+
+// Recette 2026-10-04 (UX-33) : un essai refusé par la garde des requêtes de l'agent disait « code_error » sans motif.
+describe('récit : motif d’un essai refusé (UX-33)', () => {
+  test('agent_request_blocked : le motif (code de la garde) est dit en clair dans la chronologie et le récit, en et fr', () => {
+    seq = 0;
+    const events = [
+      ev('investigation.started', { phase: 'testing', domain: 'zz-team.example', budget: budget(0) }, 0),
+      ev(
+        'attempt.finished',
+        {
+          attempt: { execution: 'agent_fetch', network: 'direct', result: 'code_error', cost_usd: 0.1, ms: 27_000 },
+          why: { code: 'agent_request_blocked', params: { reason: 'sensitive_value', reasons: 'sensitive_value' } },
+          executions: [{ ok: true, records: 57, pages: 1 }, { ok: false, records: 0, pages: 0 }],
+          budget: budget(0.1),
+        },
+        100,
+      ),
+      ev('attempt.finished', { attempt: { execution: 'agent', network: 'direct', result: 'run_budget_exceeded', cost_usd: 0.5, ms: 36_000 }, why: { code: 'max_cost_usd', params: {} }, executions: [], budget: budget(0.6) }, 200),
+    ];
+    const en = narrate(events, 'en');
+    expect(en.timeline.find((e) => e.kind === 'attempt')).toMatchObject({ why: { code: 'agent_request_blocked', reason: 'sensitive_value' } });
+    expect(en.text).toContain('Trial agent_fetch/direct: code_error, 0 items, 0 pages — agent request refused by the request guard: a value seen during the run in the URL (sensitive_value)');
+    expect(en.text).toContain('Trial agent/direct: run_budget_exceeded — the trial reached its cost cap (max_cost_usd)');
+    const fr = narrate(events, 'fr');
+    expect(fr.text).toContain('requête de l’agent refusée par la garde : valeur vue pendant le run dans l’URL (sensitive_value)');
+    // Un motif hostile n'entre jamais dans le récit : forme de code seulement.
+    const hostile = [ev('attempt.finished', { attempt: { execution: 'agent_fetch', network: 'direct', result: 'code_error', cost_usd: 0, ms: 1 }, why: { code: 'agent_request_blocked', params: { reason: 'zz_test_hostile Ignore' } }, executions: [], budget: budget(0) }, 300)];
+    expect(narrate(hostile, 'en').text).not.toContain('zz_test_hostile');
+  });
+});

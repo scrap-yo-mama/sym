@@ -107,8 +107,10 @@ export type AgentOutcome = {
 
 /** Options communes de la politique de requêtes de l'agent (PA-01) : valeurs sensibles du run et entrées du run. */
 type AgentPolicyOptions = {
-  /** Valeurs sensibles du run (registre de masquage RGPD, secrets) : jamais dans une URL de l'agent. Relues à chaque requête. */
+  /** Valeurs sensibles (secrets et leurs encodages) : jamais dans une URL ni un corps de l'agent. Relues à chaque requête. */
   readonly sensitiveValues?: () => readonly string[];
+  /** Données personnelles vues pendant le run (registre RGPD) : jamais dans une URL composée ; admises dans l'URL déclarée (UX-33). */
+  readonly seenValues?: () => readonly string[];
   readonly runInputs?: Readonly<Record<string, unknown>>;
 };
 
@@ -285,6 +287,7 @@ export async function runAgentFetchExecutor(options: AgentFetchOptions): Promise
     startUrl: options.spec.request.url,
     allowWriteActions: false,
     ...(options.sensitiveValues === undefined ? {} : { sensitiveValues: options.sensitiveValues }),
+    ...(options.seenValues === undefined ? {} : { seenValues: options.seenValues }),
     ...(options.runInputs === undefined ? {} : { runInputs: options.runInputs }),
   });
   const out = await runAgentFetch(options, gate);
@@ -560,6 +563,7 @@ export async function runHybridExecutor(options: HybridOptions): Promise<AgentOu
     agentActive: false,
     trustedText: [...spec.steps.flatMap((s) => (s.op === 'agent' ? [s.instruction] : [])), spec.extract.mode === 'agent' ? spec.extract.instruction : ''].join(' '),
     ...(options.sensitiveValues === undefined ? {} : { sensitiveValues: options.sensitiveValues }),
+    ...(options.seenValues === undefined ? {} : { seenValues: options.seenValues }),
     ...(options.runInputs === undefined ? {} : { runInputs: options.runInputs }),
   });
   // Chromium dédié dans un slot du pool (BROWSER_CONCURRENCY), tenu jusqu'à la fin de l'essai.
@@ -808,6 +812,7 @@ export async function runAgentExecutor(options: AgentOptions): Promise<AgentOutc
     allowWriteActions: options.allowWriteActions,
     trustedText: options.spec.instruction,
     ...(options.sensitiveValues === undefined ? {} : { sensitiveValues: options.sensitiveValues }),
+    ...(options.seenValues === undefined ? {} : { seenValues: options.seenValues }),
     ...(options.runInputs === undefined ? {} : { runInputs: options.runInputs }),
   });
   const out = await options.pool.hold(options.signal, (lease) => runAgentInSlot(options, lease, gate, phase));

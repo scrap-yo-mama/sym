@@ -8,7 +8,7 @@
 // budget dépassé → `erreur`, validation du schéma en deux temps (`validate_schema`), étape 0 d'abord
 // (`assert_access_report_first`), robots.txt qui interdit le chemin sans effet sur l'enquête (D-91).
 import { randomUUID } from 'node:crypto';
-import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, Secret, validateOutput, type RunExecutor } from '@runtime/core';
+import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, Secret, secretValues, validateOutput, type RunExecutor } from '@runtime/core';
 import { firstCostInversion, milestoneHeading, type InvestigationMilestone } from '@runtime/core/investigation';
 import * as net from '@runtime/core/net';
 import {
@@ -600,6 +600,54 @@ describe('enquête (tâche 2.1)', () => {
     expect(compiled['cost_usd']).toBeUndefined();
     // Deux appels du rôle investigate (proposition, puis remise en forme sur le schéma corrigé) : aucun pour la compilation.
     expect(fake.byRole[MODEL]).toBe(2);
+  });
+
+  test('UX-33 — équipe dont le nom de famille figure dans l’URL de départ : les exécutions 2 et 3 de l’essai E4 ne sont plus refusées (valeur vue, URL déclarée)', async () => {
+    withExtract = true;
+    const page = (await client.get(SSR_HOST, '/le-groupe-dupontzz/equipe')).body;
+    const team = [...page.matchAll(/<span class="first">([^<]+)<\/span> <span class="last">([^<]+)<\/span><\/h3><p class="role">([^<]+)<\/p>/g)].map((m) => ({ first_name: m[1]!, last_name: m[2]!, role: m[3]! }));
+    expect(team).toHaveLength(6);
+    fake.setScenario(MODEL, [
+      scripted.json({
+        fields: [
+          { name: 'first_name', type: 'string', required: true, personal: true, description: 'Prénom' },
+          { name: 'last_name', type: 'string', required: true, personal: true, description: 'Nom' },
+          { name: 'role', type: 'string', required: false, personal: false, description: 'Métier' },
+        ],
+        sources: [],
+      }),
+      scripted.json({ records: 'div.member', fields: [{ field: 'first_name', css: '.first', attr: null, ops: [] }, { field: 'last_name', css: '.last', attr: null, ops: [] }, { field: 'role', css: '.role', attr: null, ops: [] }] }),
+    ]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items: team }), scripted.json({ items: team }), scripted.json({ items: team })]);
+    const apiId = await insertApi('zz_test_inv_team_url_value');
+    const run = await investigate(apiId, { url: `${base(SSR_HOST)}/le-groupe-dupontzz/equipe`, description: 'membres de l’équipe : prénom, nom, métier', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded', items: 6 });
+    const attempt = (await eventsOf(run.id)).find((e) => e.kind === 'attempt.finished')!.payload as { attempt: { result: string }; executions: { ok: boolean; records: number }[]; why?: unknown };
+    expect(attempt.attempt.result).toBe('ok');
+    expect(attempt.executions.map((e) => [e.ok, e.records])).toEqual([
+      [true, 6],
+      [true, 6],
+      [true, 6],
+    ]);
+    expect(attempt.why).toBeUndefined();
+    const blocked = await pool.query("SELECT 1 FROM run_logs WHERE run_id = $1 AND event = 'agent_request_blocked'", [run.id]);
+    expect(blocked.rowCount).toBe(0);
+  });
+
+  test('UX-33 — un refus de la garde des requêtes porte son motif : why.params.reason dans le récit, code et motifs au journal (jamais la valeur)', async () => {
+    withExtract = true;
+    const secret = 'zz-test-request-secret-3301';
+    secretValues.add(secret);
+    fake.setScenario(MODEL, [scripted.json({ fields: [{ name: 'title', type: 'string', required: true, personal: false, description: 'Titre' }], sources: [] })]);
+    const apiId = await insertApi('zz_test_inv_request_blocked');
+    const run = await investigate(apiId, { url: `${base(SSR_HOST)}/?k=${secret}`, description: 'liste des produits du catalogue', auto_validate: true });
+    expect(run.state).toBe('failed');
+    const attempt = (await eventsOf(run.id)).find((e) => e.kind === 'attempt.finished')!.payload as { why?: unknown };
+    expect(attempt.why).toEqual({ code: 'agent_request_blocked', params: { reason: 'sensitive_value', reasons: 'sensitive_value' } });
+    const logs = (await pool.query<{ data: Record<string, unknown> }>("SELECT data FROM run_logs WHERE run_id = $1 AND event = 'agent_request_blocked'", [run.id])).rows;
+    expect(logs.map((l) => l.data)).toEqual([expect.objectContaining({ code: 'agent_request_blocked', execution: 'agent_fetch', reasons: ['sensitive_value'] })]);
+    expect(JSON.stringify(logs)).not.toContain(secret);
+    expect(fake.byRole[EXTRACT_MODEL] ?? 0).toBe(0);
   });
 
   test('page HTML statique, compilation refusée (valeurs divergentes deux fois) : E4 gardé tel quel, raison dans le récit', async () => {

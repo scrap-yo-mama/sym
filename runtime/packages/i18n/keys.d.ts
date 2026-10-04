@@ -1102,6 +1102,7 @@ export type MessageKey =
   | 'quality.suspected'
   | 'quality.title'
   | 'reason.account_limit'
+  | 'reason.agent_request_blocked'
   | 'reason.auth_required'
   | 'reason.blocked_by_protection'
   | 'reason.challenge_in_tunnel'
