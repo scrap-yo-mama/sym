@@ -219,7 +219,9 @@ function domField(slot: DomSlot, type: string, required: boolean, proposed: read
   if (type === 'array') return { ...(slot.css === null ? {} : { css: slot.css }), attr: slot.attr, ...(slot.up === undefined ? {} : { up: slot.up }), type, reduce: 'all', ...(required ? { required: true } : {}), ops: ['collapse_spaces', 'trim'] };
   const ops: (string | Record<string, unknown>)[] = ['collapse_spaces', 'trim'];
   if (type === 'number' || type === 'integer') {
-    ops.push({ op: 'regex_extract', pattern: FIRST_NUMBER, group: 0 }, 'trim', { op: type === 'number' ? 'to_number' : 'to_integer', decimal: slot.decimal });
+    // Surface : le nombre suivi de son unité (banc réel R02 : « Du studio au 4 pièces » d'un programme neuf lu « 4 m² »).
+    const area = slot.shape.split('|')[0] === 'area';
+    ops.push(area ? { op: 'regex_extract', pattern: `(${FIRST_NUMBER}) ?(m²|m2|ft²|ha)`, group: 1 } : { op: 'regex_extract', pattern: FIRST_NUMBER, group: 0 }, 'trim', { op: type === 'number' ? 'to_number' : 'to_integer', decimal: slot.decimal });
   } else if (type === 'boolean') {
     ops.push('to_boolean');
   } else {

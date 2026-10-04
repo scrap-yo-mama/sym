@@ -1483,7 +1483,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               const unpricedRole = roleOfEntry === null ? null : unpricedModel(config, roleOfEntry);
               if (unpricedRole !== null) throw new LlmPriceStop(unpricedRole);
               const timeout = AbortSignal.timeout(Math.max(1, limits.deadlineMs - now()));
-              const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(entry.paginated, purpose, hardMaxPagesOf(entry.spec)) };
+              const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(entry.paginated, purpose, hardMaxPagesOf(entry.spec)), ...(purpose === 'stop_check' ? { pageSampling: true } : {}) };
               let trial: StrategyTrial;
               // Règle d'arrêt d'une stratégie déclarative : lue en politique `quarantine` (des pages suivantes peuvent servir un
               // second gabarit sans un champ requis : R02) ; les champs requis absents sont jugés par `relaxMissing`.

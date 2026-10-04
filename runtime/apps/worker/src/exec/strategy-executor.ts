@@ -568,6 +568,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       outputSchema: target.api.outputSchema,
       itemPolicy,
       signal: ctx.signal,
+      ...(ctx.pageSampling === true ? { samplePages: true } : {}),
       ...(pacer === undefined ? {} : { pacer }),
       ...(target.api.domainPacing.max_requests_per_run === undefined ? {} : { maxRequests: target.api.domainPacing.max_requests_per_run }),
       ...(deps.classify === undefined ? {} : { classify: deps.classify }),
@@ -911,6 +912,12 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
         await ctx.log('info', 'subjects_excluded', { dropped });
         result = { ...result, records: kept };
       }
+    }
+    // Liste HTML paginée (banc réel R02) : doublons écartés entre les pages, et écart avec le compteur de l'en-tête (« 359
+    // annonces » pour 268 fiches distinctes) dits au journal du run, comptes seulement.
+    if (result.ok && (result.duplicates ?? 0) > 0) await ctx.log('info', 'duplicates_dropped', { dropped: result.duplicates, delivered: result.records.length });
+    if (result.ok && result.announced !== undefined && result.announced !== result.records.length && !result.truncated && result.stop !== 'max_pages_input' && result.stop !== 'hard_max_pages') {
+      await ctx.log('warn', 'announced_count_mismatch', { announced: result.announced, delivered: result.records.length, dropped_duplicates: result.duplicates ?? 0 });
     }
     // Éléments émis par un script E3, essai réussi ou non (schéma non conforme, violation, refus, plafond…) : inscrits au
     // registre du run, qui masque aussi `error_detail` et toute écriture ultérieure de `run_logs`.

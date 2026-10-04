@@ -170,6 +170,11 @@ export type RunContext = {
   input: unknown;
   /** Nature du run (`runs.kind`, migration 0016) : exécution d'une stratégie (défaut) ou enquête (04 §4). */
   kind?: RunKind;
+  /**
+   * Enquête, vérification de la règle d'arrêt (banc réel R01) : une longue liste HTML paginée par numéro de page n'est lue que
+   * sur un échantillon de pages (1, 2, milieu, dernière annoncée et suivante). Jamais posé pour un run.
+   */
+  pageSampling?: boolean;
   /** `runs.locale` : langue de la prose écrite par le LLM (bloc `Language:`, 21 § 4.5). Jamais envoyée à un site cible. */
   proseLocale?: string;
   /** Levé à l'annulation, à la perte du bail (`job_id` changé), à l'expiration du job et à l'arrêt du worker. */
