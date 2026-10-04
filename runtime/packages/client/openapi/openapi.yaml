@@ -4401,6 +4401,41 @@ components:
           $ref: '#/components/schemas/ApiStatus'
         error:
           $ref: '#/components/schemas/RunError'
+        poll_after_seconds:
+          description: >-
+            Enquête encore en cours à la réponse (validation automatique plus longue que l'attente) : relire `get_run` (ou
+            GET /api/runs/{id}) après ce délai ; `null` en pause. Absent si l'enquête est terminée.
+          type: [integer, 'null']
+        progress:
+          description: >-
+            Enquête encore en cours à la réponse : même indice que `RunResult.progress` (phase, essais, phrase).
+          type: object
+          additionalProperties: false
+          required: [phase, strategies_tried, last_attempt, message]
+          properties:
+            phase:
+              type: string
+            strategies_tried:
+              type: integer
+            last_attempt:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [execution, network, result]
+                  properties:
+                    execution:
+                      type: string
+                    network:
+                      type: string
+                    result:
+                      type: string
+                - type: 'null'
+            message:
+              type: string
+        next_action:
+          description: >-
+            Enquête encore en cours à la réponse : l'appel suivant (`get_run` avec `run_id`).
+          $ref: '#/components/schemas/NextAction'
     ApiPatch:
       description: >-
         Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion
