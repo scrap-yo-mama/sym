@@ -4,7 +4,7 @@
 // seulement), puis la vérifie SANS LLM sur le HTML capturé : même nombre d'éléments que l'agent, au moins 95 % des valeurs
 // égales après normalisation des espaces, sortie valide contre le schéma d'origine (INV1).
 import { describe, expect, test } from 'vitest';
-import { buildHtmlStrategy, condenseHtml, HTML_COMPILE_MIN_MATCH, verifyHtmlStrategy, type HtmlCompileProposal } from './html-compile.js';
+import { alignHtmlStrategy, buildHtmlStrategy, condenseHtml, htmlCompileSupport, HTML_COMPILE_MIN_MATCH, verifyHtmlStrategy, type HtmlCompileProposal } from './html-compile.js';
 
 const PAGE = 'https://books.zz-test.example/catalogue/page-1.html?ref=zz';
 const HOST = 'books.zz-test.example';
@@ -126,5 +126,143 @@ describe('HTML épuré pour le prompt (donnée non fiable)', () => {
     const masked = condenseHtml(HTML, { maxChars: 100_000, mapText: (s) => s.replace('Soumission', '[personal_1]') });
     expect(masked.html).toContain('[personal_1]');
     expect(masked.html).not.toContain('Soumission');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------- recette UX-30, UX-31
+// Boutique de livres telle que servie par books.toscrape (recette du 2026-10-04, enquête 883f0abe) : note écrite en MOT dans
+// une classe, disponibilité en texte, prix en livres ; schéma de l'API : note entière, booléen, nombre. Proposition rejouée
+// sur le staging (modèle d'enquête réel) : `^…$` pris pour des ancres, note « Three » sans conversion possible, « In stock »
+// passé à `to_boolean`. Avant correction : 20/20 éléments, `reason: extraction`, `ratio: 0`, aucun différentiel.
+const SHOP = [
+  { title: 'A Light in the Attic', rating: 'Three', price: 51.77, stock: 'In stock' },
+  { title: 'Tipping the Velvet', rating: 'One', price: 53.74, stock: 'In stock' },
+  { title: 'Soumission', rating: 'One', price: 50.1, stock: 'Out of stock' },
+  { title: 'Sharp Objects', rating: 'Four', price: 47.82, stock: 'In stock' },
+  { title: 'Sapiens: A Brief History of Humankind', rating: 'Five', price: 54.23, stock: 'In stock' },
+  { title: 'The Requiem Red', rating: 'One', price: 22.65, stock: 'In stock' },
+  { title: 'Rip it Up and Start Again', rating: 'One', price: 35.02, stock: 'In stock' },
+  { title: 'Olio', rating: 'Four', price: 23.88, stock: 'In stock' },
+];
+const WORDS: Record<string, number> = { One: 1, Two: 2, Three: 3, Four: 4, Five: 5 };
+const SHOP_HTML = `<html><body><ol class="row">${SHOP.map(
+  (b, i) => `<li><article class="product_pod"><h3><a href="b${i}/index.html" title="${b.title}">${b.title.slice(0, 14)}...</a></h3><p class="star-rating ${b.rating}"><i class="icon-star"></i></p>
+  <div class="product_price"><p class="price_color">£${b.price.toFixed(2)}</p><p class="instock availability">
+    <i class="icon-ok"></i>
+      ${b.stock}
+  </p></div></article></li>`,
+).join('\n')}</ol></body></html>`;
+const SHOP_SCHEMA = {
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  type: 'object',
+  required: ['title', 'price_gbp', 'in_stock', 'rating'],
+  properties: { title: { type: 'string' }, rating: { type: 'integer', minimum: 1, maximum: 5 }, in_stock: { type: 'boolean' }, price_gbp: { type: 'number' } },
+  additionalProperties: false,
+};
+const SHOP_ITEMS = SHOP.map((b) => ({ title: b.title, rating: WORDS[b.rating]!, in_stock: b.stock === 'In stock', price_gbp: b.price }));
+const SHOP_CTX = { pageUrl: 'https://books.zz-test.example/', allowedHosts: [HOST], outputSchema: SHOP_SCHEMA };
+/** Proposition du modèle d'enquête sur le staging (recette 2026-10-04), reproduite telle quelle. */
+const STAGING: HtmlCompileProposal = {
+  records: 'article.product_pod',
+  fields: [
+    { field: 'title', css: 'h3 a', attr: 'title', ops: [op('regex_extract', { pattern: '^(.{0,20}).*$', group: 0 })] },
+    { field: 'rating', css: 'p.star-rating', attr: 'class', ops: [op('regex_extract', { pattern: 'star-rating (One|Two|Three|Four|Five)', group: 1 })] },
+    { field: 'in_stock', css: 'p.instock.availability', attr: 'text', ops: [op('regex_extract', { pattern: 'In stock', group: 0 }), op('to_boolean')] },
+    { field: 'price_gbp', css: 'p.price_color', attr: 'text', ops: [op('regex_extract', { pattern: '([0-9.]+)', group: 1 }), op('to_number', { decimal: '.' })] },
+  ],
+};
+/** Lecture fidèle : la note et la disponibilité lues en texte, sans opérateur de conversion (aucun ne convertit un mot). */
+const WORDS_READ: HtmlCompileProposal = {
+  records: 'article.product_pod',
+  fields: [
+    { field: 'title', css: 'h3 a', attr: 'title', ops: [] },
+    { field: 'rating', css: 'p.star-rating', attr: 'class', ops: [op('regex_extract', { pattern: 'star-rating ([A-Za-z]+)', group: 1 })] },
+    { field: 'in_stock', css: '.availability', attr: null, ops: [op('trim')] },
+    { field: 'price_gbp', css: '.price_color', attr: null, ops: [op('to_number')] },
+  ],
+};
+
+describe('recette UX-30 : boutique de livres (note en mot, disponibilité en texte, prix en livres)', () => {
+  test('le refus porte un différentiel par champ : ratio réel, valeurs divergentes et motifs (plus de « extraction, ratio 0 » muet)', () => {
+    const built = buildHtmlStrategy(STAGING, SHOP_CTX);
+    if (!built.ok) throw new Error(`construction : ${built.reason}`);
+    const check = verifyHtmlStrategy(alignHtmlStrategy(built.spec, SHOP_HTML, SHOP_ITEMS, SHOP_SCHEMA), SHOP_HTML, SHOP_ITEMS, SHOP_SCHEMA);
+    expect(check.ok).toBe(false);
+    expect(check.diff).toMatchObject({ expected: 8, got: 8, reason: 'values' });
+    expect(check.diff.ratio).toBeGreaterThan(0);
+    expect(check.diff.mismatches.length).toBeGreaterThan(0);
+    // « Out of stock » ne contient pas « In stock » : valeur absente, différence nommée champ par champ.
+    expect(check.diff.mismatches.some((m) => m.field === 'in_stock')).toBe(true);
+    // « In stock » passé à to_boolean : motif de l'opérateur nommé, par champ, sans valeur.
+    expect(check.diff.problems).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'in_stock', code: 'operator_failed' })]));
+  });
+
+  test('ancres ^ et $ retirées des motifs proposés (recherche non ancrée, I-Regexp) : le motif reste valide', () => {
+    const built = buildHtmlStrategy(STAGING, SHOP_CTX);
+    expect(built.ok).toBe(true);
+    if (built.ok) expect(built.spec.fields['title']!.ops).toEqual(['collapse_spaces', { op: 'regex_extract', pattern: '(.{0,20}).*', group: 0 }]);
+  });
+
+  test('note en mot et disponibilité en texte : la table de correspondance est déduite par le CODE des éléments de l’agent, puis vérifiée sans LLM', () => {
+    const built = buildHtmlStrategy(WORDS_READ, SHOP_CTX);
+    if (!built.ok) throw new Error(`construction : ${built.reason}`);
+    // Sans alignement : la note « Three » n'est pas un entier, refus.
+    expect(verifyHtmlStrategy(built.spec, SHOP_HTML, SHOP_ITEMS, SHOP_SCHEMA).ok).toBe(false);
+    const aligned = alignHtmlStrategy(built.spec, SHOP_HTML, SHOP_ITEMS, SHOP_SCHEMA);
+    expect(aligned.fields['rating']!.ops!.at(-1)).toEqual({ op: 'map_value', table: { Three: 3, One: 1, Four: 4, Five: 5 } });
+    expect(aligned.fields['in_stock']!.ops!.at(-1)).toEqual({ op: 'map_value', table: { 'In stock': true, 'Out of stock': false } });
+    // Le prix converti par un opérateur fermé (« £53.74 » → 53.74) n'a pas de table.
+    expect(aligned.fields['price_gbp']!.ops).toEqual(['collapse_spaces', 'to_number']);
+    const check = verifyHtmlStrategy(aligned, SHOP_HTML, SHOP_ITEMS, SHOP_SCHEMA);
+    expect(check).toMatchObject({ ok: true, diff: { expected: 8, got: 8, ratio: 1, reason: null } });
+    expect(check.records).toEqual(SHOP_ITEMS);
+  });
+
+  test('aucune table qui recopierait les valeurs : un mot par élément (prix illisible) ou une correspondance ambiguë n’est jamais déduit', () => {
+    const priceText = buildHtmlStrategy({ ...WORDS_READ, fields: [...WORDS_READ.fields.slice(0, 3), { field: 'price_gbp', css: '.price_color', attr: null, ops: [op('regex_extract', { pattern: '£', group: 0 })] }] }, SHOP_CTX);
+    if (!priceText.ok) throw new Error('construction');
+    const aligned = alignHtmlStrategy(priceText.spec, SHOP_HTML, SHOP_ITEMS, SHOP_SCHEMA);
+    expect(JSON.stringify(aligned.fields['price_gbp']!.ops)).not.toContain('map_value');
+    const ambiguous = SHOP_ITEMS.map((it, i) => (i === 1 ? { ...it, rating: 2 } : it));
+    const words = buildHtmlStrategy(WORDS_READ, SHOP_CTX);
+    if (!words.ok) throw new Error('construction');
+    expect(JSON.stringify(alignHtmlStrategy(words.spec, SHOP_HTML, ambiguous, SHOP_SCHEMA).fields['rating']!.ops)).not.toContain('map_value');
+  });
+});
+
+// Citations (recette 2026-10-04) : `tags` est un tableau de chaînes ; avant correction, `unsupported_field_type` après deux appels.
+const QUOTES = [
+  { text: 'The world as we have created it is a process of our thinking.', author: 'Albert Einstein', tags: ['change', 'deep-thoughts', 'thinking'] },
+  { text: 'It is our choices that show what we truly are.', author: 'J.K. Rowling', tags: ['abilities', 'choices'] },
+  { text: 'A day without sunshine is like, you know, night.', author: 'Steve Martin', tags: ['humor'] },
+];
+const QUOTES_HTML = `<div class="col-md-8">${QUOTES.map(
+  (q) => `<div class="quote"><span class="text">“${q.text}”</span><span>by <small class="author">${q.author}</small></span><div class="tags">Tags: ${q.tags.map((t) => `<a class="tag" href="/tag/${t}/">${t}</a>`).join(' ')}</div></div>`,
+).join('\n')}</div>`;
+const QUOTES_SCHEMA = {
+  type: 'object',
+  required: ['text', 'author', 'tags'],
+  properties: { text: { type: 'string' }, author: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } },
+  additionalProperties: false,
+};
+const QUOTES_ITEMS = QUOTES.map((q) => ({ text: `“${q.text}”`, author: q.author, tags: q.tags }));
+
+describe('recette UX-31 : champ tableau (sélecteur multiple) et types vérifiés avant tout appel', () => {
+  test('types compilables : scalaires et tableaux de scalaires ; objet ou tableau d’objets refusé, champs nommés', () => {
+    expect(htmlCompileSupport(QUOTES_SCHEMA)).toEqual({ ok: true });
+    expect(htmlCompileSupport(SHOP_SCHEMA)).toEqual({ ok: true });
+    expect(htmlCompileSupport({ type: 'object', properties: { a: { type: 'string' }, geo: { type: 'object' }, offers: { type: 'array', items: { type: 'object' } }, n: { type: ['integer', 'null'] } } })).toEqual({ ok: false, fields: ['geo', 'offers'] });
+  });
+
+  test('tableau de chaînes : chaque élément trouvé par le sélecteur donne une valeur, vérifié sans LLM', () => {
+    const built = buildHtmlStrategy(
+      { records: 'div.quote', fields: [{ field: 'text', css: 'span.text', attr: null, ops: [] }, { field: 'author', css: 'small.author', attr: null, ops: [] }, { field: 'tags', css: 'a.tag', attr: null, ops: [op('trim')] }] },
+      { pageUrl: 'https://quotes.zz-test.example/', allowedHosts: ['quotes.zz-test.example'], outputSchema: QUOTES_SCHEMA },
+    );
+    if (!built.ok) throw new Error(`construction : ${built.reason}`);
+    expect(built.spec.fields['tags']).toMatchObject({ css: 'a.tag', type: 'array', reduce: 'all', required: true });
+    const check = verifyHtmlStrategy(built.spec, QUOTES_HTML, QUOTES_ITEMS, QUOTES_SCHEMA);
+    expect(check).toMatchObject({ ok: true, diff: { expected: 3, got: 3, ratio: 1 } });
+    expect(check.records).toEqual(QUOTES_ITEMS);
   });
 });

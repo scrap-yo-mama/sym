@@ -87,4 +87,48 @@ describe('compilation E4 → html (rôle investigate, vérification sans LLM)', 
     expect(text).toContain('class="product_pod"');
     expect(htmlCompilePromptVersion).toMatch(/^html-compile-[0-9a-f]{12}$/);
   });
+
+  // Recette 2026-10-04 (UX-30, UX-31) : le modèle ignorait le dialecte des motifs (ancres, \s, groupes non capturants),
+  // les champs tableau et les valeurs écrites en mot ; les citations payaient deux appels avant `unsupported_field_type`.
+  test('prompt : dialecte des motifs (recherche non ancrée, ni \\d ni \\s ni (?:), champs tableau, valeurs écrites en mot', () => {
+    const system = String(htmlCompileMessages({ description: 'x', outputSchema: SCHEMA, html: HTML, items: ITEMS, maxInputChars: 60_000 }, 'tok')[0]!.content);
+    expect(system).toContain('I-Regexp');
+    expect(system).toMatch(/never anchored/i);
+    expect(system).toContain('[0-9]');
+    expect(system).toMatch(/array field/i);
+    expect(system).toMatch(/word/i);
+  });
+
+  test('type non compilable (tableau d’objets) : refus AVANT tout appel, aucun coût', async () => {
+    const schema = { type: 'object', required: ['title'], properties: { title: { type: 'string' }, offers: { type: 'array', items: { type: 'object' } } } };
+    fake.setScenario('inv', [scripted.json(GOOD)]);
+    const out = await compileHtmlStrategy(client(), { ...args, outputSchema: schema });
+    expect(out).toMatchObject({ ok: false, reason: 'unsupported_field_type', proposals: 0, diff: null });
+    expect(fake.requests).toBe(0);
+  });
+
+  test('note en mot (« Three ») et disponibilité en texte : acceptée dès la première proposition, table déduite par le code', async () => {
+    const shop = [
+      { title: 'A Light in the Attic', rating: 'Three', stock: 'In stock' },
+      { title: 'Tipping the Velvet', rating: 'One', stock: 'In stock' },
+      { title: 'Soumission', rating: 'One', stock: 'Out of stock' },
+      { title: 'Sharp Objects', rating: 'Three', stock: 'In stock' },
+    ];
+    const html = `<ol>${shop.map((b) => `<li><article class="product_pod"><h3><a title="${b.title}">${b.title.slice(0, 6)}…</a></h3><p class="star-rating ${b.rating}"></p><p class="availability"> ${b.stock} </p></article></li>`).join('')}</ol>`;
+    const schema = { type: 'object', required: ['title', 'rating', 'in_stock'], properties: { title: { type: 'string' }, rating: { type: 'integer' }, in_stock: { type: 'boolean' } }, additionalProperties: false };
+    const items = shop.map((b) => ({ title: b.title, rating: b.rating === 'One' ? 1 : 3, in_stock: b.stock === 'In stock' }));
+    const proposal = {
+      records: 'article.product_pod',
+      fields: [
+        { field: 'title', css: 'h3 a', attr: 'title', ops: [] },
+        { field: 'rating', css: 'p.star-rating', attr: 'class', ops: [{ op: 'regex_extract', pattern: '^star-rating ([A-Za-z]+)$', group: 1, decimal: null, format: null }] },
+        { field: 'in_stock', css: '.availability', attr: null, ops: [] },
+      ],
+    };
+    fake.setScenario('inv', [scripted.json(proposal)]);
+    const out = await compileHtmlStrategy(client(), { ...args, html, items, outputSchema: schema });
+    expect(out).toMatchObject({ ok: true, proposals: 1, diff: { expected: 4, got: 4, ratio: 1 } });
+    if (out.ok) expect(out.spec.fields['rating']!.ops!.at(-1)).toEqual({ op: 'map_value', table: { Three: 3, One: 1 } });
+    expect(fake.requests).toBe(1);
+  });
 });

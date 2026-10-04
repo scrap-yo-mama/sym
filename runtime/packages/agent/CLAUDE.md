@@ -21,6 +21,8 @@ Un seul point d'entrée, `exports["."]` = `dist/index.js` (types `dist/index.d.t
   `sanitizeModelPrompt`, versions de prompts (`*PromptVersion`).
 - Compilation E4 → déclaratif `html` (constat UX-20) : `compileHtmlStrategy` (rôle `investigate`, vérification sans LLM par
   `verifyHtmlStrategy` de `@runtime/core/investigation`, une nouvelle tentative au plus), `htmlCompileMessages`.
+  Types vérifiés avant tout appel (`htmlCompileSupport` : scalaires, tableaux de scalaires) ; valeurs écrites en mot
+  mises en table par le code (`alignHtmlStrategy`), jamais par le modèle (recette UX-30, UX-31).
 - Règles Markdown (tâche 2.10) : `readSkillsPhase` et `renderSkillBodies` (outil `read_skill` de nos prompts),
   `stagehandAgentConfig` (`systemPrompt`, `tools: { read_skill }`, aucune intégration MCP).
 

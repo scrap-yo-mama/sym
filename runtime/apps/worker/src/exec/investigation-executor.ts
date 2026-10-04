@@ -104,6 +104,7 @@ import {
   type TrialPair,
   type TrialPurpose,
   type TrialsOutcome,
+  htmlCompileSupport,
 } from '@runtime/core/investigation';
 import {
   buildNetworkRungs,
@@ -1195,6 +1196,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         };
         const page = pageFor.get(pair);
         if (page === undefined) return refuse('no_page');
+        // Types du schéma vérifiés AVANT tout appel (constat UX-31) : une compilation impossible n'est jamais payée.
+        const support = htmlCompileSupport(outputSchema);
+        if (!support.ok) return refuse('unsupported_field_type', { fields: support.fields.slice(0, 10) });
         config ??= deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
         const role = config?.roles.investigate;
         if (deps.llm === undefined || config === null || role === undefined) return refuse('llm_not_configured');

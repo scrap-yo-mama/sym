@@ -80,6 +80,13 @@ const contracts: Record<string, Contract> = {
     expect((await fx.get(H('ssr'), '/?page=5')).body).not.toContain('rel="next"');
     expect((await fx.get(H('ssr'), '/product/zz_test_product_0001')).body).toContain('class="price"');
     expect((await fx.get(H('ssr'), '/product/zz_test_product_9999')).status).toBe(404);
+    const books = (await fx.get(H('ssr'), '/livres')).body;
+    expect(books.match(/class="product_pod"/g)).toHaveLength(20);
+    expect(books).toMatch(/class="star-rating (One|Two|Three|Four|Five)"/);
+    expect(books).toMatch(/<p class="price_color">£[0-9]+\.[0-9]{2}<\/p>/);
+    const quotes = (await fx.get(H('ssr'), '/citations')).body;
+    expect(quotes.match(/class="quote"/g)).toHaveLength(10);
+    expect(quotes).toContain('<a class="tag"');
   },
 
   async spa() {

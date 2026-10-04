@@ -118,13 +118,39 @@ const apiJson: SiteFactory = (env) => {
 };
 
 // ---------------------------------------------------------------- 2. SSR
+const RATING_WORDS = ['One', 'Two', 'Three', 'Four', 'Five'] as const;
+
+/**
+ * Boutique de livres statique (constat UX-30) : note écrite en MOT dans une classe (`star-rating Three`), disponibilité
+ * en texte (« In stock »), prix en livres (« £53.74 »), titre complet en attribut et tronqué à l'écran. Ni API ni donnée
+ * embarquée : seule la mise en forme E4 s'applique, puis la compilation en déclaratif `html`.
+ */
+function booksPage(products: readonly Product[]): string {
+  const cards = products.slice(0, 20).map((p, i) => {
+    const short = p.title.length > 16 ? `${p.title.slice(0, 13)}...` : p.title;
+    return `<li class="col"><article class="product_pod"><h3><a href="/product/${p.id}" title="${esc(p.title)}">${esc(short)}</a></h3><p class="star-rating ${RATING_WORDS[i % 5]}"><i class="icon-star"></i></p><div class="product_price"><p class="price_color">£${(p.price_cents / 100).toFixed(2)}</p><p class="instock availability">
+      ${p.in_stock ? 'In stock' : 'Out of stock'}
+    </p></div></article></li>`;
+  });
+  return `<h1>All products</h1>\n<ol class="row">${cards.join('\n')}</ol>`;
+}
+
+/** Citations (constat UX-31) : chaque citation porte une liste d'étiquettes (champ tableau, sélecteur multiple). */
+function quotesPage(products: readonly Product[]): string {
+  const quotes = products.slice(0, 10).map((p, i) => {
+    const tags = [`theme-${i % 3}`, `genre-${i % 2}`, 'zz-test'].slice(0, 1 + (i % 3));
+    return `<div class="quote"><span class="text">“Citation ${esc(p.title)}”</span> <span>par <small class="author">Auteur Zztest ${(i % 4) + 1}</small></span><div class="tags">Tags : ${tags.map((t) => `<a class="tag" href="/tag/${t}">${t}</a>`).join(' ')}</div></div>`;
+  });
+  return `<h1>Citations</h1>\n${quotes.join('\n')}`;
+}
+
 const ssr: SiteFactory = (env) => {
   const products = makeProducts(env.seed, 'ssr', 100);
   const perPage = 20;
   return {
     id: 'ssr',
     lot: 'base',
-    description: 'Catalogue rendu côté serveur : 100 produits, 5 pages, liens rel=next ; /moved : page saine qui se déplace par meta refresh vers /',
+    description: 'Catalogue rendu côté serveur : 100 produits, 5 pages, liens rel=next ; /moved : page saine qui se déplace par meta refresh vers / ; /livres : 20 livres (note en mot, « In stock », prix en livres) ; /citations : 10 citations à étiquettes',
     hosts: ['zz_test_ssr.localhost'],
     smoke: { path: '/', status: 200 },
     handle(req) {
@@ -138,6 +164,8 @@ const ssr: SiteFactory = (env) => {
       if (req.path === '/moved') {
         return html(200, page('Catalogue déplacé', '<h1>Catalogue déplacé</h1><p>Le catalogue a une nouvelle adresse.</p>', '<meta http-equiv="refresh" content="0; url=/">'));
       }
+      if (req.path === '/livres') return html(200, page('Livres zz_test', booksPage(products)));
+      if (req.path === '/citations') return html(200, page('Citations zz_test', quotesPage(products)));
       if (req.path !== '/') return html(404, page('Introuvable', '<h1>Introuvable</h1>'));
       const pageNo = intParam(req, 'page', 1, 1, 1000);
       const cards = slicePage(products, pageNo, perPage)

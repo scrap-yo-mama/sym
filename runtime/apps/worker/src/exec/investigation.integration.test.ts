@@ -481,6 +481,127 @@ describe('enquête (tâche 2.1)', () => {
     expect(delivered).toEqual(items);
   });
 
+  test('assert_html_replay_no_llm (recette UX-30, UX-31) — boutique de livres (note en mot, « In stock », prix en livres) puis citations (champ tableau) : compilées en html, vérifiées sans LLM, rejouées avec 0 appel LLM', async () => {
+    withExtract = true;
+    const op = (name: string, extra: Record<string, unknown> = {}) => ({ op: name, pattern: null, group: null, decimal: null, format: null, ...extra });
+    const WORDS: Record<string, number> = { One: 1, Two: 2, Three: 3, Four: 4, Five: 5 };
+    // 1. Livres : éléments que l'agent lit sur la page (titre complet, note en entier, disponibilité en booléen, prix en nombre).
+    const shop = (await client.get(SSR_HOST, '/livres')).body;
+    const books = [...shop.matchAll(/title="([^"]+)">[^<]*<\/a><\/h3><p class="star-rating ([A-Za-z]+)">.*?<p class="price_color">£([0-9.]+)<\/p><p class="instock availability">\s*([^<]+?)\s*<\/p>/gs)].map((m) => ({
+      title: m[1]!,
+      rating: WORDS[m[2]!]!,
+      in_stock: m[4] === 'In stock',
+      price_gbp: Number(m[3]),
+    }));
+    expect(books).toHaveLength(20);
+    fake.setScenario(MODEL, [
+      scripted.json({
+        fields: [
+          { name: 'title', type: 'string', required: true, personal: false, description: 'Titre du livre' },
+          { name: 'rating', type: 'integer', required: true, personal: false, description: 'Note, 1 à 5 étoiles' },
+          { name: 'in_stock', type: 'boolean', required: true, personal: false, description: 'En stock' },
+          { name: 'price_gbp', type: 'number', required: true, personal: false, description: 'Prix en livres sterling' },
+        ],
+        sources: [],
+      }),
+      // Compilation : la note et la disponibilité lues en texte (aucun opérateur ne convertit un mot), le prix par to_number.
+      scripted.json({
+        records: 'article.product_pod',
+        fields: [
+          { field: 'title', css: 'h3 a', attr: 'title', ops: [] },
+          { field: 'rating', css: 'p.star-rating', attr: 'class', ops: [op('regex_extract', { pattern: 'star-rating ([A-Za-z]+)', group: 1 })] },
+          { field: 'in_stock', css: 'p.availability', attr: null, ops: [op('trim')] },
+          { field: 'price_gbp', css: 'p.price_color', attr: null, ops: [op('to_number', { decimal: '.' })] },
+        ],
+      }),
+    ]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items: books }), scripted.json({ items: books }), scripted.json({ items: books })]);
+    const shopApi = await insertApi('zz_test_inv_html_books');
+    const run = await investigate(shopApi, { url: `${base(SSR_HOST)}/livres`, description: 'catalogue des livres : titre, note, disponibilité, prix', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded', items: 20, strategy_version: 2 });
+    const compiled = (await eventsOf(run.id)).find((e) => e.kind === 'strategy.compiled')!.payload as Record<string, unknown>;
+    expect(compiled).toMatchObject({ from: 'agent_fetch', to: 'fetch', ok: true, proposals: 1, records: 20, ratio: 1 });
+    expect((await apiRow(shopApi)).current_strategy_version).toBe(2);
+    fake.reset();
+    const replay = await waitRun((await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId: shopApi, ownerId: A, trigger: 'rest' }))).runId);
+    expect(replay).toMatchObject({ state: 'succeeded', items: 20, strategy_version: 2 });
+    expect(fake.requests).toBe(0);
+    expect((await pool.query<{ item: unknown }>('SELECT item FROM dataset_items WHERE run_id = $1 ORDER BY seq', [replay.id])).rows.map((r) => r.item)).toEqual(books);
+
+    // 2. Citations : le propriétaire valide un schéma dont `tags` est un tableau de chaînes (sélecteur multiple).
+    const page = (await client.get(SSR_HOST, '/citations')).body;
+    const quotes = [...page.matchAll(/<span class="text">([^<]+)<\/span>.*?<small class="author">([^<]+)<\/small>.*?<div class="tags">(.*?)<\/div>/gs)].map((m) => ({
+      text: m[1]!,
+      author: m[2]!,
+      tags: [...m[3]!.matchAll(/<a class="tag"[^>]*>([^<]+)<\/a>/g)].map((t) => t[1]!),
+    }));
+    expect(quotes).toHaveLength(10);
+    expect(quotes.some((q) => q.tags.length > 1)).toBe(true);
+    const quoteFields = {
+      fields: [
+        { name: 'text', type: 'string', required: true, personal: false, description: 'Citation' },
+        { name: 'author', type: 'string', required: true, personal: false, description: 'Auteur' },
+      ],
+      sources: [],
+    };
+    fake.setScenario(MODEL, [
+      scripted.json(quoteFields),
+      scripted.json(quoteFields),
+      scripted.json({
+        records: 'div.quote',
+        fields: [
+          { field: 'text', css: 'span.text', attr: null, ops: [] },
+          { field: 'author', css: 'small.author', attr: null, ops: [] },
+          { field: 'tags', css: 'a.tag', attr: null, ops: [op('trim')] },
+        ],
+      }),
+    ]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items: quotes }), scripted.json({ items: quotes }), scripted.json({ items: quotes })]);
+    const quoteApi = await insertApi('zz_test_inv_html_quotes');
+    const gate = await investigate(quoteApi, { url: `${base(SSR_HOST)}/citations`, description: 'citations : texte, auteur, étiquettes' });
+    expect(gate).toMatchObject({ state: 'succeeded', items: 0 });
+    const schema = {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      required: ['text', 'author', 'tags'],
+      properties: { text: { type: 'string' }, author: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } },
+      additionalProperties: false,
+    };
+    const { runId } = await withActor(pool, actorA, (tx) => validateInvestigationSchema(tx, queue, { apiId: quoteApi, ownerId: A, trigger: 'rest', outputSchema: schema }));
+    const second = await waitRun(runId);
+    expect(second).toMatchObject({ state: 'succeeded', items: 10, strategy_version: 2 });
+    const quoteCompiled = (await eventsOf(runId)).find((e) => e.kind === 'strategy.compiled')!.payload as Record<string, unknown>;
+    expect(quoteCompiled).toMatchObject({ ok: true, proposals: 1, records: 10, ratio: 1 });
+    fake.reset();
+    const quoteReplay = await waitRun((await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId: quoteApi, ownerId: A, trigger: 'rest' }))).runId);
+    expect(quoteReplay).toMatchObject({ state: 'succeeded', items: 10, strategy_version: 2 });
+    expect(fake.requests).toBe(0);
+    expect((await pool.query<{ item: unknown }>('SELECT item FROM dataset_items WHERE run_id = $1 ORDER BY seq', [quoteReplay.id])).rows.map((r) => r.item)).toEqual(quotes);
+  });
+
+  test('type non compilable (tableau d’objets) : compilation refusée AVANT tout appel (unsupported_field_type), E4 gardé, aucun coût de compilation', async () => {
+    withExtract = true;
+    const items = { items: [{ title: 'Lampe Zztest 0001', offers: [{ price: 1 }] }, { title: 'Table Zztest 0002', offers: [{ price: 2 }] }] };
+    const fields = { fields: [{ name: 'title', type: 'string', required: true, personal: false, description: 'Titre' }], sources: [] };
+    fake.setScenario(MODEL, [scripted.json(fields), scripted.json(fields)]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json(items), scripted.json(items), scripted.json(items)]);
+    const apiId = await insertApi('zz_test_inv_html_unsupported');
+    await investigate(apiId, { url: `${base(SSR_HOST)}/`, description: 'liste des produits du catalogue' });
+    const schema = {
+      type: 'object',
+      required: ['title'],
+      properties: { title: { type: 'string' }, offers: { type: 'array', items: { type: 'object', properties: { price: { type: 'number' } } } } },
+      additionalProperties: false,
+    };
+    const { runId } = await withActor(pool, actorA, (tx) => validateInvestigationSchema(tx, queue, { apiId, ownerId: A, trigger: 'rest', outputSchema: schema }));
+    expect(await waitRun(runId)).toMatchObject({ state: 'succeeded', strategy_version: 1 });
+    const compiled = (await eventsOf(runId)).find((e) => e.kind === 'strategy.compiled')!.payload as Record<string, unknown>;
+    expect(compiled).toMatchObject({ ok: false, reason: 'unsupported_field_type', fields: ['offers'] });
+    expect(compiled['cost_usd']).toBeUndefined();
+    // Deux appels du rôle investigate (proposition, puis remise en forme sur le schéma corrigé) : aucun pour la compilation.
+    expect(fake.byRole[MODEL]).toBe(2);
+  });
+
   test('page HTML statique, compilation refusée (valeurs divergentes deux fois) : E4 gardé tel quel, raison dans le récit', async () => {
     withExtract = true;
     const op = (name: string) => ({ op: name, pattern: null, group: null, decimal: null, format: null });
