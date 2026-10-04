@@ -8,6 +8,9 @@
 //     - deux champs aux mêmes valeurs sur au moins 80 % des éléments (le même emplacement relié deux fois) ;
 //     - forme cohérente avec le nom du champ : une date ressemble à une date, une URL à une URL, un e-mail à un e-mail, un
 //       nom n'est pas une URL ;
+//     - plausibilité (banc réel R13) : bornes selon la nature du champ (pièces, chambres, surfaces, prix, année, pourcentage,
+//       note), relations sur un même élément (chambres ≤ pièces, surface habitable ≠ terrain), aberrations statistiques,
+//       ville et type de bien inversés, badge marketing pris pour un champ, référence au préfixe technique ;
 // (b) `fidelitySamples` : 3 éléments échantillonnés (premier, milieu, dernier) avec le fragment de leur source (HTML du bloc,
 //     ou objet JSON de l'enregistrement), pour le juge LLM court (packages/agent, `judgeFidelity`), qui ne voit que des
 //     DONNÉES NON FIABLES encadrées par un jeton ;
@@ -31,14 +34,30 @@ export const FIDELITY_JUDGE_SAMPLES = 3;
 /** Plafond du coût d'un appel du juge (USD), connu avant l'envoi. */
 export const FIDELITY_JUDGE_MAX_USD = 0.01;
 
-export type FidelityIssueCode = 'empty' | 'duplicate' | 'not_a_date' | 'not_a_url' | 'not_an_email' | 'looks_like_url' | 'judge_wrong' | 'judge_missing';
+export type FidelityIssueCode =
+  | 'empty'
+  | 'duplicate'
+  | 'not_a_date'
+  | 'not_a_url'
+  | 'not_an_email'
+  | 'looks_like_url'
+  | 'implausible'
+  | 'outlier'
+  | 'inconsistent'
+  | 'swapped'
+  | 'marketing_label'
+  | 'technical_prefix'
+  | 'judge_wrong'
+  | 'judge_missing';
 export type FidelityIssue = {
   readonly field: string;
   readonly code: FidelityIssueCode;
   /** Part des éléments touchés (0 à 1), quand elle a un sens. */
   readonly share?: number;
-  /** Autre champ (doublon). */
+  /** Autre champ (doublon, incohérence, inversion). */
   readonly other?: string;
+  /** Nature du champ déduite de son nom ou de sa description (bornes appliquées) : code, jamais une valeur du site. */
+  readonly kind?: FieldKind;
 };
 export type FidelityCheck = { readonly ok: boolean; readonly issues: readonly FidelityIssue[] };
 
@@ -78,6 +97,270 @@ export function looksLikeDate(v: unknown): boolean {
 }
 
 const looksLikeUrl = (v: unknown): boolean => typeof v === 'string' && /^(?:https?:\/\/|\/)[^\s]*$/i.test(v.trim());
+
+// ---------------------------------------------------------------------------------------------------- plausibilité
+// Banc réel R13 (liste de biens de prestige, acceptée « saine ») : pièces et chambres lues dans d'autres nombres de la carte,
+// surface du terrain prise pour la surface habitable, référence préfixée par l'identifiant du carrousel, type de bien = badge
+// « Nouveauté », puis ville et type inversés. Règles GÉNÉRIQUES, selon le nom et la description du champ (fr et en), sans
+// dépendre d'un site : bornes par nature de champ, relations entre deux champs d'un même élément, aberrations statistiques
+// (échelle log, écart interquartile), champs inversés, badge marketing, préfixe technique d'une référence.
+
+/** Part d'éléments aux valeurs hors bornes, aberrantes ou incohérentes au-delà de laquelle le champ est refusé. */
+export const FIDELITY_IMPLAUSIBLE_SHARE = 0.05;
+/** Part d'éléments à partir de laquelle un champ texte ressemble à un autre (champs inversés, badge). */
+export const FIDELITY_SWAPPED_SHARE = 0.5;
+/** Distance minimale à la médiane (ordres de grandeur) d'une valeur aberrante : les prix de luxe (3e5 à 5e7) n'en sont pas. */
+const OUTLIER_MIN_DECADES = 2;
+/** Multiple de l'écart interquartile (échelle log10) au-delà duquel une valeur sort des clôtures. */
+const OUTLIER_IQR_FENCE = 3;
+/** Nombre minimal de valeurs pour juger une aberration statistique. */
+const OUTLIER_MIN_VALUES = 8;
+
+/** Nature d'un champ, déduite de son nom (puis de sa description) : code du différentiel, jamais une valeur du site. */
+export type FieldKind = 'rooms' | 'bedrooms' | 'bathrooms' | 'living_area' | 'land_area' | 'outdoor_area' | 'price' | 'year' | 'percent' | 'rating';
+type TextKind = 'location' | 'property_type' | 'reference';
+
+const fold = (s: string): string => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const wordsOf = (s: string): string[] => fold(s.replace(/([a-z])([A-Z])/g, '$1_$2')).split(/[^a-z0-9²]+/).filter((w) => w !== '');
+
+const PRICE_WORDS = ['price', 'prices', 'prix', 'cost', 'cout', 'amount', 'montant', 'tarif', 'fee', 'fees', 'rent', 'loyer', 'salary', 'salaire', 'budget', 'charges'];
+const CHANGE_WORDS = ['change', 'changes', 'variation', 'growth', 'evolution', 'delta', 'diff', 'difference', 'return', 'yield', 'gain', 'loss'];
+const AREA_WORDS = ['surface', 'surfaces', 'area', 'size', 'm2', 'm²', 'sqm', 'sqft', 'superficie', 'footage', 'square'];
+const LAND_WORDS = ['land', 'terrain', 'lot', 'plot', 'parcel', 'parcelle', 'garden', 'jardin', 'grounds'];
+const OUTDOOR_WORDS = ['exterieur', 'exterieure', 'exterieures', 'exterieurs', 'outdoor', 'exterior', 'terrace', 'terrasse', 'balcony', 'balcon', 'outside'];
+const OTHER_UNIT = /\b(?:km|km2|km²|kilometres?|kilometers?|ha|hectares?|acres?|miles?|mi2)\b|km²/;
+const SQFT = /\b(?:sqft|sq ft|ft2|ft²|square (?:feet|foot)|square_feet)\b|\bft\b/;
+const BIG_BUILDING = /\b(?:hotels?|hostels?|resorts?|buildings?|immeubles?|campus|ships?|cruises?|stadiums?)\b/;
+const TOY_SET = /\b(?:set|sets|lego|puzzles?|kits?|toys?|jouets?|jeux?|boites?|box|pack)\b/;
+const COUNT_WORDS = ['count', 'counts', 'nb', 'num', 'number', 'total', 'reviews', 'votes'];
+const NOT_STATISTICAL = ['id', 'ids', 'code', 'codes', 'ref', 'reference', 'zip', 'postal', 'postcode', 'phone', 'tel', 'telephone', 'siren', 'siret', 'ean', 'isbn', 'sku', 'gtin', 'lat', 'lng', 'lon', 'long', 'latitude', 'longitude', 'rank', 'position', 'index', 'order', 'insee', 'page', 'year', 'annee'];
+
+/** Nature numérique d'un champ d'après les mots donnés (ceux du nom, ou à défaut ceux de la description). */
+function kindOfWords(words: readonly string[], text: string): FieldKind | undefined {
+  const w = new Set(words);
+  const has = (list: readonly string[]): boolean => list.some((x) => w.has(x));
+  const change = has(CHANGE_WORDS);
+  if (has(PRICE_WORDS)) return change ? undefined : 'price';
+  if (has(['bedroom', 'bedrooms', 'beds', 'chambre', 'chambres'])) return 'bedrooms';
+  if (has(['bathroom', 'bathrooms', 'bath', 'baths', 'sdb']) || (has(['salle', 'salles']) && has(['bain', 'bains', 'eau']))) return 'bathrooms';
+  if (has(['room', 'rooms']) || (has(['piece', 'pieces']) && !TOY_SET.test(text))) return 'rooms';
+  const area = has(AREA_WORDS);
+  if (has(LAND_WORDS) && (area || has(['terrain', 'garden', 'jardin', 'parcelle'])) && !(w.has('lot') && !area)) return 'land_area';
+  if (has(OUTDOOR_WORDS)) return 'outdoor_area';
+  if (!OTHER_UNIT.test(text)) {
+    const living = has(['living', 'habitable', 'habitation', 'interior', 'interieur', 'floor', 'built']);
+    if ((living && area) || has(['surface', 'surfaces', 'm2', 'm²', 'sqm', 'sqft', 'footage'])) return 'living_area';
+    if (has(['area', 'superficie', 'size']) && /\b(?:living|habitable|floor|interior|property|apartment|flat|house|home|m2|sqm|sqft|square (?:feet|foot|meters?|metres?))\b|m²/.test(text)) return 'living_area';
+  }
+  if (has(['year', 'annee'])) return 'year';
+  if (has(['percent', 'percentage', 'pct', 'pourcentage', 'pourcent'])) return change ? undefined : 'percent';
+  if (has(['rating', 'note', 'stars', 'star', 'etoiles', 'etoile']) && !has(COUNT_WORDS)) return 'rating';
+  return undefined;
+}
+
+/** Nature numérique d'un champ : son nom d'abord, sa description ensuite. */
+export function numericFieldKind(name: string, description = ''): FieldKind | undefined {
+  const text = fold(`${name.replace(/_/g, ' ')} ${description}`);
+  const byName = kindOfWords(wordsOf(name), text);
+  if (byName !== undefined || description.trim() === '') return byName;
+  // La description seule est plus bavarde : une variation ou un compte d'avis ne bornent rien.
+  const d = wordsOf(description);
+  if (d.some((x) => CHANGE_WORDS.includes(x))) return undefined;
+  if (/\bpercent(?:age)?\b|pourcentage|%/.test(text)) return 'percent';
+  return kindOfWords(d, text);
+}
+
+function textFieldKind(name: string): TextKind | undefined {
+  const w = new Set(wordsOf(name));
+  const has = (list: readonly string[]): boolean => list.some((x) => w.has(x));
+  if (has(['url', 'urls', 'link', 'href', 'website', 'email', 'mail', 'phone'])) return undefined;
+  if (has(['ref', 'reference', 'id', 'identifier', 'identifiant', 'sku', 'mandat', 'mandate']) && !has(['postal', 'zip', 'insee', 'country'])) return 'reference';
+  if (has(['type', 'kind', 'category', 'categorie', 'typology', 'typologie', 'nature'])) return 'property_type';
+  if (has(['city', 'ville', 'location', 'localisation', 'locality', 'localite', 'town', 'commune', 'address', 'adresse', 'place', 'lieu', 'region', 'departement', 'department', 'district', 'quartier', 'neighborhood', 'neighbourhood', 'sector', 'secteur', 'country', 'pays', 'zone'])) return 'location';
+  return undefined;
+}
+
+/** Bornes plausibles d'une nature de champ (sqft : surfaces en pieds carrés). */
+function boundsOf(kind: FieldKind, text: string): { min: number; max: number; halfSteps?: boolean; integer?: boolean } | undefined {
+  switch (kind) {
+    case 'rooms':
+    case 'bedrooms':
+    case 'bathrooms':
+      return { min: 0, max: BIG_BUILDING.test(text) ? 10_000 : 100, halfSteps: true };
+    case 'living_area':
+      return SQFT.test(text) ? { min: 50, max: 1_100_000 } : { min: 5, max: 100_000 };
+    case 'land_area':
+    case 'outdoor_area':
+    case 'price':
+      return { min: 0, max: Number.POSITIVE_INFINITY };
+    case 'year':
+      return { min: 1000, max: new Date().getFullYear() + 10, integer: true };
+    case 'percent':
+      return { min: 0, max: 100 };
+    case 'rating':
+      return { min: 0, max: 100 };
+  }
+}
+
+/** Valeur numérique d'un élément : nombre fini, ou texte qui n'est qu'un nombre. */
+function numeric(v: unknown): number | undefined {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
+  if (typeof v === 'string' && /^\s*[+-]?\d+(?:[.,]\d+)?\s*$/.test(v)) return Number(v.trim().replace(',', '.'));
+  return undefined;
+}
+
+function quantile(sorted: readonly number[], q: number): number {
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (pos - lo);
+}
+
+/** Part des valeurs aberrantes : hors des clôtures de l'écart interquartile en log10 ET à 2 ordres de grandeur de la médiane. */
+function outlierShare(values: readonly number[]): number {
+  const logs = values.filter((v) => v > 0).map((v) => Math.log10(v));
+  if (logs.length < OUTLIER_MIN_VALUES) return 0;
+  const sorted = [...logs].sort((a, b) => a - b);
+  const median = quantile(sorted, 0.5);
+  const q1 = quantile(sorted, 0.25);
+  const q3 = quantile(sorted, 0.75);
+  const iqr = q3 - q1;
+  const bad = logs.filter((l) => (l < q1 - OUTLIER_IQR_FENCE * iqr || l > q3 + OUTLIER_IQR_FENCE * iqr) && Math.abs(l - median) >= OUTLIER_MIN_DECADES);
+  return bad.length / values.length;
+}
+
+const PROPERTY_TYPES = new Set([
+  'appartement', 'appartements', 'maison', 'maisons', 'villa', 'villas', 'propriete', 'proprietes', 'loft', 'lofts', 'terrain', 'terrains', 'chalet', 'chalets', 'penthouse', 'penthouses', 'duplex', 'triplex', 'studio', 'studios',
+  'chateau', 'chateaux', 'manoir', 'mas', 'bastide', 'domaine', 'immeuble', 'ferme', 'longere', 'moulin', 'demeure', 'local', 'bureau', 'bureaux', 'commerce', 'parking', 'garage', 'pavillon', 'hotel particulier',
+  'apartment', 'apartments', 'flat', 'flats', 'house', 'houses', 'home', 'homes', 'land', 'plot', 'condo', 'condos', 'townhouse', 'townhouses', 'cottage', 'mansion', 'estate', 'castle', 'farmhouse', 'ranch', 'office', 'bungalow',
+]);
+const MARKETING_BADGES = new Set([
+  'nouveaute', 'nouveautes', 'nouveau', 'nouvelle', 'exclusivite', 'exclusif', 'exclusive', 'exclu', 'coup de coeur', 'vendu', 'vendue', 'sous offre', 'sous compromis', 'prix en baisse', 'baisse de prix', 'a la une', 'loue', 'reserve',
+  'new', 'new listing', 'just listed', 'exclusive listing', 'sold', 'under offer', 'under contract', 'pending', 'price reduced', 'reduced', 'featured', 'hot', 'off market', 'off-market', 'coming soon', 'open house', 'let agreed', 'reserved', 'top', 'premium',
+]);
+const plain = (v: unknown): string => (typeof v === 'string' ? fold(v).replace(/[^a-z0-9'\- ]+/g, ' ').replace(/\s+/g, ' ').trim() : '');
+function looksLikePropertyType(v: unknown): boolean {
+  const s = plain(v);
+  const words = s.split(' ');
+  if (s === '' || words.length > 5) return false;
+  return PROPERTY_TYPES.has(words[0]!) || PROPERTY_TYPES.has(words.slice(0, 2).join(' '));
+}
+const looksLikeBadge = (v: unknown): boolean => MARKETING_BADGES.has(plain(v));
+const TECH_PREFIX = /^(carousel|slider|slide|swiper|gallery|lightbox|property|listing|item|card|product|photo|image|img|thumb|thumbnail)[-_:]+(.{3,})$/i;
+const STRONG_PREFIX = new Set(['carousel', 'slider', 'slide', 'swiper', 'gallery', 'lightbox']);
+
+/** Contrôles de plausibilité (bornes, relations, aberrations, inversions, badge, préfixe) : problèmes trouvés. */
+function plausibilityIssues(records: readonly Record<string, unknown>[], fields: readonly { name: string; type: string; description: string }[]): FidelityIssue[] {
+  const issues: FidelityIssue[] = [];
+  const flagged = new Set<string>();
+  const kinds = new Map<string, { kind: FieldKind; text: string }>();
+  // (1) bornes par nature, puis aberrations statistiques des autres champs numériques.
+  for (const f of fields) {
+    const values = records.map((r) => numeric(r[f.name])).filter((v): v is number => v !== undefined);
+    if (values.length === 0) continue;
+    const text = fold(`${f.name.replace(/_/g, ' ')} ${f.description}`);
+    const kind = numericFieldKind(f.name, f.description);
+    if (kind !== undefined) {
+      kinds.set(f.name, { kind, text });
+      const b = boundsOf(kind, text)!;
+      const bad = values.filter((v) => v < b.min || v > b.max || (b.halfSteps === true && !Number.isInteger(v * 2)) || (b.integer === true && !Number.isInteger(v))).length / values.length;
+      if (bad > FIDELITY_IMPLAUSIBLE_SHARE) {
+        issues.push({ field: f.name, code: 'implausible', share: round(bad), kind });
+        flagged.add(f.name);
+        continue;
+      }
+    }
+    if (wordsOf(f.name).some((w) => NOT_STATISTICAL.includes(w))) continue;
+    const out = outlierShare(values);
+    if (out > FIDELITY_IMPLAUSIBLE_SHARE) {
+      issues.push({ field: f.name, code: 'outlier', share: round(out) });
+      flagged.add(f.name);
+    }
+  }
+  // (2) relations sur un même élément : chambres ≤ pièces ; surface habitable ni égale ni toujours supérieure au terrain.
+  // Chambres et pièces hors bornes ne se comparent pas ; une surface égale au terrain se dit même hors bornes (elle nomme la cause).
+  const first = (kind: FieldKind, any = false): string | undefined => [...kinds].find(([name, k]) => k.kind === kind && (any || !flagged.has(name)))?.[0];
+  const pairs = (a: string, b: string) => records.map((r) => [numeric(r[a]), numeric(r[b])] as const).filter((p): p is readonly [number, number] => p[0] !== undefined && p[1] !== undefined);
+  const bedrooms = first('bedrooms');
+  const rooms = first('rooms');
+  if (bedrooms !== undefined && rooms !== undefined) {
+    const both = pairs(bedrooms, rooms);
+    const bad = both.length >= 3 ? both.filter(([b, r]) => b > r).length / both.length : 0;
+    if (bad > FIDELITY_IMPLAUSIBLE_SHARE) issues.push({ field: bedrooms, code: 'inconsistent', share: round(bad), other: rooms, kind: 'bedrooms' });
+  }
+  const living = first('living_area', true);
+  for (const other of [first('land_area', true), first('outdoor_area', true)]) {
+    if (living === undefined || other === undefined) continue;
+    const both = pairs(living, other).filter(([a, b]) => a > 0 && b > 0);
+    if (both.length < 3) continue;
+    const equal = both.filter(([a, b]) => a === b).length / both.length;
+    const above = both.filter(([a, b]) => a >= b).length / both.length;
+    const land = kinds.get(other)?.kind === 'land_area';
+    if (equal >= FIDELITY_DUPLICATE_SHARE || (land && above >= 0.9)) {
+      issues.push({ field: living, code: 'inconsistent', share: round(equal >= FIDELITY_DUPLICATE_SHARE ? equal : above), other, kind: 'living_area' });
+      break;
+    }
+  }
+  // (3) champs texte : ville / type inversés, badge marketing, préfixe technique d'une référence.
+  const texts = fields.map((f) => ({ ...f, kind: textFieldKind(f.name) })).filter((f) => f.kind !== undefined);
+  const filledText = (name: string) => records.map((r) => r[name]).filter((v): v is string => typeof v === 'string' && v.trim() !== '');
+  const shareOf = (values: readonly string[], pred: (v: string) => boolean) => (values.length === 0 ? 0 : values.filter(pred).length / values.length);
+  const locations = texts.filter((f) => f.kind === 'location').map((f) => f.name);
+  const types = texts.filter((f) => f.kind === 'property_type').map((f) => f.name);
+  const swapped = new Set<string>();
+  for (const loc of locations) {
+    const s = shareOf(filledText(loc), looksLikePropertyType);
+    if (s < FIDELITY_SWAPPED_SHARE) continue;
+    // Le champ de type qui porte un badge n'est pas l'autre moitié de l'inversion : il reçoit « marketing_label » plus bas.
+    const counterpart = types.find((t) => !swapped.has(t) && filledText(t).length > 0 && shareOf(filledText(t), looksLikePropertyType) < FIDELITY_SWAPPED_SHARE && shareOf(filledText(t), looksLikeBadge) < FIDELITY_SWAPPED_SHARE);
+    swapped.add(loc);
+    issues.push({ field: loc, code: 'swapped', share: round(s), ...(counterpart === undefined ? {} : { other: counterpart }) });
+    if (counterpart !== undefined) {
+      swapped.add(counterpart);
+      issues.push({ field: counterpart, code: 'swapped', share: round(shareOf(filledText(counterpart), (v) => !looksLikePropertyType(v))), other: loc });
+    }
+  }
+  for (const t of types) {
+    if (swapped.has(t)) continue;
+    const values = filledText(t);
+    if (values.length < 3 || shareOf(values, looksLikePropertyType) >= FIDELITY_SWAPPED_SHARE) continue;
+    for (const loc of locations) {
+      if (loc === t || swapped.has(loc)) continue;
+      const places = filledText(loc).map((v) => ` ${plain(v).replace(/[-']/g, ' ')} `);
+      const inPlaces = (v: string): boolean => {
+        const p = plain(v).replace(/[-']/g, ' ');
+        return p.length >= 3 && !looksLikeBadge(v) && places.some((l) => l.includes(` ${p} `));
+      };
+      const s = shareOf(values, inPlaces);
+      if (s >= FIDELITY_SWAPPED_SHARE) {
+        issues.push({ field: t, code: 'swapped', share: round(s), other: loc });
+        swapped.add(t);
+        break;
+      }
+    }
+  }
+  for (const f of texts) {
+    if (f.kind === 'reference' || swapped.has(f.name)) continue;
+    const values = filledText(f.name);
+    const s = values.length < 3 ? 0 : shareOf(values, looksLikeBadge);
+    if (s >= FIDELITY_SWAPPED_SHARE) issues.push({ field: f.name, code: 'marketing_label', share: round(s) });
+  }
+  const urlFields = fields.filter((f) => f.type === 'string' && (URL_NAME.test(f.name.toLowerCase()) || shareOf(filledText(f.name), looksLikeUrl) >= 0.5)).map((f) => f.name);
+  for (const f of texts.filter((x) => x.kind === 'reference')) {
+    const filled = records.filter((r) => typeof r[f.name] === 'string' && (r[f.name] as string).trim() !== '');
+    if (filled.length < 3) continue;
+    const bad = filled.filter((r) => {
+      const v = (r[f.name] as string).trim();
+      const m = TECH_PREFIX.exec(v);
+      if (m === null) return false;
+      const urls = urlFields.map((u) => (typeof r[u] === 'string' ? (r[u] as string).toLowerCase() : '')).filter((u) => u !== '');
+      if (urls.some((u) => u.includes(v.toLowerCase()))) return false;
+      return STRONG_PREFIX.has(m[1]!.toLowerCase()) || urls.some((u) => u.includes(m[2]!.toLowerCase()));
+    }).length / filled.length;
+    if (bad > FIDELITY_MAX_EMPTY_SHARE) issues.push({ field: f.name, code: 'technical_prefix', share: round(bad) });
+  }
+  return issues;
+}
 
 /** Emplacement du gisement DOM relié à un champ de la stratégie (même sélecteur, même attribut, même ancêtre). */
 function slotOfField(candidate: DataCandidate | null | undefined, field: FieldSpec | undefined) {
@@ -166,6 +449,7 @@ export function fidelityCheck(input: {
       }
     }
   }
+  issues.push(...plausibilityIssues(records, fields));
   return { ok: issues.length === 0, issues };
 }
 
@@ -275,6 +559,21 @@ export function fidelitySamples(spec: DeclarativeSpec, body: string, outputSchem
 
 // ---------------------------------------------------------------------------------------------------- différentiel
 
+const pct = (i: FidelityIssue): number => Math.round((i.share ?? 1) * 100);
+/** Bornes dites au modèle, par nature de champ (texte fixe du code). */
+const RANGES: Partial<Record<FieldKind, string>> = {
+  rooms: 'a count of rooms is a whole number from 0 to 100',
+  bedrooms: 'a count of bedrooms is a whole number from 0 to 100',
+  bathrooms: 'a count of bathrooms is a whole number from 0 to 100',
+  living_area: 'a living area is between 5 and 100000 square meters',
+  land_area: 'an area is never negative',
+  outdoor_area: 'an area is never negative',
+  price: 'a price is never negative',
+  year: 'a year is between 1000 and ten years from now',
+  percent: 'a percentage is between 0 and 100',
+  rating: 'a rating is between 0 and 100',
+};
+
 const MESSAGES: Record<FidelityIssueCode, (i: FidelityIssue) => string> = {
   empty: (i) => `empty on ${Math.round((i.share ?? 1) * 100)}% of records although the page shows it: map it to the slot or key that holds it`,
   duplicate: (i) => `same values as "${i.other}" on ${Math.round((i.share ?? 1) * 100)}% of records: one of the two reads the wrong slot`,
@@ -282,6 +581,18 @@ const MESSAGES: Record<FidelityIssueCode, (i: FidelityIssue) => string> = {
   not_a_url: (i) => `${Math.round((i.share ?? 1) * 100)}% of values are not URLs: wrong slot or key`,
   not_an_email: (i) => `${Math.round((i.share ?? 1) * 100)}% of values are not e-mail addresses: wrong slot or key`,
   looks_like_url: (i) => `${Math.round((i.share ?? 1) * 100)}% of values are URLs, not a name: wrong slot or key`,
+  implausible: (i) => `${pct(i)}% of values are outside the plausible range (${(i.kind === undefined ? undefined : RANGES[i.kind]) ?? 'for this kind of field'}): wrong slot, it reads another number of the record`,
+  outlier: (i) => `${pct(i)}% of values are at least two orders of magnitude away from the values of the other records: wrong slot or key for those records`,
+  inconsistent: (i) =>
+    i.kind === 'bedrooms'
+      ? `greater than "${i.other}" on ${pct(i)}% of records (bedrooms never outnumber rooms): one of the two reads another number of the record`
+      : `equal to or greater than "${i.other}" on ${pct(i)}% of records: the living area reads the land or outdoor area; map the slot of the living area`,
+  swapped: (i) =>
+    i.other === undefined
+      ? `${pct(i)}% of values look like a property type, not a place: wrong slot or key`
+      : `values look like what "${i.other}" should hold on ${pct(i)}% of records: the two fields read each other's slot, exchange their paths`,
+  marketing_label: (i) => `${pct(i)}% of values are a marketing badge of the card (such as new, exclusive or sold), not this field: map the slot that holds the field, or leave it out`,
+  technical_prefix: (i) => `${pct(i)}% of values carry a technical prefix of the page markup (a carousel, slide or card element id) before the code: map a slot that holds the bare code`,
   judge_wrong: () => 'a reviewer compared the values with the source blocks and found them wrong: wrong slot or key',
   judge_missing: () => 'a reviewer found the value in the source blocks while the extraction left it empty',
 };
