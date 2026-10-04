@@ -907,7 +907,7 @@
     "not_compilable": "Aucune stratégie rejouable sans agent. Le mode « agent instruit » existe, avec un coût à chaque run.",
     "investigation_budget_exhausted": "Le budget d'enquête est dépensé sans stratégie conforme : monte budget_usd pour ré-enquêter.",
     "investigation_timeout": "La durée d'enquête est écoulée sans stratégie conforme : monte timeout_s pour ré-enquêter.",
-    "trial_cost_over_cap": "Un essai coûte plus que le plafond par run de l'API (max_cost_usd) : monte max_cost_usd pour ré-enquêter.",
+    "trial_cost_over_cap": "Un essai coûte plus que le plafond par run fixé sur l'API (max_cost_usd) : relève-le ou retire-le pour ré-enquêter.",
     "no_conformant_strategy": "Aucun essai n'a rendu d'items conformes : la chronologie de l'enquête donne chaque essai et son motif.",
     "investigation_error": "L'enquête s'est arrêtée sur une erreur de mise en route : le détail du run la nomme.",
     "session_step_broken": "Une étape a cassé sur une page connectée ; aucun agent n'y agit seul.",
@@ -1014,7 +1014,9 @@
     "sha_mismatch": "Les étapes ont changé depuis leur affichage. Relis-les avant de confirmer.",
     "instructed_steps_unconfirmed": "Confirme d'abord les étapes instruites : l'agent instruit reste désactivé.",
     "compilable": "Une stratégie rejouable sans agent existe : l'agent instruit reste désactivé.",
-    "no_instructed_steps": "Cette API n'a pas d'étapes instruites : l'agent instruit reste désactivé."
+    "no_instructed_steps": "Cette API n'a pas d'étapes instruites : l'agent instruit reste désactivé.",
+    "budget_exceeded": "Le budget du jour de ton compte est atteint (coûts IA et proxy). Il se réinitialise à minuit UTC ; un admin peut le relever.",
+    "cost_cap_exceeded": "Ce plafond dépasse celui de l’instance par run : choisis un montant plus bas, ou laisse vide."
   },
   "actions": {
     "launch": "Lancer",
@@ -2049,6 +2051,17 @@
       "tomorrow": "demain",
       "on": "le {date}"
     }
+  },
+  "costCap": {
+    "title": "Coût max par run",
+    "label": "Coût max par run (USD, facultatif)",
+    "hint": "Vide : aucun plafond par run. Le budget du jour de ton compte reste la limite.",
+    "none": "Aucun plafond par run : le budget du jour du compte reste la limite.",
+    "current": "Plafond actuel : {cost} par run.",
+    "save": "Enregistrer",
+    "clear": "Retirer le plafond",
+    "saved": "Enregistré.",
+    "invalid": "Indique un montant positif en dollars, ou laisse vide pour aucun plafond."
   },
   "quality": {
     "title": "Fiche qualité du run",
