@@ -146,9 +146,9 @@ describe('M5 : récit rendu à la lecture, événements en codes seulement', () 
     expect(narrativeLine(renderer, refused, 'fr')).toContain('le site refuse l\'accès');
     expect(narrativeLine(renderer, refused, 'en')).toContain('the site refuses access');
     // R09 : URL de départ redirigée de façon permanente vers un autre site ; le récit dit d'où vient le domaine adopté.
-    const moved = { kind: 'investigation.started', payload: { domain: 'luma.example', url: 'https://luma.example/paris', redirected_from: 'https://lu.example/paris' } };
-    expect(narrativeLine(renderer, moved, 'fr')).toBe('Enquête sur luma.example lancée (lu.example y redirige de façon permanente).');
-    expect(narrativeLine(renderer, moved, 'en')).toBe('Investigation of luma.example started (lu.example permanently redirects there).');
+    const moved = { kind: 'access_report', payload: { view: { signal: 'allowed' }, verdict: { proceed: true }, ms: 200, cost_usd: 0, domain: 'luma.example', url: 'https://luma.example/paris', redirected_from: 'https://lu.example/paris' } };
+    expect(narrativeLine(renderer, moved, 'fr')).toMatch(/^lu\.example redirige de façon permanente vers luma\.example : l'API utilise désormais luma\.example\. Rapport d'accès : page sondée/);
+    expect(narrativeLine(renderer, moved, 'en')).toMatch(/^lu\.example permanently redirects to luma\.example: the API now uses luma\.example\. Access report: page probed/);
     const signals = { kind: 'access_report', payload: { view: { signal: 'review' }, verdict: { proceed: true }, ms: 120, cost_usd: 0 } };
     expect(narrativeLine(renderer, signals, 'en')).toContain('usage signals');
     expect(alice[3]).toContain('1 source de données trouvée');

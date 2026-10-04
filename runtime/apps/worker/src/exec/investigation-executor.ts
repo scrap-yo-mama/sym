@@ -42,6 +42,7 @@
 // dans un prompt.
 import {
   buildCatalogDossier,
+  E4_SAMPLE_INPUT_CHARS,
   DslError,
   validateAgentFetchSpec,
   computeSignature,
@@ -677,10 +678,32 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         userAgent,
         ...(from === null ? {} : { from }),
       };
-      // Redirection permanente de l'URL de départ vers un autre site (banc R09, `lu.ma` → `luma.com`) : l'hôte final devient
-      // le domaine de l'API, si la garde SSRF l'admet ; sa mémoire de refus est relue avant toute autre requête.
-      if (state.imported === undefined) {
-        const moved = await permanentRedirectTarget({ sessionBase, guard: deps.guard, url: pageUrl, ceiling, signal, ...(pacer === undefined ? {} : { pacer }) });
+      ports = serverAccessPorts({ sessionBase, ceiling }, host, scope, pacer);
+    }
+    /** Arrêt du tunnel (extension hors ligne, défi, site non connecté) : il prime sur l'échec vu par l'étape. */
+    const tunnelOutcome = async (at: string): Promise<RunResult | null> => {
+      const t = ports.tunnel;
+      if (t === null) return null;
+      if (t.stop === 'tunnel_offline') return finishStopped('tunnel_offline', 'tunnel_offline', at);
+      if (t.stop === 'challenge_in_tunnel') return finishFailed({ failure_class: 'blocked_by_protection', retryable: false, detail: 'challenge_in_tunnel' }, at);
+      if (t.needsUser) return finishFailed({ failure_class: 'auth_required', retryable: false, detail: 'site_not_connected' }, at);
+      return null;
+    };
+
+    try {
+      await event(EV.started, { phase, url: narrativeUrl(pageUrl), domain: host, network: ports.mode === 'tunnel' ? 'tunnel' : first?.mode, budget: budgetView() });
+
+      // --- 0. Rapport d'accès -------------------------------------------------------------------------------------
+      // En tunnel, la sonde part du Chrome de l'utilisateur : sa langue réelle, non relevée (21 § 6.4, § 6.6).
+      let report: AccessReport = await buildAccessReport({ url: pageUrl, probe: ports.probe, requestsFrom: ports.mode === 'tunnel' ? 'user_browser' : 'engine', ...(pacer === undefined ? {} : { pacer }), signal, now });
+      const stopped0 = await tunnelOutcome('access_check');
+      if (stopped0 !== null) return stopped0;
+      // Page qui sort du site par redirection (banc R09 : `lu.ma/paris` répond 301 vers `luma.com/paris`) : si la redirection
+      // est PERMANENTE et que la garde SSRF admet l'hôte final, il devient le domaine de l'API (essais, stratégie, cadence),
+      // sa mémoire de refus est relue, et l'étape 0 est refaite sur l'URL finale ; le récit le dit (`redirected_from`).
+      const server0 = ports.server;
+      if (!report.verdict.proceed && report.verdict.failure?.detail === 'domain_not_allowed' && server0 !== null && state.imported === undefined) {
+        const moved = await permanentRedirectTarget({ sessionBase: server0.sessionBase, guard: deps.guard, url: pageUrl, ceiling: server0.ceiling, signal, ...(pacer === undefined ? {} : { pacer }) });
         if (moved.proxyUsd > 0) {
           await charge(ctx, moved.proxyUsd);
           spent = round6(spent + moved.proxyUsd);
@@ -709,46 +732,19 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               return { state: 'failed', failure_class: 'forbidden', retryable: false, error_detail: 'prior_refusal' };
             }
           }
+          // Session de l'étape 0 rouverte sur le domaine adopté (coût de la première imputé avant sa fermeture).
+          await charge(ctx, ports.proxyUsd());
+          spent = round6(spent + ports.proxyUsd());
+          await ports.close();
+          ports = serverAccessPorts(server0, host, scope, pacer);
+          report = await buildAccessReport({ url: pageUrl, probe: ports.probe, requestsFrom: 'engine', ...(pacer === undefined ? {} : { pacer }), signal, now });
         }
       }
-      const session: NetworkSession = openNetworkSession({
-        ...sessionBase,
-        allowedHosts: [host],
-        allowedHostSuffixes: [scope],
-        costCeiling: { maxUsd: ceiling },
-      });
-      ports = {
-        mode: 'server',
-        probe: sessionAccessProbe(session),
-        reconProbe: sessionAccessProbe(session, STATIC_MAX_BYTES),
-        pacer,
-        proxyUsd: () => session.usage().costUsd,
-        tunnel: null,
-        server: { sessionBase, ceiling },
-        close: async () => {
-          await session.close().catch(() => undefined);
-        },
-      };
-    }
-    /** Arrêt du tunnel (extension hors ligne, défi, site non connecté) : il prime sur l'échec vu par l'étape. */
-    const tunnelOutcome = async (at: string): Promise<RunResult | null> => {
-      const t = ports.tunnel;
-      if (t === null) return null;
-      if (t.stop === 'tunnel_offline') return finishStopped('tunnel_offline', 'tunnel_offline', at);
-      if (t.stop === 'challenge_in_tunnel') return finishFailed({ failure_class: 'blocked_by_protection', retryable: false, detail: 'challenge_in_tunnel' }, at);
-      if (t.needsUser) return finishFailed({ failure_class: 'auth_required', retryable: false, detail: 'site_not_connected' }, at);
-      return null;
-    };
-
-    try {
-      await event(EV.started, { phase, url: narrativeUrl(pageUrl), domain: host, ...(redirectedFrom === null ? {} : { redirected_from: narrativeUrl(redirectedFrom) }), network: ports.mode === 'tunnel' ? 'tunnel' : first?.mode, budget: budgetView() });
-
-      // --- 0. Rapport d'accès -------------------------------------------------------------------------------------
-      // En tunnel, la sonde part du Chrome de l'utilisateur : sa langue réelle, non relevée (21 § 6.4, § 6.6).
-      const report: AccessReport = await buildAccessReport({ url: pageUrl, probe: ports.probe, requestsFrom: ports.mode === 'tunnel' ? 'user_browser' : 'engine', ...(pacer === undefined ? {} : { pacer }), signal, now });
-      const stopped0 = await tunnelOutcome('access_check');
-      if (stopped0 !== null) return stopped0;
-      const accessWritten = await recordAccessReport(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, payload: accessReportEventPayload(report) }, { onRenderedSentence: 'scrub' });
+      const accessWritten = await recordAccessReport(
+        deps.pool,
+        { runId: ctx.runId, ownerId: ctx.ownerId, payload: { ...accessReportEventPayload(report), ...(redirectedFrom === null ? {} : { redirected_from: narrativeUrl(redirectedFrom), url: narrativeUrl(pageUrl), domain: host }) } },
+        { onRenderedSentence: 'scrub' },
+      );
       await codesOnlyRefused('access_report', accessWritten.scrubbed ?? []);
       if (!report.verdict.proceed) {
         await charge(ctx, ports.proxyUsd());
@@ -1172,6 +1168,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             pageUrl: e4.spec.request.url,
             allowedHosts: e4.spec.request.allowed_hosts,
             items: page.items,
+            // Essai en échantillon (banc R06, R08) : les éléments sont les premiers de la page ; la recette doit les rendre en tête.
+            ...(e4.spec.limits.sample_items === undefined ? {} : { sampled: true }),
             maxInputChars: e4.spec.limits.max_input_chars,
             price,
             signal,
@@ -1206,8 +1204,12 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       };
 
 
-      /** Essai E4 compilé (et, si la page en a une, paginé et vérifié en page 2) ; `null` : compilation refusée (E4 gardé). */
-      type Promoted = { spec: unknown; estCostUsd: number | null; paginated: boolean; records: Record<string, unknown>[] | null };
+      /**
+       * Essai E4 compilé : paginé et vérifié en page 2 si la page en a une, sinon vérifié sur sa page ; `verified` : une
+       * exécution E1 de la compilée, sans LLM, a été conforme (elle tient lieu des exécutions LLM suivantes, banc R06 et R08).
+       * `null` : compilation refusée (E4 gardé).
+       */
+      type Promoted = { spec: unknown; estCostUsd: number | null; paginated: boolean; records: Record<string, unknown>[] | null; verified: boolean };
       const promotedFor = new Map<TrialPair, Promoted | null>();
       /** Coût des compilations et vérifications de page 2 faites PENDANT les essais (hors exécutions des couples). */
       let promotionUsd = 0;
@@ -1216,9 +1218,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
        * Essai E4 conforme sur la page 1 (constat Janssens : 10 éléments corrects, jetés en `minimal_content` puis escalade
        * vers le navigateur) : compilé en déclaratif `html` (sans LLM au rejeu), augmenté de la pagination détectée par le
        * CODE sur la page de l'essai (`/page/N/`, `?page=N`, `rel=next`…, même hôte), puis vérifié par UNE exécution E1 de la
-       * stratégie compilée sur 2 pages, sous toutes les gardes d'un run : page 2 atteinte (ou liste finie dès la page 1),
-       * sortie conforme au schéma (INV1) et contenu minimal jugé sur les deux pages. Réussi, la stratégie compilée paginée sera
-       * retenue ; sinon la compilée d'une page (si la compilation a réussi) ou E4.
+       * stratégie compilée (2 pages si elle pagine, sinon sa page), sous toutes les gardes d'un run : page 2 atteinte (ou liste
+       * finie dès la page 1), au moins autant d'éléments que l'essai E4 (un échantillon des premiers, banc R06 et R08), sortie
+       * conforme au schéma (INV1) et contenu minimal. Réussi, la stratégie compilée sera retenue (paginée ou non) ; sinon la
+       * compilée d'une page (si la compilation a réussi) ou E4.
        */
       const promote = async (pair: TrialPair): Promise<Promoted | null> => {
         if (promotedFor.has(pair)) return promotedFor.get(pair)!;
@@ -1231,50 +1234,52 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           return null;
         }
         const page = pageFor.get(pair)!;
-        const single: Promoted = { spec: compiled.spec, estCostUsd: compiled.estCostUsd, paginated: false, records: null };
+        const single: Promoted = { spec: compiled.spec, estCostUsd: compiled.estCostUsd, paginated: false, records: null, verified: false };
         const report = async (pagination: Record<string, unknown> | null) => {
           await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: true, proposals: compiled.proposals, records: compiled.records, ratio: compiled.ratio, cost_usd: compiled.costUsd, est_cost_usd: compiled.estCostUsd, ...(pagination === null ? {} : { pagination }), budget: budgetView() });
           await ctx.log('info', 'html_strategy_compiled', { proposals: compiled.proposals, records: compiled.records, ratio: compiled.ratio, llm_usd: compiled.costUsd, ...(pagination === null ? {} : { pagination: pagination['type'], verified: pagination['verified'] }) });
         };
         const detected = detectHtmlPagination(page.html, page.url, page.items.length);
         const paginatedSpec = detected === null ? null : paginateHtmlSpec(compiled.spec, detected, outputSchema);
-        if (detected === null || paginatedSpec === null) {
-          await report(detected === null ? null : { type: detected.type, verified: false, reason: 'not_applicable' });
-          promotedFor.set(pair, single);
-          return single;
-        }
+        const paginates = detected !== null && paginatedSpec !== null;
+        const view = (extra: Record<string, unknown>): Record<string, unknown> | null =>
+          detected === null ? null : { type: detected.type, ...(paginates ? extra : { verified: false, reason: 'not_applicable' }) };
         if (liveTrialSpent() >= budgetUsd || timedOut()) {
-          await report({ type: detected.type, verified: false, reason: timedOut() ? 'investigation_timeout_s' : 'investigation_budget_usd' });
+          await report(view({ verified: false, reason: timedOut() ? 'investigation_timeout_s' : 'investigation_budget_usd' }));
           promotedFor.set(pair, single);
           return single;
         }
-        // Page 2 : une exécution E1 de la stratégie compilée, 2 pages, plafond = le plus petit de max_cost_usd et du budget restant.
+        // Une exécution E1 de la stratégie compilée (2 pages si elle pagine), plafond = le plus petit de max_cost_usd et du
+        // budget restant ; aucun LLM.
+        const checkSpec = paginates ? paginatedSpec : compiled.spec;
         const ceilingUsd = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - liveTrialSpent()));
         const checkTarget: RunTarget = {
           api: { ...target.api, outputSchema, maxCostUsd: ceilingUsd },
-          strategy: { version: 0, execution: 'fetch', network: entry.network, spec: paginatedSpec, scriptRef: null, estCostUsd: compiled.estCostUsd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
+          strategy: { version: 0, execution: 'fetch', network: entry.network, spec: checkSpec, scriptRef: null, estCostUsd: compiled.estCostUsd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
         };
         let checked: StrategyTrial | null = null;
         try {
           const timeout = AbortSignal.timeout(Math.max(1, deadlineMs - now()));
-          checked = await deps.strategy.trial({ ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: { max_pages: 2 } }, checkTarget, checkTarget.strategy!);
+          checked = await deps.strategy.trial({ ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: paginates ? { max_pages: 2 } : {} }, checkTarget, checkTarget.strategy!);
         } catch (error) {
           if (ctx.signal.aborted) throw error;
-          logger.warn(trialErrorLog(ctx.runId, 'fetch', error), 'enquête : vérification de page 2 en erreur');
+          logger.warn(trialErrorLog(ctx.runId, 'fetch', error), 'enquête : vérification de la stratégie compilée en erreur');
         }
         if (checked !== null) promotionUsd = round6(promotionUsd + checked.proxyUsd + (checked.llmUsd ?? 0));
         const r = checked?.result;
         const natural = r?.ok === true && r.pages === 1 && (r.stop === 'records_empty' || r.stop === 'no_next' || r.stop === 'no_pagination');
         const content = r?.ok === true ? minimalContentCheck([r.records], outputSchema) : null;
-        const verified = r?.ok === true && r.records.length > 0 && (r.pages >= 2 || natural) && content?.ok === true;
-        await report({
-          type: detected.type,
-          verified,
-          pages: r?.pages ?? 0,
-          items: r?.ok === true ? r.records.length : 0,
-          ...(verified ? {} : { reason: r === undefined ? 'trial_error' : !r.ok ? (r.failure.detail ?? r.failure.failure_class) : content?.ok === false ? content.detail : 'pagination_page2' }),
-        });
-        const promoted: Promoted = verified && r?.ok === true ? { spec: paginatedSpec, estCostUsd: compiled.estCostUsd, paginated: true, records: r.records } : single;
+        const enough = r?.ok === true && r.records.length > 0 && r.records.length >= page.items.length;
+        const verified = r?.ok === true && enough && (!paginates || r.pages >= 2 || natural) && content?.ok === true;
+        await report(
+          view({
+            verified,
+            pages: r?.pages ?? 0,
+            items: r?.ok === true ? r.records.length : 0,
+            ...(verified ? {} : { reason: r === undefined ? 'trial_error' : !r.ok ? (r.failure.detail ?? r.failure.failure_class) : content?.ok === false ? content.detail : !enough ? 'count' : 'pagination_page2' }),
+          }),
+        );
+        const promoted: Promoted = verified && r?.ok === true ? { spec: checkSpec, estCostUsd: compiled.estCostUsd, paginated: paginates, records: r.records, verified: true } : single;
         promotedFor.set(pair, promoted);
         return promoted;
       };
@@ -1393,12 +1398,14 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
                 budget: budgetView(),
               });
             },
+            // Essai E4 en échantillon conforme dès sa 1re exécution : compilé et vérifié sans LLM, il n'en paie pas d'autre.
+            acceptEarly: async (pair) => entries.get(pair)?.execution === 'agent_fetch' && pageFor.has(pair) && (await promote(pair))?.verified === true,
             contentCheck: async (pair) => {
               const check = minimalContentCheck(sampleOutputs.get(pair) ?? [], outputSchema);
-              // Essai E4 aux N exécutions conformes : compilé en `html`, paginé et vérifié en page 2 avant d'être jugé (Janssens).
+              // Essai E4 conforme : compilé en `html`, paginé et vérifié en page 2 (ou sur sa page) avant d'être jugé (Janssens).
               if (entries.get(pair)?.execution === 'agent_fetch' && pageFor.has(pair)) {
                 const promoted = await promote(pair);
-                if (promoted?.paginated === true) return null;
+                if (promoted?.verified === true) return null;
               }
               return check.ok ? null : { failure_class: check.failure_class, detail: check.detail };
             },
@@ -1443,7 +1450,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               const compiled = await compileHtml(pair, entry, () => spent, (usd) => {
                 spent = round6(spent + usd);
               });
-              html = compiled === null ? null : { spec: compiled.spec, estCostUsd: compiled.estCostUsd, paginated: false, records: null };
+              html = compiled === null ? null : { spec: compiled.spec, estCostUsd: compiled.estCostUsd, paginated: false, records: null, verified: false };
               if (compiled !== null) {
                 await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: true, proposals: compiled.proposals, records: compiled.records, ratio: compiled.ratio, cost_usd: compiled.costUsd, est_cost_usd: compiled.estCostUsd, budget: budgetView() });
                 await ctx.log('info', 'html_strategy_compiled', { proposals: compiled.proposals, records: compiled.records, ratio: compiled.ratio, llm_usd: compiled.costUsd });
@@ -1605,8 +1612,8 @@ function previewCouples(input: {
   const usable = input.candidates.filter((c) => c.unsupported === undefined);
   const bytes = usable.length === 0 ? 0 : Math.min(...usable.map((c) => c.bytes));
   const out: TrialPair[] = [];
-  const add = (execution: TrialPair['execution'], network: PlanNetwork, b: number, llm: TokenPrice | null) =>
-    out.push({ execution, network: network.mode, source: '', est_cost_usd: estimateCostUsd(execution, network.mode, { bytes: b, pages: 1, perGbUsd: network.perGbUsd, llmPrice: llm }) });
+  const add = (execution: TrialPair['execution'], network: PlanNetwork, b: number, llm: TokenPrice | null, tokensIn?: number) =>
+    out.push({ execution, network: network.mode, source: '', est_cost_usd: estimateCostUsd(execution, network.mode, { bytes: b, pages: 1, perGbUsd: network.perGbUsd, llmPrice: llm, ...(tokensIn === undefined ? {} : { tokensIn }) }) });
   for (const network of input.networks) {
     const tunnel = network.mode === 'tunnel';
     if (usable.length > 0) {
@@ -1616,7 +1623,7 @@ function previewCouples(input: {
         add('playwright', network, Math.max(input.totalBytes, bytes), null);
       }
     }
-    if (input.agentic.extract !== undefined && !tunnel) add('agent_fetch', network, input.documentBytes, input.agentic.extract);
+    if (input.agentic.extract !== undefined && !tunnel) add('agent_fetch', network, input.documentBytes, input.agentic.extract, Math.ceil(Math.min(input.documentBytes, E4_SAMPLE_INPUT_CHARS) / 4));
     if (input.agentic.agent !== undefined && input.browser && !tunnel) add('agent', network, input.totalBytes * 3, input.agentic.agent);
   }
   return orderTrials(out).map((p) => ({ execution: p.execution, network: p.network, est_cost_usd: p.est_cost_usd }));
@@ -1671,6 +1678,28 @@ async function charge(ctx: RunCtx, proxyUsd: number, llmUsd: number | null = 0, 
   if (ctx.chargeCost === undefined) return;
   if (proxyUsd === 0 && llmUsd === 0 && tokens === undefined) return;
   await ctx.chargeCost({ proxy_usd: round6(proxyUsd), llm_usd: llmUsd, ...(tokens === undefined ? {} : { tokens }) });
+}
+
+/** Ports de l'étape 0 et de la reconnaissance par le serveur : session réseau de l'enquête sur les domaines de l'API. */
+function serverAccessPorts(server: { readonly sessionBase: SessionBase; readonly ceiling: number }, host: string, scope: string, pacer: RequestPacer | undefined): AccessPorts {
+  const session: NetworkSession = openNetworkSession({
+    ...server.sessionBase,
+    allowedHosts: [host],
+    allowedHostSuffixes: [scope],
+    costCeiling: { maxUsd: server.ceiling },
+  });
+  return {
+    mode: 'server',
+    probe: sessionAccessProbe(session),
+    reconProbe: sessionAccessProbe(session, STATIC_MAX_BYTES),
+    pacer,
+    proxyUsd: () => session.usage().costUsd,
+    tunnel: null,
+    server,
+    close: async () => {
+      await session.close().catch(() => undefined);
+    },
+  };
 }
 
 /** Sauts de redirection permanente suivis au plus par la sonde de l'étape 0 (R09). */

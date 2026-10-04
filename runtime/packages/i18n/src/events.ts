@@ -27,16 +27,6 @@ export function narrativeLine(renderer: Renderer, event: NarrativeEvent, locale:
   const time = (ms: unknown) => fmtDuration(asNumber(ms), locale);
   switch (event.kind) {
     case 'investigation.started':
-      // URL de départ redirigée de façon permanente vers un autre site (R09) : le récit dit d'où vient le domaine adopté.
-      if (typeof p.redirected_from === 'string' && p.redirected_from !== '') {
-        let from = p.redirected_from;
-        try {
-          from = new URL(p.redirected_from).hostname;
-        } catch {
-          // origine illisible : rendue telle quelle
-        }
-        return renderer.render('narrative.investigation_started_redirected', { domain: asString(p.domain), from }, locale);
-      }
       return renderer.render(narrativeKey(event.kind), { domain: asString(p.domain) }, locale);
     case 'phase.started': {
       const phase = asString(p.phase);
@@ -49,7 +39,16 @@ export function narrativeLine(renderer: Renderer, event: NarrativeEvent, locale:
       const signal = asString(asRecord(p.view).signal);
       const outcome = proceed === false ? 'stopped' : proceed === true ? (signal === 'review' ? 'review' : 'proceed') : 'unknown';
       const key = `narrative.access_report.${outcome}`;
-      return renderer.render(key, { duration: time(p.ms ?? p.duration_ms), cost: money(p.cost_usd) }, locale);
+      const line = renderer.render(key, { duration: time(p.ms ?? p.duration_ms), cost: money(p.cost_usd) }, locale);
+      // URL de départ redirigée de façon permanente vers un autre site (banc R09) : le domaine adopté est dit d'abord.
+      if (typeof p.redirected_from !== 'string' || p.redirected_from === '') return line;
+      let from = p.redirected_from;
+      try {
+        from = new URL(p.redirected_from).hostname;
+      } catch {
+        // origine illisible : rendue telle quelle
+      }
+      return `${renderer.render('narrative.access_report.redirected', { from, domain: asString(p.domain) }, locale)} ${line}`;
     }
     case 'reconnaissance.finished': {
       const n = Array.isArray(p.candidates) ? p.candidates.length : 0;

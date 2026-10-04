@@ -21,6 +21,15 @@ describe('spécifications E4-E6 (assert_agent_spec_closed)', () => {
     expect(offsite.ok).toBe(false);
   });
 
+  it('assert_e4_sample_items_bounded — E4 d’enquête : échantillon des premiers éléments (1 à 100), absent par défaut (rejeu complet)', () => {
+    const base = { schema_version: 1, kind: 'agent_fetch', request: { url: START, allowed_hosts: [HOST] }, instruction: 'x' };
+    expect(validateAgentFetchSpec({ ...base, limits: { sample_items: 10 } })).toMatchObject({ ok: true, spec: { limits: { sample_items: 10, max_input_chars: 60_000 } } });
+    const plain = validateAgentFetchSpec(base);
+    expect(plain.ok && 'sample_items' in plain.spec.limits).toBe(false);
+    expect(validateAgentFetchSpec({ ...base, limits: { sample_items: 0 } }).ok).toBe(false);
+    expect(validateAgentFetchSpec({ ...base, limits: { sample_items: 1_000 } }).ok).toBe(false);
+  });
+
   it('E6 : URL à identifiants (utilisateur@hôte) refusée, plafonds bornés', () => {
     expect(validateAgentSpec({ schema_version: 1, kind: 'agent', start_url: `http://${HOST}@zz_test_evil.localhost/`, allowed_hosts: [HOST], instruction: 'x' }).ok).toBe(false);
     expect(validateAgentSpec({ schema_version: 1, kind: 'agent', start_url: START, allowed_hosts: [HOST], instruction: 'x', limits: { max_steps: 1000 } }).ok).toBe(false);

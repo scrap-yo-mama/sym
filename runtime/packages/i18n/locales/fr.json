@@ -2239,7 +2239,6 @@
   },
   "narrative": {
     "investigation_started": "Enquête sur {domain} lancée.",
-    "investigation_started_redirected": "Enquête sur {domain} lancée ({from} y redirige de façon permanente).",
     "phase": {
       "access_check": "Rapport d'accès : sonde de la page et lecture des signaux d'usage du site",
       "reconnaissance": "Reconnaissance : je regarde comment la page obtient ses données",
@@ -2250,6 +2249,7 @@
     "phase_started": "Étape : {phase}.",
     "access_report": {
       "proceed": "Rapport d'accès : page sondée [{duration}, {cost}].",
+      "redirected": "{from} redirige de façon permanente vers {domain} : l'API utilise désormais {domain}.",
       "review": "Rapport d'accès : page sondée, signaux d'usage à lire [{duration}, {cost}].",
       "stopped": "Rapport d'accès : le site refuse l'accès. SYM s'arrête là [{duration}, {cost}].",
       "unknown": "Rapport d'accès terminé [{duration}, {cost}]."

@@ -49,9 +49,9 @@ let withExtract = false;
 const json = (value: unknown) => ({ headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
 const events = (n: number) => ({ items: Array.from({ length: n }, (_, i) => ({ id: `zz_test_ev${i + 1}`, title: `Événement Zztest ${i + 1}`, price_cents: 100 * (i + 1) })) });
 const card = (i: number) =>
-  `<article class="zz-card"><svg viewBox="0 0 10 10"><path d="M0 0L10 10"/></svg><h2 class="zz-title" style="color:red" onclick="x()">Bien Zztest ${i}</h2><span class="zz-price" data-tracking="${'t'.repeat(40)}">${1000 + i} EUR</span><a href="/biens/${i}">Voir</a></article>`;
-const bigList = () =>
-  `<html><head><style>.zz-card{color:blue}</style><script>window.zz=1</script></head><body><h1>Biens</h1><main>${Array.from({ length: CARDS }, (_, i) => card(i + 1)).join('\n')}</main></body></html>`;
+  `<article class="zz-card"><svg viewBox="0 0 10 10"><path d="M0 0L10 10"/></svg><h2 class="zz-title" style="color:red" onclick="x()">Bien Zztest ${i}</h2><span class="zz-price" data-tracking="${'t'.repeat(40)}">${1000 + i}</span> <span class="zz-cur">EUR</span><p class="zz-desc">Description Zztest du bien numéro ${i} : maison de village avec jardin, garage, terrasse exposée au sud et vue dégagée sur les collines.</p></article>`;
+const bigList = (n = CARDS) =>
+  `<html><head><style>.zz-card{color:blue}</style><script>window.zz=1</script></head><body><h1>Biens</h1><main>${Array.from({ length: n }, (_, i) => card(i + 1)).join('\n')}</main></body></html>`;
 
 function llmConfig(): LlmConfig {
   return {
@@ -114,6 +114,7 @@ beforeAll(async () => {
       case TRAP:
         return { status: 301, headers: { location: 'http://169.254.169.254/latest/meta-data/' }, body: '' };
       case LIST:
+        if (req.path === '/petite/') return { body: bigList(5) };
         return req.path === '/biens/' ? { body: bigList() } : undefined;
       default:
         return undefined;
@@ -186,10 +187,12 @@ describe('R09 : redirection permanente de l’URL de départ vers un autre hôte
     const sv = await specOf(apiId);
     expect(sv?.spec.request.allowed_hosts).toEqual([NEW]);
     expect(new URL(sv!.spec.request.url).hostname).toBe(NEW);
-    const started = (await eventsOf(run.id)).find((e) => e.kind === 'investigation.started')!;
-    expect(started.payload).toMatchObject({ domain: NEW, url: site.url(NEW, '/paris'), redirected_from: site.url(OLD, '/paris') });
-    // L'ancien hôte n'est lu qu'une fois (la sonde de la redirection) ; tout le reste part vers le nouveau.
-    expect(site.hits.filter((h) => h.host === OLD)).toHaveLength(1);
+    const evs = await eventsOf(run.id);
+    expect(evs.find((e) => e.kind === 'investigation.started')!.payload).toMatchObject({ domain: OLD });
+    // Étape 0 : la redirection permanente est dite dans le récit, le rapport porte sur l'URL finale.
+    expect(evs.find((e) => e.kind === 'access_report')!.payload).toMatchObject({ domain: NEW, url: site.url(NEW, '/paris'), redirected_from: site.url(OLD, '/paris'), verdict: { proceed: true } });
+    // L'ancien hôte n'est lu que par l'étape 0 et la sonde de la redirection ; tout le reste part vers le nouveau.
+    expect(site.hits.filter((h) => h.host === OLD).length).toBeLessThanOrEqual(2);
   }, 90_000);
 
   test('assert_permanent_redirect_private_refused — 301 vers une adresse réservée (métadonnées cloud) : jamais adoptée, aucune connexion', async () => {
@@ -198,9 +201,73 @@ describe('R09 : redirection permanente de l’URL de départ vers un autre hôte
     const run = await investigate(apiId, { url: site.url(TRAP, '/paris'), description: 'événements à venir', auto_validate: true });
     expect(run.state).toBe('failed');
     const evs = await eventsOf(run.id);
-    const started = evs.find((e) => e.kind === 'investigation.started')!;
-    expect(started.payload).toMatchObject({ domain: TRAP });
-    expect(started.payload).not.toHaveProperty('redirected_from');
+    expect(evs.find((e) => e.kind === 'investigation.started')!.payload).toMatchObject({ domain: TRAP });
+    const access = evs.find((e) => e.kind === 'access_report')!.payload as Record<string, unknown>;
+    expect(access).toMatchObject({ verdict: { proceed: false, failure: { detail: 'domain_not_allowed' } } });
+    expect(access).not.toHaveProperty('redirected_from');
     expect(fake.calls.filter((c) => c.role === MODEL)).toHaveLength(0);
+  }, 90_000);
+});
+
+describe('coût des essais IA (R06, R08) : échantillon de la page 1, compilé puis vérifié sans LLM', () => {
+  const op = (name: string) => ({ op: name, pattern: null, group: null, decimal: null, format: null });
+  const userText = (body: Record<string, unknown>) => ((body['messages'] as { role: string; content: string }[]).find((m) => m.role === 'user')?.content ?? '');
+
+  test('assert_ai_trial_sampled_and_bounded — liste de 300 cartes : 1 seul appel E4 (20 éléments au plus, entrée et sortie bornées), compilation sur HTML échantillonné, 300 éléments sans LLM', async () => {
+    withExtract = true;
+    fake.setScenario(MODEL, [
+      scripted.json({
+        fields: [
+          { name: 'title', type: 'string', required: true, personal: false, description: 'Titre' },
+          { name: 'price', type: 'integer', required: true, personal: false, description: 'Prix' },
+        ],
+        sources: [],
+      }),
+      scripted.json({ records: 'article.zz-card', fields: [{ field: 'title', css: 'h2.zz-title', attr: null, ops: [op('trim')] }, { field: 'price', css: 'span.zz-price', attr: null, ops: [op('to_integer')] }] }),
+    ]);
+    const sample = Array.from({ length: 10 }, (_, i) => ({ title: `Bien Zztest ${i + 1}`, price: 1001 + i }));
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items: sample }), scripted.json({ items: sample }), scripted.json({ items: sample })]);
+    const apiId = await insertApi('zz_test_banc_big_list');
+    const run = await investigate(apiId, { url: site.url(LIST, '/biens/'), description: 'tous les biens de la liste', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded', items: CARDS });
+    // Un seul appel E4 : l'essai compilé et vérifié sans LLM tient lieu des deux autres exécutions.
+    expect(fake.byRole[EXTRACT_MODEL]).toBe(1);
+    expect(fake.byRole[MODEL]).toBe(2);
+    const extract = fake.calls.find((c) => c.role === EXTRACT_MODEL)!;
+    expect(extract.body['max_tokens']).toBe(4_096);
+    const extractText = userText(extract.body);
+    expect(extractText).toContain('SAMPLE: return only the first 20 matching records');
+    expect(extractText.length).toBeLessThan(26_000);
+    expect(extractText).not.toContain(`Bien Zztest ${CARDS}`);
+    const compile = fake.calls.filter((c) => c.role === MODEL)[1]!;
+    const compileText = userText(compile.body);
+    expect(compileText.match(/<article class="zz-card">/g)?.length ?? 0).toBeLessThanOrEqual(15);
+    expect(compileText).toContain('the RECORDS are the first 10 records of the page');
+    expect(compileText).toMatch(/NOTE: [0-9]+ repeated elements were removed/);
+    expect(compileText).not.toContain('<svg');
+    expect(compileText).not.toContain('onclick');
+    const finished = (await eventsOf(run.id)).find((e) => e.kind === 'attempt.finished')!.payload as { attempt: { execution: string; result: string }; executions: unknown[] };
+    expect(finished.attempt).toMatchObject({ execution: 'agent_fetch', result: 'ok' });
+    expect(finished.executions).toHaveLength(1);
+    const versions = (await pool.query<{ version: number; execution: string; spec: { limits?: Record<string, unknown> } }>('SELECT version, execution, spec FROM strategy_versions WHERE api_id = $1 ORDER BY version', [apiId])).rows;
+    expect(versions.map((v) => v.execution)).toEqual(['agent_fetch', 'fetch']);
+    // La version E4 de repli extrait toute la page à chaque run : l'échantillon de l'essai n'y est pas.
+    expect(versions[0]!.spec.limits ?? {}).not.toHaveProperty('sample_items');
+  }, 90_000);
+
+  test('assert_ai_trial_ceiling_before_call — plafond de l’essai sous la borne haute de l’appel (entrée réelle + sortie permise) : aucun appel E4 envoyé', async () => {
+    withExtract = true;
+    fake.setScenario(MODEL, [scripted.json({ fields: [{ name: 'title', type: 'string', required: true, personal: false, description: 'Titre' }], sources: [] })]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items: [{ title: 'Bien Zztest 1' }] })]);
+    const apiId = await insertApi('zz_test_banc_big_list_cap');
+    // Prix factice 1 $ / Mjeton, page de 5 cartes : l'entrée (~0,0005 $) passe la borne basse d'avant ; la sortie permise
+    // (4 096 jetons, 0,004 $) non : l'appel aurait pu franchir le plafond, il n'est jamais envoyé.
+    await pool.query('UPDATE apis SET max_cost_usd = 0.002 WHERE id = $1', [apiId]);
+    const run = await investigate(apiId, { url: site.url(LIST, '/petite/'), description: 'tous les biens de la liste', auto_validate: true });
+    expect(run.state).toBe('failed');
+    expect(fake.byRole[EXTRACT_MODEL] ?? 0).toBe(0);
+    const attempt = (await eventsOf(run.id)).find((e) => e.kind === 'attempt.finished')!.payload as { attempt: { result: string; cost_usd: number } };
+    expect(attempt.attempt.result).toBe('run_budget_exceeded');
+    expect(attempt.attempt.cost_usd).toBeLessThanOrEqual(0.002);
   }, 90_000);
 });

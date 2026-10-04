@@ -29,6 +29,9 @@
 // contextes de run d'E1-E3 (`openRunContext` : verrou de domaines à chaque saut, WebSocket, workers).
 import {
   compileAgentTrace,
+  E4_FULL_MAX_TOKENS,
+  E4_SAMPLE_INPUT_CHARS,
+  E4_SAMPLE_MAX_TOKENS,
   hybridUsesLlm,
   htmlToVisibleText,
   induceLabelExtraction,
@@ -314,7 +317,10 @@ async function runAgentFetch(options: AgentFetchOptions, gate: AgentRequestGate)
   // Garde de classification AVANT tout prompt (04 §7, 1.7) : un refus ou un défi n'atteint jamais le LLM.
   const refused = (options.classify ?? classifyExchange)(exchange, { requestUrl: url });
   if (refused !== null) return { result: fail(refused, 1), llm: null };
-  const { text, truncated } = pageText(exchange, options.spec.limits.max_input_chars);
+  // Essai d'enquête en échantillon (banc R06, R08) : entrée bornée plus court, N premiers éléments seulement ; la liste entière
+  // est relue par la stratégie compilée, sans LLM. Sortie toujours bornée (`max_tokens`), comptée dans le plafond avant l'envoi.
+  const sample = options.spec.limits.sample_items;
+  const { text, truncated } = pageText(exchange, sample === undefined ? options.spec.limits.max_input_chars : Math.min(options.spec.limits.max_input_chars, E4_SAMPLE_INPUT_CHARS));
   if (text.trim() === '') return { result: fail({ failure_class: 'extraction', retryable: false, detail: 'empty_page' }, 1), llm: null };
   const cost = options.cost ?? new AttemptCost(options.maxCostUsd);
   cost.addLlm(() => options.llm.usage().cost_usd);
@@ -328,9 +334,12 @@ async function runAgentFetch(options: AgentFetchOptions, gate: AgentRequestGate)
       pageUrl: exchange.url,
       truncated,
       itemSchema: options.outputSchema,
+      ...(sample === undefined ? {} : { maxItems: sample }),
+      maxTokens: sample === undefined ? E4_FULL_MAX_TOKENS : E4_SAMPLE_MAX_TOKENS,
       signal: AbortSignal.any([options.signal, AbortSignal.timeout(options.spec.limits.timeout_ms)]),
-      // Plafond tenu avant chaque envoi (premier appel, réparations, réessais), coût prévu de l'envoi compris (UX-32).
-      beforeCall: (call) => cost.assertAvailable(call.estimateUsd),
+      // Plafond tenu avant chaque envoi (premier appel, réparations, réessais) sur la borne HAUTE de l'envoi : entrée réelle et
+      // sortie au `max_tokens` (banc R06 : 1,22 $ pour un essai plafonné, la sortie n'était pas comptée).
+      beforeCall: (call) => cost.assertAvailable(call.ceilingUsd ?? call.estimateUsd),
     });
     const llm = spend();
     // Coût inconnu (prix absent) : jamais un succès dont le plafond n'a pas pu être tenu.

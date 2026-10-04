@@ -2239,7 +2239,6 @@
   },
   "narrative": {
     "investigation_started": "Investigation of {domain} started.",
-    "investigation_started_redirected": "Investigation of {domain} started ({from} permanently redirects there).",
     "phase": {
       "access_check": "Access report: probing the page and reading the usage signals of the site",
       "reconnaissance": "Reconnaissance: looking at how the page gets its data",
@@ -2250,6 +2249,7 @@
     "phase_started": "Step: {phase}.",
     "access_report": {
       "proceed": "Access report: page probed [{duration}, {cost}].",
+      "redirected": "{from} permanently redirects to {domain}: the API now uses {domain}.",
       "review": "Access report: page probed, usage signals to read [{duration}, {cost}].",
       "stopped": "Access report: the site refuses access. SYM stops here [{duration}, {cost}].",
       "unknown": "Access report done [{duration}, {cost}]."

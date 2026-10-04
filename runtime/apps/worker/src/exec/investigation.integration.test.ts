@@ -448,9 +448,10 @@ describe('enquête (tâche 2.1)', () => {
     const run = await investigate(apiId, { url: `${base(SSR_HOST)}/`, description: 'liste des produits du catalogue', auto_validate: true });
     // Constat Janssens : la page porte une pagination (`?page=N`, rel=next) ; la compilée la reprend, vérifiée en page 2 (2 × 20).
     expect(run).toMatchObject({ state: 'succeeded', items: 40, strategy_version: 2 });
-    // E4 essayé et conforme (N = 3), puis UNE compilation : 2 appels du rôle investigate, 3 du rôle extract.
+    // E4 essayé en échantillon, conforme, puis UNE compilation vérifiée sans LLM (page 2 comprise) : elle tient lieu des
+    // exécutions E4 suivantes (banc R06, R08) ; 2 appels du rôle investigate, 1 seul du rôle extract.
     expect(fake.byRole[MODEL]).toBe(2);
-    expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
+    expect(fake.byRole[EXTRACT_MODEL]).toBe(1);
     const versions = (
       await pool.query<{ version: number; execution: string; parent_version: number | null; was_current: boolean; spec: { sources?: { from: string }[]; request?: { allowed_hosts: string[] } } }>(
         'SELECT version, execution, parent_version, was_current, spec FROM strategy_versions WHERE api_id = $1 ORDER BY version',
@@ -630,9 +631,10 @@ describe('enquête (tâche 2.1)', () => {
     expect(current.spec.sources[0]).toMatchObject({ from: 'html' });
     expect(current.spec.pagination).toMatchObject({ type: 'page_param', param: 'url.path', path_pattern: '/nos-maisons/page/{page}/' });
     expect((await pool.query<{ execution: string }>('SELECT execution FROM strategy_versions WHERE api_id = $1 ORDER BY version', [apiId])).rows.map((r) => r.execution)).toEqual(['agent_fetch', 'fetch']);
-    // LLM de l'enquête : la proposition, la compilation, et les 3 mises en forme E4 ; rien de plus.
+    // LLM de l'enquête : la proposition, la compilation, et UNE mise en forme E4 (la compilée vérifiée sans LLM tient lieu
+    // des suivantes, banc R06 et R08) ; rien de plus.
     expect(fake.byRole[MODEL]).toBe(2);
-    expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
+    expect(fake.byRole[EXTRACT_MODEL]).toBe(1);
     // Rejeu : toutes les pages, sans aucun appel LLM.
     fake.reset();
     const replay = await waitRun((await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId, ownerId: A, trigger: 'rest' }))).runId);
@@ -677,7 +679,9 @@ describe('enquête (tâche 2.1)', () => {
         ],
         sources: [],
       }),
-      scripted.json({ records: 'div.member', fields: [{ field: 'first_name', css: '.first', attr: null, ops: [] }, { field: 'last_name', css: '.last', attr: null, ops: [] }, { field: 'role', css: '.role', attr: null, ops: [] }] }),
+      // Compilation refusée deux fois (aucun bloc) : E4 n'est pas remplacé, ses 3 exécutions ont lieu (objet du test).
+      scripted.json({ records: 'div.zz-none', fields: [{ field: 'first_name', css: '.first', attr: null, ops: [] }, { field: 'last_name', css: '.last', attr: null, ops: [] }, { field: 'role', css: '.role', attr: null, ops: [] }] }),
+      scripted.json({ records: 'div.zz-none', fields: [{ field: 'first_name', css: '.first', attr: null, ops: [] }, { field: 'last_name', css: '.last', attr: null, ops: [] }, { field: 'role', css: '.role', attr: null, ops: [] }] }),
     ]);
     fake.setScenario(EXTRACT_MODEL, [scripted.json({ items: team }), scripted.json({ items: team }), scripted.json({ items: team })]);
     const apiId = await insertApi('zz_test_inv_team_url_value');

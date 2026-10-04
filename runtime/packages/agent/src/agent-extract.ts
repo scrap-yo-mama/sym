@@ -35,7 +35,7 @@ export function sourceLabel(url: string): string {
 }
 
 /** Messages d'extraction : consigne de l'API, puis texte non fiable encadré par un jeton imprévisible. */
-export function extractMessages(args: { instruction: string; pageText: string; pageUrl: string; truncated: boolean; rules?: string }, token = randomBytes(12).toString('hex')): ChatMessage[] {
+export function extractMessages(args: { instruction: string; pageText: string; pageUrl: string; truncated: boolean; rules?: string; maxItems?: number }, token = randomBytes(12).toString('hex')): ChatMessage[] {
   const tag = `untrusted_page_${token}`;
   // La page ne peut ni fermer la balise ni en imiter une autre : le motif est neutralisé dans son texte.
   const safe = args.pageText.replace(/untrusted_page/gi, 'untrusted-page');
@@ -44,6 +44,8 @@ export function extractMessages(args: { instruction: string; pageText: string; p
     `SOURCE: ${sourceLabel(args.pageUrl)}`,
     `TOKEN: ${token}`,
     args.truncated ? 'NOTE: the page text was truncated to the input limit.' : '',
+    // Essai d'enquête (banc R06, R08) : un échantillon suffit, la liste entière est relue ensuite par du code, sans modèle.
+    args.maxItems === undefined ? '' : `SAMPLE: return only the first ${args.maxItems} matching records of the page, in page order, each complete; fewer if the page has fewer.`,
     `<${tag}>`,
     safe,
     `</${tag}>`,
@@ -77,6 +79,10 @@ export async function extractRecordsWithLlm(
     itemSchema: unknown;
     /** Règles embarquées dans la stratégie E4 : texte reconstruit depuis les références épinglées de `spec.rules`. */
     rules?: string;
+    /** Essai d'enquête : seulement les N premiers éléments de la page (échantillon) ; les suivants rendus sont écartés. */
+    maxItems?: number;
+    /** Jetons de sortie permis (`max_tokens`) : bornent la réponse et le plafond calculé avant l'envoi. */
+    maxTokens?: number;
     signal?: AbortSignal;
     /** Garde avant chaque envoi (plafond de coût de l'essai, coût prévu de l'envoi) : voir `ChatCall.beforeCall`. */
     beforeCall?: BeforeCall;
@@ -86,10 +92,12 @@ export async function extractRecordsWithLlm(
     messages: extractMessages(args),
     schema: recordsSchema(args.itemSchema),
     name: 'records',
+    ...(args.maxTokens === undefined ? {} : { maxTokens: args.maxTokens }),
     // E4 sans outil (19 §7, `assert_e4_no_tools`, retouche de 2.4) : ni l'outil de soumission de S2.
     noTools: toolRegistryForPhase('e4_extract').tools.length === 0,
     ...(args.signal === undefined ? {} : { signal: args.signal }),
     ...(args.beforeCall === undefined ? {} : { beforeCall: args.beforeCall }),
   });
-  return { records: result.value.items, calls: result.calls };
+  const items = Array.isArray(result.value.items) ? result.value.items : [];
+  return { records: args.maxItems === undefined ? items : items.slice(0, args.maxItems), calls: result.calls };
 }

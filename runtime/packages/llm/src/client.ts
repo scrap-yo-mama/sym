@@ -111,8 +111,13 @@ export interface ChatCall {
   beforeCall?: BeforeCall;
 }
 
-/** Garde avant l'envoi ; `estimateUsd` : coût prévu de cet envoi (borne basse), null si le prix du modèle est absent. */
-export type BeforeCall = (call: { readonly estimateUsd: number | null }) => void;
+/**
+ * Garde avant l'envoi ; `estimateUsd` : coût prévu de cet envoi (borne basse : entrée en caractères / 4, sortie du dernier
+ * appel), null si le prix du modèle est absent. `ceilingUsd` : borne HAUTE de cet envoi (entrée réelle en caractères / 3,
+ * sortie au `max_tokens` envoyé, sinon celui du modèle, sinon la sortie du dernier appel) : un plafond tenu sur elle n'est
+ * jamais franchi par la réponse (banc R06 : 15 000 jetons de sortie non comptés avant l'envoi).
+ */
+export type BeforeCall = (call: { readonly estimateUsd: number | null; readonly ceilingUsd?: number | null }) => void;
 
 export type StructuredLevel = 'S1' | 'S2' | 'S3' | 'S4';
 
@@ -279,7 +284,12 @@ export class LlmClient {
       const sent = this.#withoutRejected(provider.id, model.id, profiled);
       // Hors du try : une garde qui refuse n'est ni une erreur du fournisseur, ni réessayée. Coût prévu de l'envoi : la
       // requête telle qu'envoyée, et la sortie du dernier appel de ce client (une réparation la reproduit).
-      options.beforeCall?.({ estimateUsd: estimateCallUsd({ requestChars: charsOf(sent.messages), outputTokens: this.#lastOutputTokens, price: model.price, at: this.#hooks.now() }) });
+      const requestChars = charsOf(sent.messages);
+      const outputCap = typeof sent.max_tokens === 'number' ? sent.max_tokens : (model.maxTokens ?? this.#lastOutputTokens);
+      options.beforeCall?.({
+        estimateUsd: estimateCallUsd({ requestChars, outputTokens: this.#lastOutputTokens, price: model.price, at: this.#hooks.now() }),
+        ceilingUsd: estimateCallUsd({ requestChars: Math.ceil((requestChars * 4) / 3), outputTokens: Math.max(outputCap, this.#lastOutputTokens), price: model.price, at: this.#hooks.now() }),
+      });
       const started = Date.now();
       const callOptions: CallOptions = options.signal === undefined ? {} : { signal: options.signal };
       try {
