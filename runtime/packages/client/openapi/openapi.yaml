@@ -7242,7 +7242,10 @@ components:
       properties:
         server:
           type: string
-          description: Version de l'instance (SemVer, `RUNTIME_VERSION`).
+          description: Version de l'instance (SemVer, `RUNTIME_VERSION`, sinon la version du paquet).
+        commit:
+          type: string
+          description: Commit Git de l'image (`RUNTIME_COMMIT` ou `RENDER_GIT_COMMIT`) ; absent quand l'image n'en porte pas.
         schema:
           type: integer
           description: Version attendue du schéma de base.

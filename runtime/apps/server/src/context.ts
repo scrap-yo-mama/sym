@@ -22,6 +22,8 @@ export type ServerContext = {
   keyFingerprint: string;
   /** Version de l'application (`RUNTIME_VERSION`), seule version publiée par `/api/health`. */
   appVersion: string;
+  /** Commit de l'image (`RUNTIME_COMMIT` ou `RENDER_GIT_COMMIT`), publié par `/api/version` (U4.1). */
+  appCommit?: string | undefined;
   /** Version minimale de l'extension acceptée à l'appairage (`min_extension` de `GET /api/version`, 16 §3). */
   minExtension: string;
   /**

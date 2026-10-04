@@ -8,6 +8,7 @@ import {
   parseMfaEnforced,
   normalizePublicUrl,
   persistencePolicyFromEnv,
+  resolveBuildInfo,
   scrubOtelEnvironment,
   unknownReservedVariablesWarning,
   Secret,
@@ -42,6 +43,8 @@ export type ServerConfig = {
   observability: ObservabilityConfig;
   /** `RUNTIME_VERSION` (défaut 0.0.0) : version de l'application, publiée par `/api/health` (aucune autre version). */
   appVersion: string;
+  /** Commit publié par `/api/version` (`RUNTIME_COMMIT`, sinon `RENDER_GIT_COMMIT`) ; absent quand l'image n'en porte pas. */
+  appCommit?: string | undefined;
   port: number;
   host: string;
   /**
@@ -195,6 +198,16 @@ function loadTunnelConfig(env: NodeJS.ProcessEnv, databaseUrl: string): TunnelCo
 }
 
 /** Version d'application publiable : SemVer ou étiquette courte (aucun espace, aucun chemin, aucun nom d'hôte). */
+/** Version du paquet `apps/server` (même chemin relatif depuis `src/` et `dist/`) : repli quand l'image n'a pas reçu `RUNTIME_VERSION`. */
+function readPackageVersion(): string | undefined {
+  try {
+    const version = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: unknown }).version;
+    return typeof version === 'string' ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const APP_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 
 /** Longueur minimale du jeton d'amorçage (généré par la plateforme ou `install.sh`). */
@@ -278,7 +291,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     throw new ConfigError(`METRICS_TOKEN trop court (${BOOTSTRAP_TOKEN_MIN_LENGTH} caractères minimum) : générez-le avec \`openssl rand -base64 32\`.`);
   }
   if (metricsToken !== undefined) secretValues.add(metricsToken);
-  const appVersion = env['RUNTIME_VERSION'] || '0.0.0';
+  const { version: appVersion, commit: appCommit } = resolveBuildInfo(env, readPackageVersion());
   if (!APP_VERSION.test(appVersion)) throw new ConfigError('RUNTIME_VERSION invalide : version SemVer (ex. 1.4.2), 64 caractères au plus, sans espace ni « / ».');
   const observability = loadObservabilityConfig(env);
   scrubOtelEnvironment(env);
@@ -314,6 +327,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     metricsToken: metricsToken === undefined ? null : new Secret(metricsToken),
     observability,
     appVersion,
+    appCommit,
     port: Number(env['PORT'] ?? 3000),
     host: env['HOST'] ?? '0.0.0.0',
     trustProxy: parseTrustProxy(env['TRUST_PROXY']),

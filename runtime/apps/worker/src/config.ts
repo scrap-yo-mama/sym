@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Configuration de `worker` (14 § 2-4) : lue une fois au démarrage ; MASTER_KEY retirée de l'environnement.
+import { readFileSync } from 'node:fs';
 import {
   loadKeyring,
   loadObservabilityConfig,
   costCapsFromEnv,
   persistencePolicyFromEnv,
+  resolveBuildInfo,
   scrubOtelEnvironment,
   subjectPhoneRegion,
   type Keyring,
@@ -14,6 +16,16 @@ import {
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { RUN_DEFAULTS, retentionPolicyFromEnv, type RetentionPolicy } from '@runtime/db';
 import { resolveBrowserConcurrency } from './browser/cgroup.js';
+
+/** Version du paquet `apps/worker` (même chemin relatif depuis `src/` et `dist/`) : repli quand l'image n'a pas reçu `RUNTIME_VERSION`. */
+function readPackageVersion(): string | undefined {
+  try {
+    const version = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: unknown }).version;
+    return typeof version === 'string' ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export class WorkerConfigError extends Error {
   override name = 'WorkerConfigError';
@@ -99,7 +111,7 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     databaseUrl,
     databaseUrlDirect: env['DATABASE_URL_DIRECT'] || undefined,
     keyring,
-    version: env['RUNTIME_VERSION'] || '0.0.0',
+    version: resolveBuildInfo(env, readPackageVersion()).version,
     concurrency: Math.floor(concurrency),
     dbPoolMax: Math.floor(dbPoolMax),
     shutdownTimeoutSeconds: positive(env, 'SHUTDOWN_TIMEOUT_SECONDS', 30),
