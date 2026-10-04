@@ -3528,6 +3528,28 @@ components:
                 L'appel peut être refait tel quel une fois la marche à suivre faite (ex. `instance_contact_missing` : le
                 contact du robot posé, UX-04).
               type: boolean
+            next_action:
+              description: >-
+                Prochaine étape d'un refus d'itération (tâche 3.14) : un outil à appeler (`tool`, `args`) ou, pour un acte
+                humain, le lien de la console (`url`).
+              type: [object, 'null']
+            level:
+              description: Niveau du changement de schéma d'un brouillon (`none`, `patch`, `minor`, `major`).
+              type: string
+            impacted:
+              description: Usages touchés par un changement cassant (colonnes de la vue, clé de déduplication d'une planification).
+              type: array
+              items:
+                type: object
+            breaking:
+              description: Phrase localisée des usages touchés (07 § 4), seulement pour un changement major.
+              type: [string, 'null']
+            console_url:
+              description: Page de l'API dans la console, où l'acte humain se fait.
+              type: string
+            estimate:
+              description: Estimation de coût d'un affinage ou d'un test refusé (`cost_above_cap`, `cost_confirmation_required`).
+              type: object
     AuthError:
       description: Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`).
       type: object

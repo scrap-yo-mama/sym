@@ -27,12 +27,13 @@ const isRecord = (v: unknown): v is Json => typeof v === 'object' && v !== null 
 const RANK: Record<SchemaChangeLevel, number> = { none: 0, patch: 1, minor: 2, major: 3 };
 
 /** Mots-clés de description : leur changement n'altère aucun consommateur (patch). */
-const ANNOTATIONS = new Set(['title', 'description', 'examples', '$comment', 'default', '$schema', '$id', 'deprecated']);
+/** `x-key` (clé d'identité du diff) décrit comment comparer deux sorties : il ne change rien pour qui lit les items. */
+const ANNOTATIONS = new Set(['title', 'description', 'examples', '$comment', 'default', '$schema', '$id', 'deprecated', 'x-key']);
 /** Mots-clés de contrainte : tout changement est tenu pour cassant (on ne sait pas dire s'il élargit ou resserre). */
 const CONSTRAINTS = new Set([
   'format', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength', 'pattern',
   'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties', 'additionalProperties', 'const', 'oneOf', 'anyOf', 'allOf',
-  'not', '$defs', '$ref', 'x-personal', 'x-key',
+  'not', '$defs', '$ref', 'x-personal',
 ]);
 const STRUCTURAL = new Set(['type', 'properties', 'required', 'items', 'enum']);
 

@@ -416,8 +416,8 @@ export function iterationRoutes(app: FastifyInstance, ctx: ServerContext): void 
           transition: moved.transition,
           reason: 'reverted',
           output_schema_version: moved.output_schema_version,
-          summary: revertedText(locale, moved.current_version, view?.draft != null),
-          next_action: view?.draft != null ? { tool: 'test_api', args: { slug: api.slug } } : null,
+          summary: revertedText(locale, moved.current_version, (view?.draft ?? null) !== null),
+          next_action: (view?.draft ?? null) !== null ? { tool: 'test_api', args: { slug: api.slug } } : null,
           console_url: consoleUrl(api.slug),
           message_locale: locale,
         });

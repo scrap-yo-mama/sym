@@ -1948,6 +1948,18 @@ export interface components {
                 what_to_do?: string;
                 /** @description L'appel peut être refait tel quel une fois la marche à suivre faite (ex. `instance_contact_missing` : le contact du robot posé, UX-04). */
                 retryable?: boolean;
+                /** @description Prochaine étape d'un refus d'itération (tâche 3.14) : un outil à appeler (`tool`, `args`) ou, pour un acte humain, le lien de la console (`url`). */
+                next_action?: Record<string, never> | null;
+                /** @description Niveau du changement de schéma d'un brouillon (`none`, `patch`, `minor`, `major`). */
+                level?: string;
+                /** @description Usages touchés par un changement cassant (colonnes de la vue, clé de déduplication d'une planification). */
+                impacted?: Record<string, never>[];
+                /** @description Phrase localisée des usages touchés (07 § 4), seulement pour un changement major. */
+                breaking?: string | null;
+                /** @description Page de l'API dans la console, où l'acte humain se fait. */
+                console_url?: string;
+                /** @description Estimation de coût d'un affinage ou d'un test refusé (`cost_above_cap`, `cost_confirmation_required`). */
+                estimate?: Record<string, never>;
             };
         };
         /** @description Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`). */

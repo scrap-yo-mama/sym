@@ -208,13 +208,13 @@ describe('instructions et prompts (05 § 1.3, 19c § 8, 21 § 4.3)', () => {
     expect(instructions.endsWith("Reply in the user's language.")).toBe(true);
   });
 
-  test('4 prompts : noms stables, titres de marque sym:, titres localisés par ?lang=, cacheScope privé', async () => {
+  test('5 prompts : noms stables, titres de marque sym:, titres localisés par ?lang=, cacheScope privé', async () => {
     const enClient = await connect(a.key, { lang: 'en' });
-    // Liste fixe de 4 prompts : capacité prompts déclarée sans listChanged (aucune notification promise, jamais envoyée).
+    // Liste fixe de 5 prompts : capacité prompts déclarée sans listChanged (aucune notification promise, jamais envoyée).
     expect(enClient.getServerCapabilities()?.prompts).toEqual({ listChanged: false });
     const en = await enClient.listPrompts();
     const fr = await (await connect(a.key, { lang: 'fr' })).listPrompts();
-    expect(en.prompts.map((p) => p.name).sort()).toEqual(['first_steps', 'fix_api', 'new_api', 'review_catalog']);
+    expect(en.prompts.map((p) => p.name).sort()).toEqual(['first_steps', 'fix_api', 'new_api', 'resume_api', 'review_catalog']);
     expect(fr.prompts.map((p) => p.name).sort()).toEqual(en.prompts.map((p) => p.name).sort());
     for (const p of en.prompts) expect(p.title).toMatch(/^sym:/);
     const enNew = en.prompts.find((p) => p.name === 'new_api')!;

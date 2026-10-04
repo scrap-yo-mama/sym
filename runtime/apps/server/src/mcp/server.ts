@@ -731,7 +731,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       if (args['view'] === 'versions') {
         const versions = await rest(ctx, caller, 'GET', `/api/apis/${slug}/versions`);
         if (versions.status !== 200) return restError(versions);
-        return success(`${((versions.body['versions'] ?? []) as unknown[]).length} versions.`, versions.body);
+        return success(`${((versions.body['versions'] ?? []) as unknown[]).length} versions.`, { slug: String(args['slug']), ...versions.body });
       }
       const answer = await rest(ctx, caller, 'GET', `/api/apis/${slug}${query({ response_format: args['response_format'] as string | undefined })}`);
       if (answer.status !== 200) return restError(answer);

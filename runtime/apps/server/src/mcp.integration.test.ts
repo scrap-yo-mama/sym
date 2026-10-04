@@ -18,7 +18,7 @@ type Party = { user: TestUser; cookie: string; key: string };
 type ToolResult = { content: { type: string; text?: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 
 const ALL_SCOPES = ['apis:read', 'apis:run', 'apis:write', 'runs:read', 'datasets:read', 'schedules:write', 'sites:read'];
-const GENERIC_NAMES = ['create_api', 'validate_schema', 'run_api', 'get_run', 'get_items', 'cancel_run', 'list_apis', 'get_api', 'report_problem'];
+const GENERIC_NAMES = ['create_api', 'validate_schema', 'run_api', 'get_run', 'get_items', 'cancel_run', 'list_apis', 'get_api', 'report_problem', 'refine_api', 'test_api', 'promote_api', 'revert_api', 'discard_draft'];
 
 let srv: TestServer;
 let base: string;
@@ -259,7 +259,7 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
   };
   afterAll(() => mode('pinned'));
 
-  test('25 API dont 5 épinglées, mode pinned : 9 outils génériques + 5 api_<slug> (inputSchema = schéma d’entrée, outputSchema = RunResult)', async () => {
+  test('25 API dont 5 épinglées, mode pinned : 14 outils génériques (iterate compris) + 5 api_<slug> (inputSchema = schéma d’entrée, outputSchema = RunResult)', async () => {
     await resetCatalog(a);
     mode('pinned');
     const apis: { id: string; slug: string }[] = [];
@@ -275,7 +275,7 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     expect(names.filter((n) => GENERIC_NAMES.includes(n)).sort()).toEqual([...GENERIC_NAMES].sort());
     const perApi = tools.filter((t) => t.name.startsWith('api_'));
     expect(perApi.map((t) => t.name).sort()).toEqual(['api_zz_test_pin_00', 'api_zz_test_pin_01', 'api_zz_test_pin_02', 'api_zz_test_pin_03', 'api_zz_test_pin_04']);
-    expect(tools).toHaveLength(14);
+    expect(tools).toHaveLength(19);
     const input = await withClient(srv.db.url, async (c) => (await c.query<{ input_schema: Record<string, unknown> }>('SELECT input_schema FROM apis WHERE id = $1', [apis[0]!.id])).rows[0]!.input_schema);
     for (const tool of perApi) {
       expect(tool.inputSchema, tool.name).toEqual(input);
@@ -304,7 +304,7 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     expect(new Set(seen).size).toBe(40);
   });
 
-  test('mode generic : aucun outil par API, les 9 outils génériques seulement', async () => {
+  test('mode generic : aucun outil par API, les 14 outils génériques seulement', async () => {
     mode('generic');
     const { tools } = await (await connect(a.key)).listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...GENERIC_NAMES].sort());
@@ -319,8 +319,10 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     expect(runOnly.tools.filter((t) => t.name.startsWith('api_')).length).toBe(20);
     const both = await (await connect(a.key, { toolsets: 'build,catalog' })).listTools();
     expect(both.tools.map((t) => t.name).sort()).toEqual(['create_api', 'get_api', 'list_apis', 'report_problem', 'validate_schema']);
-    // rules et iterate : inactifs par défaut et non livrés (3.13, 3.14) ; un nom inconnu n'ajoute rien.
-    const unknown = await (await connect(a.key, { toolsets: 'rules,iterate,zz' })).listTools();
+    // iterate (3.14) : actif par défaut, les cinq outils d'itération ; rules (3.13) n'est pas livré et un nom inconnu n'ajoute rien.
+    const iterate = await (await connect(a.key, { toolsets: 'iterate' })).listTools();
+    expect(iterate.tools.map((t) => t.name).sort()).toEqual(['discard_draft', 'promote_api', 'refine_api', 'revert_api', 'test_api']);
+    const unknown = await (await connect(a.key, { toolsets: 'rules,zz' })).listTools();
     expect(unknown.tools).toEqual([]);
   });
 
@@ -389,8 +391,8 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     const names = async (scopes: string[]) => (await (await connect((await createKey(srv, a.cookie, a.user, scopes)).key)).listTools()).tools.map((t) => t.name).sort();
     expect(await names(['apis:read'])).toEqual(['get_api', 'list_apis', 'report_problem']);
     expect(await names(['apis:read', 'runs:read', 'datasets:read'])).toEqual(['get_api', 'get_items', 'get_run', 'list_apis', 'report_problem']);
-    expect(await names(['apis:run'])).toEqual(['api_zz_test_scoped', 'cancel_run', 'run_api']);
-    expect(await names(['apis:write'])).toEqual(['create_api', 'validate_schema']);
+    expect(await names(['apis:run'])).toEqual(['api_zz_test_scoped', 'cancel_run', 'run_api', 'test_api']);
+    expect(await names(['apis:write'])).toEqual(['create_api', 'discard_draft', 'promote_api', 'refine_api', 'revert_api', 'validate_schema']);
     const readOnly = await createKey(srv, a.cookie, a.user, ['apis:read']);
     const res = await rpc({ authorization: `Bearer ${readOnly.key}` }, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'api_zz_test_scoped', arguments: { page: 1 } } });
     expect(res.statusCode).toBe(403);

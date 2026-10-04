@@ -148,7 +148,7 @@ export type GenericToolName =
   | 'discard_draft';
 
 /** Résultat des outils d'itération (19b § 2, `IterationResult`) : `summary` localisé, `estimate`, `next_action`, jamais un code interne dans le texte. */
-export const ITERATION_RESULT_SCHEMA: JsonSchema = {
+const ITERATION_RESULT_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     summary: { type: 'string' },
@@ -324,7 +324,7 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
       required: ['slug'],
       properties: { slug: SLUG, response_format: { enum: ['concise', 'detailed'] }, view: { enum: ['iteration', 'versions'], description: 'iteration: the draft, the feedback and the next step, to resume a refinement; versions: the recent versions.' } },
     },
-    outputSchema: { type: 'object', required: ['slug', 'status'], properties: { slug: { type: 'string' }, status: { type: 'string' } } },
+    outputSchema: { type: 'object', required: ['slug'], properties: { slug: { type: 'string' }, status: { type: 'string' } } },
   },
   {
     name: 'report_problem',

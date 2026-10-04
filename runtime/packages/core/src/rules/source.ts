@@ -18,6 +18,12 @@ export type StrategySource = {
   readonly rules: readonly { readonly name: string; readonly version: number; readonly sha256: string; readonly level: RuleLevel }[];
   readonly reason: StrategySourceReason;
   /**
+   * Retours d'utilisateur de la propre API (tâche 3.14, 19 §6, r3 R3) : écrits par `refine_api` dans la source du brouillon,
+   * gardés par la réparation et la recompilation (`assert_feedback_survives_repair`). Texte NON FIABLE (2 000 caractères au
+   * plus) : il n'entre que dans le dossier de sa propre API, jamais une règle de confiance. Type structurel.
+   */
+  readonly feedback?: readonly Readonly<Record<string, unknown>>[];
+  /**
    * Dossier d'enquête consulté (tâche 2.14, 19c § 4) : version et empreinte, clés d'identité des indices qui ont pesé,
    * indices écartés et pourquoi. Hors du compilé : un indice utilisé n'y vit que sous forme de cible ou de gabarit. Type
    * structurel (le module des règles n'importe pas le module du dossier).

@@ -1,11 +1,11 @@
 ---
 title: "Statuts et classes d'échec"
-description: "Les sept statuts d'une API, les 21 transitions, le drapeau stale et les classes d'échec."
+description: "Les sept statuts d'une API, les 22 transitions, le drapeau stale et les classes d'échec."
 ---
 
 # Statuts et classes d'échec
 
-Chaque API du catalogue a **un statut**. Il ne change que selon une table fermée de **21 transitions**, chacune journalisée avec sa raison : aucun comportement implicite. Cette page est la référence de cette table et du classifieur d'échec qui la déclenche. Les codes de raison eux-mêmes sont dans [Codes de raison](./codes-de-raison.md).
+Chaque API du catalogue a **un statut**. Il ne change que selon une table fermée de **22 transitions**, chacune journalisée avec sa raison : aucun comportement implicite. Cette page est la référence de cette table et du classifieur d'échec qui la déclenche. Les codes de raison eux-mêmes sont dans [Codes de raison](./codes-de-raison.md).
 
 ## Les sept statuts
 
@@ -21,7 +21,7 @@ Chaque API du catalogue a **un statut**. Il ne change que selon une table fermé
 
 `stale` n'est **pas** un statut : c'est un **drapeau d'affichage** (aucune exécution depuis un délai, ou canari en échec sans casse confirmée). Il s'ajoute à `sain` ou `warning` dans le catalogue et ne déclenche aucune transition.
 
-## Les 21 transitions
+## Les 22 transitions
 
 | # | De vers | Déclencheur |
 |---|---|---|
@@ -46,6 +46,7 @@ Chaque API du catalogue a **un statut**. Il ne change que selon une table fermé
 | 19 | sain vers enquete | ré-enquête, schéma de sortie modifié ou ré-enquête forcée |
 | 20 | warning vers enquete | idem |
 | 21 | enquete vers statut précédent | ré-enquête d'une API existante sans stratégie conforme : l'ancienne version est gardée (raison `reinvestigation_failed`) |
+| 22 | erreur vers warning | un brouillon promu (raison `promoted`) ou un retour de version (raison `reverted`) depuis `erreur` : acte humain, voir [Serveur MCP](./mcp.md). Sur `sain` ou `warning`, une promotion n'est pas une transition : le statut ne change pas |
 
 **Refus pendant un rejeu.** Si une API `sain` ou `warning` se heurte à un refus ou à un défi, le run passe par `reparation` (transition 10 ou 11), puis la garde de classification l'envoie **dans le même run** vers `bloquee` ou `action_requise`, **sans jamais invoquer l'agent de réparation**. Un refus n'est pas une casse qu'on répare.
 

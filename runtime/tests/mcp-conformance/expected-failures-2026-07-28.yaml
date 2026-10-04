@@ -63,16 +63,14 @@ server:
   - prompts-get-with-args
   - prompts-get-embedded-resource
   - prompts-get-with-image
-  # [3.14] ressources.
-  - resources-list
+  # [3.14] SYM sert UNE ressource (modèle `scrapyomama://api/{slug}/iteration`, reprise d'une itération) : resources-list,
+  # l'erreur de ressource introuvable et les indices de cache de la liste passent. Les scénarios qui lisent ou s'abonnent aux
+  # ressources de démonstration de la suite (`test://…`) restent hors de portée (même raison que [démo]).
   - resources-read-text
   - resources-read-binary
   - resources-templates-read
   - resources-subscribe
   - resources-unsubscribe
-  - caching:sep-2549-resources-list-caching-hints
-  - caching:sep-2549-resources-templates-list-caching-hints
-  - sep-2164-resource-not-found
   # [V2] complétion et journalisation MCP non prévues.
   - completion-complete
   - logging-set-level

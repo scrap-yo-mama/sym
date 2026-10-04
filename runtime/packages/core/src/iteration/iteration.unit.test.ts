@@ -37,6 +37,8 @@ describe('assert_schema_change_classification', () => {
     ['champ requis de plus', obj({ url: { type: 'string', 'x-key': true }, price: { type: 'number' } }, ['url', 'price']), 'minor'],
     ['champ qui n’est plus garanti', obj({ url: { type: 'string', 'x-key': true }, price: { type: 'number' } }, []), 'major'],
     ['mot-clé inconnu', { ...base, 'x-nouveau': true }, 'major'],
+    ['clé d’identité retirée (x-key) : une annotation', obj({ url: { type: 'string' }, price: { type: 'number' } }, ['url']), 'patch'],
+    ['x-personal ajouté : une règle de confidentialité', obj({ url: { type: 'string', 'x-key': true }, price: { type: 'number', 'x-personal': 'identifier' } }, ['url']), 'major'],
     ['contrainte changée', obj({ url: { type: 'string', 'x-key': true }, price: { type: 'number', minimum: 0 } }, ['url']), 'major'],
   ])('%s', (_name, after, level) => {
     expect(classifySchemaChange(base, after).level).toBe(level);

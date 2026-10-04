@@ -31,8 +31,13 @@ Le serveur MCP (`/mcp`) est livré : outils génériques, outils par API, envelo
 | `list_apis` | `status`, `q`, `limit`, `cursor` | API du catalogue : statut, raison, drapeau `stale`, exécution, réseau, coût moyen |
 | `get_api` | `slug`, `response_format` (`concise` ou `detailed`) | fiche : schémas, stratégie courante, derniers runs, statut, rapport d'accès |
 | `report_problem` | `slug`, `run_id`, `note` | identifiant du problème consigné dans le journal de l'API |
+| `refine_api` (`iterate`) | `slug`, `feedback`, `output_schema`, `scope`, `dry_run`, `accept_cost` | un **brouillon** à côté de la version en service (qui ne change pas), son estimation, la prochaine étape |
+| `test_api` (`iterate`) | `slug`, `input`, `dry_run`, `accept_cost`, `wait_seconds` | le brouillon rejoué sur une entrée : diff par clé d'identité contre la version en service, coût, `diff_hash` |
+| `promote_api` (`iterate`) | `slug`, `diff_hash`, `accept_cost_increase`, `acknowledge_breaking` | la version en service : **acte humain** (élicitation ; un changement cassant se confirme dans la console) |
+| `revert_api` (`iterate`) | `slug`, `version`, `acknowledge_breaking` | retour à une version qui a été en service ; le brouillon reste |
+| `discard_draft` (`iterate`) | `slug` | la version du brouillon archivée ; la version en service ne bouge pas |
 
-Les outils sont regroupés en **jeux** (`build`, `run`, `catalog`), activables par `?toolsets=` : un consommateur du catalogue n'a pas besoin de `build`. Les outils de lecture (`get_*`, `list_apis`) portent l'annotation `readOnlyHint`. Les annotations sont des aides pour le client : les droits restent côté serveur.
+Les outils sont regroupés en **jeux** (`build`, `run`, `catalog`, `iterate`), activables par `?toolsets=` : un consommateur du catalogue n'a pas besoin de `build`. `iterate` (affiner, tester, promouvoir) est actif par défaut ; `MCP_DEFAULT_TOOLSETS` règle les jeux actifs quand le client ne demande rien. Les outils de lecture (`get_*`, `list_apis`) portent l'annotation `readOnlyHint`. Les annotations sont des aides pour le client : les droits restent côté serveur.
 
 ## Les outils par API
 
