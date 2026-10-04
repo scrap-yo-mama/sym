@@ -979,7 +979,10 @@
     "code_error": "Erreur du script",
     "run_budget_exceeded": "Budget du run dépassé",
     "budget_exceeded": "Budget dépassé",
-    "llm": "Erreur du modèle ({code})"
+    "llm": "Erreur du modèle ({code})",
+    "minimal_content": "Champ constant ou vide",
+    "compile_values_mismatch": "Valeurs différentes de l’essai",
+    "agent_engine_error": "Navigateur de l’agent en échec"
   },
   "diffSummary": {
     "selector_changed": "Le sélecteur de {field} a changé.",
@@ -2370,7 +2373,14 @@
       "invalid_locale": "Choisis une langue proposée",
       "invalid_timezone": "Choisis un fuseau de la liste",
       "generic": "Réessaie, ou ouvre les détails dans la console",
-      "llm_model_missing": "Choisis un modèle dans Réglages > Modèles IA"
+      "llm_model_missing": "Choisis un modèle dans Réglages > Modèles IA",
+      "invalid_export": "Corrige le fichier d’export ou réexporte l’API",
+      "remote_ref": "Retire les références distantes du schéma",
+      "integrity_mismatch": "Réexporte l’API : le fichier a été modifié",
+      "unsupported_format": "Utilise un export de cette version de SYM",
+      "invalid_strategy": "Réexporte l’API, ou importe-la sans stratégie",
+      "invalid_fixtures": "Retire les exemples hors du schéma de sortie",
+      "schema_too_large": "Raccourcis le schéma"
     },
     "state": {
       "running": "L'enquête est en cours.",

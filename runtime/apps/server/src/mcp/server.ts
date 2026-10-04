@@ -49,7 +49,7 @@ import { waitSecondsOf } from '../rest/shared.js';
 import { UUID } from '../routes/account-helpers.js';
 import { createdView, waitApiLeavesEnquete } from '../routes/apis.js';
 import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
-import { attemptsOf, createdSummary, renderNarrative } from './narrative.js';
+import { attemptsOf, createdSummary, PREVIEW_MAX_ROWS, renderNarrative } from './narrative.js';
 import { createProgressSink, progressMessage, type ProgressSink } from './progress.js';
 import { promptBody, PROMPT_ARG_SCHEMAS } from './prompts.js';
 import { actionTemplate, blockedTemplate, elicitationCatalog, parseLang, PROMPT_ARGS, PROMPT_MENU, PROMPT_NAMES, type McpLocale } from './texts.js';
@@ -217,6 +217,9 @@ function narrativeAnswer(envelope: Json, call: Call, extra?: { consoleUrl?: stri
       nextAction: (envelope['next_action'] as { tool: string } | null) ?? null,
       pollAfterSeconds: typeof envelope['poll_after_seconds'] === 'number' ? envelope['poll_after_seconds'] : null,
       ...(extra?.schemaRemark === true ? { schemaRemark: true } : {}),
+      ...(Array.isArray(envelope['items']) && (envelope['items'] as unknown[]).length > 0 && envelope['state'] === 'succeeded'
+        ? { result: { total: typeof envelope['total'] === 'number' ? envelope['total'] : null, preview: (envelope['items'] as Record<string, unknown>[]).slice(0, PREVIEW_MAX_ROWS) } }
+        : {}),
     },
     call.locale,
   );

@@ -1,0 +1,6 @@
+Investigation zz-books · zz-books.example
+The robot contact is not set: it is required before the first investigation. Set it in the console, Settings > Robot identity; nothing was fetched and nothing was spent.
+The investigation stopped: an action is needed before it can resume.
+Cost: $0.006
+Next step: ask the user to do the action above (My stack or the console), then send the same request again.
+Console: https://sym.example/apis/zz-books

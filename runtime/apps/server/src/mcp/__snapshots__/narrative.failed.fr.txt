@@ -1,0 +1,6 @@
+Enquête zz-books · zz-books.example
+1/4 Décrire : accès au site vérifié, aucun signal à examiner [0,2 s, 0 $]
+L’enquête a échoué : extraction cassée.
+Coût : 0,006 $
+Prochaine étape : dis à l’utilisateur ce qui s’est passé, puis propose d’ajuster la demande ou de relancer l’enquête (run_api avec force_investigate).
+Console : https://sym.example/apis/zz-books

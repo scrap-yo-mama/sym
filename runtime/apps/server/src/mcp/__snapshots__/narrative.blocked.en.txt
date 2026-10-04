@@ -1,0 +1,7 @@
+Investigation zz-books · zz-books.example
+1/4 Describe: site access checked, no signal to review [0.2 s, $0]
+This site refuses automated access, so SYM stops here without insisting. It is the site’s decision. What can be done instead: look for an official API, an export or a partnership; use another source; write to the site’s publisher to ask for access; investigate again later, if the site has changed.
+The investigation stopped. SYM does not try other ways to reach the site.
+Cost: $0.006
+Next step: offer the user an official API or another source; do not retry.
+Console: https://sym.example/apis/zz-books

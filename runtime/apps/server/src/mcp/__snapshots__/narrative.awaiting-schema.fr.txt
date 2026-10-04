@@ -1,0 +1,8 @@
+SYM 👻 : OK, je m’en occupe.
+Enquête zz-books · zz-books.example
+1/4 Décrire : accès au site vérifié, aucun signal à examiner [0,2 s, 0 $]
+2/4 Reconnaître : 1 source de données candidate trouvée [3,1 s, 0,002 $]
+3/4 Valider le schéma : 3 champs proposés [0,002 $]
+Coût : 0,006 $
+Prochaine étape : montre le schéma proposé à l’utilisateur, puis appelle validate_schema avec api_id 11111111-2222-4333-8444-555555555555 (output_schema seulement pour le corriger).
+Console : https://sym.example/apis/zz-books

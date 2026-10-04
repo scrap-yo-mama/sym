@@ -78,6 +78,9 @@ const ROUTE_MESSAGE_CODES = new Set([
   'invalid_llm_settings',
   'invalid_proxy',
   'responsible_use_ack_required',
+  // Codes que des routes rendent avec le détail du refus (schéma, état d'enquête) : le message de la route est gardé.
+  'invalid_schema',
+  'not_awaiting_validation',
 ]);
 
 /**
@@ -105,7 +108,8 @@ export function localizeErrors(ctx: Pick<ServerContext, 'pool'> & { defaultLocal
     const params = { ...details, scope: error['scope_required'], field: error['field'] };
     const key = [`srv.error_by_status.${reply.statusCode}.${code}`, `srv.error.${code}`].find((k) => renderer.has(k, 'en'));
     const texts = errorTexts(code, locale, params, reply.statusCode);
-    const keepRoute = key === undefined || ROUTE_MESSAGE_CODES.has(code);
+    // Une cause écrite par la route (`what_to_do` présent : contact du robot, prix du modèle, dossier d'enquête) garde son message.
+    const keepRoute = key === undefined || ROUTE_MESSAGE_CODES.has(code) || typeof error['what_to_do'] === 'string';
     if (!keepRoute) error['message'] = renderer.render(key, params as never, locale);
     error['message_locale'] ??= keepRoute ? 'fr' : locale;
     error['action_label'] ??= texts.action_label;

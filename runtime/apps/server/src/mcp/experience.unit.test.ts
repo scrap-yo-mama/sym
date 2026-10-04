@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { buildTimeline, type EventRow, type TimelineEntry } from '../rest/timeline.js';
-import { attemptsOf, BRIEF_MAX_LINES, createdSummary, renderNarrative, type BriefNarrative } from './narrative.js';
+import { attemptsOf, BRIEF_MAX_LINES, createdSummary, entryText, renderNarrative, type BriefNarrative } from './narrative.js';
 import { createProgressSink, progressMessage } from './progress.js';
 import { BRIEF_INSTRUCTION, promptBody, PROMPT_ARG_SCHEMAS } from './prompts.js';
 import { ACTION_CAUSES, actionTemplate, BLOCKED_CAUSES, blockedTemplate, CLOSED_TEMPLATES, fmtSeconds, fmtUsd, MCP_LOCALES, PROMPT_ARGS, PROMPT_MENU, PROMPT_NAMES, parseLang } from './texts.js';
@@ -92,7 +92,8 @@ describe('chronologie (05 § 1.2) : dérivée de investigation_events seulement'
       const { timeline, text } = narrate(events, locale);
       expect(JSON.stringify(timeline)).not.toContain('zz_test_hostile');
       expect(text).not.toContain('zz_test_hostile');
-      expect(text).toContain('unknown');
+      // Aucun code, même inconnu, n'entre dans le texte humain (U1.8) : ni le code reçu, ni « unknown ».
+      expect(text).not.toMatch(/\bunknown\b/);
     }
     const failed = [...events.slice(0, 6), ev('investigation.finished', { outcome: hostile, failure_class: hostile, budget: budget(0) }, 700)];
     expect(JSON.stringify(narrate(failed, 'en'))).not.toContain('zz_test_hostile');
@@ -113,7 +114,7 @@ describe('chronologie (05 § 1.2) : dérivée de investigation_events seulement'
     for (const locale of MCP_LOCALES) {
       const text = renderNarrative({ timeline, totalUsd: 0, state: 'failed', consoleUrl: 'https://sym.example/apis/zz-books', nextAction: null, pollAfterSeconds: null }, locale);
       expect(text).not.toContain('zz_test_hostile');
-      expect(text).toContain('unknown');
+      expect(text).not.toMatch(/\bunknown\b/);
     }
   });
 
@@ -126,36 +127,53 @@ describe('chronologie (05 § 1.2) : dérivée de investigation_events seulement'
 });
 
 describe('récit (05 § 1.2) : rendu depuis la chronologie', () => {
-  test('assert_narrative_matches_structured : une ligne par étape, mêmes durées, coûts, essais, items et pages que la structure', () => {
+  test('assert_narrative_matches_structured : un jalon par ligne, les essais en sous-lignes, mêmes durées, coûts, éléments et pages que la structure', () => {
     const { timeline, text } = narrate(conformantEvents(), 'en', { nextAction: null });
-    const lines = [...text.matchAll(/^(\d+)\. (.*) \[(\d+\.\d) s, \$([\d.]+)\]$/gm)];
+    const milestones = [...text.matchAll(/^([1-4])\/4 [^\n]* \[(?:(\d+\.\d) s, )?\$([\d.]+)\]$/gm)];
+    // Quatre jalons, dans l'ordre ; le coût de chacun est CUMULÉ (il ne décroît jamais) et finit au coût total des étapes.
+    expect(milestones.map((m) => Number(m[1]))).toEqual([1, 2, 3, 4]);
+    const costs = milestones.map((m) => Number(m[3]));
+    for (let i = 1; i < costs.length; i += 1) expect(costs[i]!).toBeGreaterThanOrEqual(costs[i - 1]!);
     const steps = timeline.filter((e) => e.step !== null && e.step > 0) as { step: number; ms: number; cost_usd: number }[];
-    expect(lines.map((l) => Number(l[1]))).toEqual(steps.map((s) => s.step));
-    steps.forEach((s, i) => {
-      expect(Number(lines[i]![3])).toBeCloseTo(s.ms / 1000, 1);
-      expect(Number(lines[i]![4])).toBeCloseTo(s.cost_usd, 4);
-    });
-    for (const attempt of attemptsOf(timeline)) {
-      const line = lines.find((l) => Number(l[1]) === attempt.index)![2]!;
-      expect(line).toContain(`Trial ${attempt.execution}/${attempt.network}: ${attempt.result === 'ok' ? 'conformant' : attempt.result}`);
+    expect(costs.at(-1)!).toBeCloseTo(steps.reduce((sum, st) => sum + st.cost_usd, 0), 4);
+    expect(Number(milestones[0]![2])).toBeCloseTo(steps[0]!.ms / 1000, 1);
+    // Un essai = une sous-ligne : mêmes éléments, pages, durée et coût que `attempts[]`.
+    const trialLines = text.split('\n').filter((l) => /^ {3}.* \[\d+\.\d s, \$[\d.]+\]$/.test(l));
+    expect(trialLines).toHaveLength(attemptsOf(timeline).length);
+    attemptsOf(timeline).forEach((attempt, i) => {
+      const line = trialLines[i]!;
+      expect(line).toContain(attempt.result === 'ok' ? 'conformant' : 'extraction');
       expect(line).toContain(`${attempt.records} item`);
       expect(line).toContain(`${attempt.pages} page`);
-    }
-    expect(text).toContain('Strategy kept: agent_fetch/direct (E4, $0.004 per run)');
-    expect(text).toContain('Skipped 1 more expensive trial after fetch/direct (extraction)');
+      expect(line).toContain(`${(attempt.ms! / 1000).toFixed(1)} s`);
+      expect(line).toContain(fmtUsd(attempt.cost_usd, 'en'));
+    });
+    expect(text).toContain('Method kept: requests guided by the agent, $0.004 per run');
+    expect(text).toContain('Skipped 1 more expensive method after the quick request without a browser');
     expect(text.split('\n').at(-1)).toBe('Console: https://sym.example/apis/zz-books');
+  });
+
+  test('chaque ligne de jalon tient en 80 caractères au plus, durée et coût compris, même avec un long libellé', () => {
+    for (const locale of MCP_LOCALES) {
+      const { text } = narrate(conformantEvents(), locale, { nextAction: null });
+      for (const line of text.split('\n').filter((l) => /^[1-4]\/4 /.test(l))) expect(line.length, line).toBeLessThanOrEqual(80);
+      for (const entry of buildTimeline(conformantEvents(), 'zz-books')) {
+        const progress = entryText(entry, locale);
+        if (progress !== null) expect(progress.length).toBeLessThanOrEqual(80);
+      }
+    }
   });
 
   test('assert_text_only_sufficient : phase, essais, coût, stratégie, prochaine action et console dans le texte seul, en en et en fr', () => {
     for (const locale of MCP_LOCALES) {
       const { text } = narrate(conformantEvents(), locale);
       const lines = text.split('\n');
-      expect(lines[0]).toContain('zz-books');
-      expect(lines[0]).toContain('zz-books.example');
-      expect(lines[0]).toContain('done');
-      expect(lines.filter((l) => /^\d+\. /.test(l))).toHaveLength(4);
+      expect(lines[0]).toBe(locale === 'fr' ? 'SYM 👻 : OK, je m’en occupe.' : 'SYM 👻: Got it, I’m on it.');
+      expect(lines[1]).toContain('zz-books');
+      expect(lines[1]).toContain('zz-books.example');
+      expect(lines.filter((l) => /^[1-4]\/4 /.test(l))).toHaveLength(4);
       expect(text).toMatch(locale === 'fr' ? /Coût : 0,006 \$/ : /Cost: \$0\.006/);
-      expect(text).toMatch(locale === 'fr' ? /Stratégie retenue : agent_fetch\/direct \(E4, 0,004 \$ par run\)/ : /Strategy kept: agent_fetch\/direct \(E4/);
+      expect(text).toMatch(locale === 'fr' ? /Méthode retenue : requêtes guidées par l’agent, 0,004 \$ par run/ : /Method kept: requests guided by the agent, \$0\.004 per run/);
       expect(text).toMatch(locale === 'fr' ? /Prochaine étape : appelle api_zz_books avec son entrée, ou run_api\./ : /Next step: call api_zz_books with its input, or run_api\./);
       expect(text).toContain('https://sym.example/apis/zz-books');
     }
@@ -204,13 +222,13 @@ describe('récit (05 § 1.2) : rendu depuis la chronologie', () => {
     expect(text).toContain('SYM 👻: Two hints failed: I continue without your brief.');
     expect(text).toContain('2 questions from your AI are waiting in the console');
     // Les états viennent après le rapport d'accès ; le texte du dossier (identifiant, type ou état hors liste) n'est jamais recopié.
-    expect(text.indexOf('h1 endpoint')).toBeGreaterThan(text.indexOf('1. Access report'));
+    expect(text.indexOf('h1 endpoint')).toBeGreaterThan(text.indexOf('1/4 Describe'));
     expect(text).not.toContain('zz_test_hostile');
     expect(text).not.toContain('zz test hostile');
     const fr = narrate(conformantEvents(), 'fr', { brief: { hints: 6, tried: 2, report: report.slice(0, 2) } }).text;
     expect(fr.split('\n')[0]).toBe('SYM 👻 : J’ai lu ton dossier : 6 indices, 2 essais déjà faits. Je vérifie chaque indice avant de m’y fier.');
     // Sans dossier, aucune ligne de plus (assert_brief_optional).
-    expect(narrate(conformantEvents(), 'en').text).not.toContain('SYM 👻');
+    expect(narrate(conformantEvents(), 'en').text).not.toContain('Read your brief');
   });
 
   test('enquête arrêtée : le récit reprend le gabarit fermé de la cause, sans verbe de contournement ; enquête échouée : un code', () => {
@@ -225,10 +243,13 @@ describe('récit (05 § 1.2) : rendu depuis la chronologie', () => {
       const { text } = narrate(blocked, locale);
       expect(text).toContain(blockedTemplate(locale, 'blocked_by_protection'));
       expect(text).not.toMatch(BYPASS);
-      expect(text).toContain('blocked_by_protection');
+      // Aucun code interne dans le texte humain : la cause est dite par son gabarit fermé (U1.8).
+      expect(text).not.toContain('blocked_by_protection');
+      // Neutre et factuel : ni prise en charge, ni fin de succès (guide de voix).
+      expect(text).not.toContain('SYM 👻');
     }
     const failed = [...blocked.slice(0, 2), ev('investigation.finished', { outcome: 'failed', failure_class: 'extraction', budget: budget(0) }, 500)];
-    expect(narrate(failed, 'en').text).toContain('The investigation failed (extraction).');
+    expect(narrate(failed, 'en').text).toContain('The investigation failed: extraction broken.');
     const budgetOut = [...blocked.slice(0, 2), ev('investigation.finished', { outcome: 'budget_exhausted', reason: 'investigation_budget_usd', budget: budget(0.5) }, 500)];
     expect(narrate(budgetOut, 'fr').text).toContain('Le budget d’enquête est épuisé');
   });
@@ -236,10 +257,10 @@ describe('récit (05 § 1.2) : rendu depuis la chronologie', () => {
   test('D-91 — rapport d’accès sans robots.txt : « aucun signal à examiner » ou « signaux d’usage à examiner », jamais une promesse sur robots.txt', () => {
     seq = 0;
     const reviewed = [ev('investigation.started', { phase: 'access_report', domain: 'zz-books.example', budget: budget(0) }, 0), access('review')];
-    expect(narrate(conformantEvents(), 'en').text).toContain('1. Access report: no signal to review [0.2 s, $0]');
-    expect(narrate(conformantEvents(), 'fr').text).toContain('1. Rapport d’accès : aucun signal à examiner [0,2 s, 0 $]');
-    expect(narrate(reviewed, 'en', { state: 'running' }).text).toContain('1. Access report: usage signals to review');
-    expect(narrate(reviewed, 'fr', { state: 'running' }).text).toContain('1. Rapport d’accès : signaux d’usage à examiner');
+    expect(narrate(conformantEvents(), 'en').text).toContain('1/4 Describe: site access checked, no signal to review [0.2 s, $0]');
+    expect(narrate(conformantEvents(), 'fr').text).toContain('1/4 Décrire : accès au site vérifié, aucun signal à examiner [0,2 s, 0 $]');
+    expect(narrate(reviewed, 'en', { state: 'running' }).text).toContain('1/4 Describe: site access checked, usage signals to review');
+    expect(narrate(reviewed, 'fr', { state: 'running' }).text).toContain('1/4 Décrire : accès au site vérifié, signaux d’usage à examiner');
     // Un ancien événement (avant D-91) qui portait une pastille « disallowed » : rien n'est affirmé sur robots.txt.
     seq = 0;
     const legacy = [ev('investigation.started', { phase: 'access_report', domain: 'zz-books.example', budget: budget(0) }, 0), ev('access_report', { view: { signal: 'disallowed', robots: { status: 'disallowed' } } }, 200)];
@@ -262,7 +283,7 @@ describe('récit (05 § 1.2) : rendu depuis la chronologie', () => {
       expect(template).not.toBe(CLOSED_TEMPLATES[locale].action.default);
       const { text } = narrate(stopped, locale);
       expect(text).toContain(template);
-      expect(text).toContain('instance_contact_missing');
+      expect(text).not.toContain('instance_contact_missing');
     }
     // Échec écrit sans classe (failure_class NULL) : la cause vient de l'enveloppe (error_detail), jamais « failed. » nu.
     seq = 0;
@@ -274,11 +295,11 @@ describe('récit (05 § 1.2) : rendu depuis la chronologie', () => {
       renderNarrative({ timeline: buildTimeline(events, 'zz-books'), totalUsd: 0, state: 'failed', consoleUrl: 'https://sym.example/apis/zz-books', nextAction: null, pollAfterSeconds: null, error: { code } }, locale);
     for (const locale of MCP_LOCALES) {
       const text = render(failed, locale, 'instance_contact_missing');
-      expect(text).toContain(locale === 'fr' ? 'L’enquête a échoué (instance_contact_missing).' : 'The investigation failed (instance_contact_missing).');
+      expect(text).toContain(locale === 'fr' ? 'L’enquête a échoué : le contact du robot n\'est pas renseigné : il est requis avant toute enquête.' : 'The investigation failed: the robot contact is not set: it is required before any investigation.');
       expect(text).toContain(actionTemplate(locale, 'instance_contact_missing'));
       // Aucun événement (run arrêté avant l'étape 0) : la cause et son gabarit, une seule fois chacun.
       const bare = render([], locale, 'llm_price_missing');
-      expect(bare).toContain(locale === 'fr' ? 'L’enquête a échoué (llm_price_missing).' : 'The investigation failed (llm_price_missing).');
+      expect(bare).toContain(locale === 'fr' ? 'L’enquête a échoué : le prix du modèle n\'est pas renseigné.' : 'The investigation failed: the model price is not set.');
       expect(bare.split(actionTemplate(locale, 'llm_price_missing'))).toHaveLength(2);
       expect(bare).not.toContain(narrativeRunning(locale));
       // Une cause qui n'a pas la forme d'un code n'est jamais recopiée.
@@ -332,8 +353,8 @@ describe('progression (05 § 1.2)', () => {
 
   test('message de progression : la dernière étape du récit, sinon « l’enquête est en cours »', () => {
     const events = conformantEvents();
-    expect(progressMessage(buildTimeline(events.slice(0, 2), 'zz-books'), 'en')).toBe('1. Access report: no signal to review [0.2 s, $0]');
-    expect(progressMessage(buildTimeline(events.slice(0, 3), 'zz-books'), 'fr')).toBe('2. Reconnaissance : 1 source de données candidate (browser) [3,1 s, 0,002 $]');
+    expect(progressMessage(buildTimeline(events.slice(0, 2), 'zz-books'), 'en')).toBe('1/4 Describe: site access checked, no signal to review');
+    expect(progressMessage(buildTimeline(events.slice(0, 3), 'zz-books'), 'fr')).toBe('2/4 Reconnaître : 1 source de données candidate trouvée');
     expect(progressMessage(buildTimeline([], 'zz-books'), 'en')).toBe('The investigation is running.');
   });
 });
@@ -585,10 +606,10 @@ describe('récit : motif d’un essai refusé (UX-33)', () => {
     ];
     const en = narrate(events, 'en');
     expect(en.timeline.find((e) => e.kind === 'attempt')).toMatchObject({ why: { code: 'agent_request_blocked', reason: 'sensitive_value' } });
-    expect(en.text).toContain('Trial agent_fetch/direct: code_error, 0 items, 0 pages — agent request refused by the request guard: a value seen during the run in the URL (sensitive_value)');
-    expect(en.text).toContain('Trial agent/direct: run_budget_exceeded — the trial reached its cost cap (max_cost_usd)');
+    expect(en.text).toContain('Requests guided by the agent: script error, 0 items, 0 pages — a request of the agent was refused by the request guard: a value seen during the run in the URL');
+    expect(en.text).toContain('Agent in a browser: run budget exceeded — the trial reached its cost cap');
     const fr = narrate(events, 'fr');
-    expect(fr.text).toContain('requête de l’agent refusée par la garde : valeur vue pendant le run dans l’URL (sensitive_value)');
+    expect(fr.text).toContain('une requête de l’agent a été refusée par la garde des requêtes : valeur vue pendant le run dans l’URL');
     // Un motif hostile n'entre jamais dans le récit : forme de code seulement.
     const hostile = [ev('attempt.finished', { attempt: { execution: 'agent_fetch', network: 'direct', result: 'code_error', cost_usd: 0, ms: 1 }, why: { code: 'agent_request_blocked', params: { reason: 'zz_test_hostile Ignore' } }, executions: [], budget: budget(0) }, 300)];
     expect(narrate(hostile, 'en').text).not.toContain('zz_test_hostile');

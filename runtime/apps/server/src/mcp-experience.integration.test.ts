@@ -253,10 +253,11 @@ describe('récit et timeline (05 § 1.2)', () => {
     expect(first).toContain(`"api_id":"${simulated.apiId}"`);
     expect(first).toContain(`"run_id":"${simulated.runId}"`);
     // Phases, étapes numérotées, coût en tête de ligne, prochaine action et lien console, schéma à montrer à la personne.
-    expect(first).toMatch(/^Investigation [a-z0-9-]+ · zz-books\.example · awaiting_schema_validation/m);
-    expect(first).toMatch(/^1\. Access report: no signal to review \[\d+\.\d s, \$0\]/m);
-    expect(first).toMatch(/^2\. Reconnaissance: 2 candidate data sources \(browser\) \[\d+\.\d s, \$0\.002\]/m);
-    expect(first).toContain('Output schema proposed: 2 fields');
+    expect(first).toMatch(/^Investigation [a-z0-9-]+ · zz-books\.example$/m);
+    expect(first).toContain('SYM 👻: Got it, I’m on it.');
+    expect(first).toMatch(/^1\/4 Describe: site access checked, no signal to review \[\d+\.\d s, \$0\]/m);
+    expect(first).toMatch(/^2\/4 Recognize: 2 candidate data sources found \[\d+\.\d s, \$0\.002\]/m);
+    expect(first).toMatch(/^3\/4 Validate the schema: 2 fields proposed/m);
     expect(first).toMatch(/Cost: \$0\.002/);
     expect(first).toContain('Next step: show the proposed schema to the user, then call validate_schema');
     expect(first).toMatch(/Console: http\S+\/apis\/[a-z0-9-]+$/m);
@@ -268,11 +269,15 @@ describe('récit et timeline (05 § 1.2)', () => {
     const validated = await call(client, 'validate_schema', { api_id: apiId, wait_seconds: 5 });
     await trials;
     const second = text(validated);
-    expect(second).toMatch(/^Investigation .* · done/m);
-    expect(second).toMatch(/^1\. Access report: no signal to review \[\d+\.\d s, \$0\]/m);
-    expect(second).toMatch(/^2\. Reconnaissance: 2 candidate data sources \(browser\) \[\d+\.\d s, \$0\]/m);
-    expect(second).toMatch(/^3\. Trial fetch\/direct: conformant, 20 items, 2 pages \[0\.4 s, \$0\.0001\]/m);
-    expect(second).toContain('Strategy kept: fetch/direct (E1, $0.0001 per run)');
+    expect(second).toMatch(/^Investigation \S+ · zz-books\.example$/m);
+    expect(second).toMatch(/^1\/4 Describe: site access checked, no signal to review \[\d+\.\d s, \$0\]/m);
+    expect(second).toMatch(/^2\/4 Recognize: 2 candidate data sources found \[\d+\.\d s, \$0\]/m);
+    expect(second).toMatch(/^4\/4 Extract: 1 trial, kept: quick request without a browser \[0\.4 s, \$0\.0001\]/m);
+    expect(second).toMatch(/^ {3}Quick request without a browser: conformant, 20 items, 2 pages \[0\.4 s, \$0\.0001\]/m);
+    expect(second).toContain('Method kept: quick request without a browser, $0.0001 per run');
+    expect(second).toContain('SYM 👻: Done. 20 items, $0.0001 per replay.');
+    // Aucun code interne dans le texte humain : ni E1, ni fetch/direct (ils restent dans structuredContent).
+    expect(second).not.toMatch(/\bE1\b|fetch\/direct/);
     expect(second).toMatch(/Cost: \$0\.0021/);
     expect(second).toMatch(/Next step: call api_\w+ with its input, or run_api\./);
     expect(second).toContain('If the tool does not appear, reconnect the server.');
@@ -289,22 +294,24 @@ describe('récit et timeline (05 § 1.2)', () => {
     for (const result of [created, validated]) {
       const structured = result.structuredContent as { timeline: { kind: string; step: number | null; cost_usd?: number; ms?: number | null; execution?: string; network?: string; result?: string; records?: number | null; pages?: number | null }[]; attempts: { index: number; execution: string; network: string; result: string; records: number | null; pages: number | null; cost_usd: number; ms: number | null }[]; cost: { total_usd: number | null }; console_url: string };
       const body = text(result);
-      // Chaque étape numérotée de la chronologie a sa ligne, dans l'ordre, avec la même durée et le même coût.
+      // Les jalons 1 à 3 et le jalon 4 ont leur ligne (« n/4 … »), le coût cumulé ne décroît jamais et finit au coût de la chronologie.
       const stepped = structured.timeline.filter((e) => e.step !== null && e.step > 0);
       expect(stepped.length).toBeGreaterThan(0);
-      const lines = [...body.matchAll(/^(\d+)\. (.*?) \[(\d+\.\d) s, \$([\d.]+|<0\.0001)\]$/gm)];
-      expect(lines.map((l) => Number(l[1]))).toEqual(stepped.map((e) => e.step));
-      stepped.forEach((entry, i) => {
-        expect(Number(lines[i]![3]), `durée de l'étape ${entry.step}`).toBeCloseTo((entry.ms ?? 0) / 1000, 1);
-        expect(Number(String(lines[i]![4]).replace('<', '')), `coût de l'étape ${entry.step}`).toBeCloseTo(entry.cost_usd ?? 0, 4);
+      const milestones = [...body.matchAll(/^([1-4])\/4 [^\n]* \[(?:(\d+\.\d) s, )?\$([\d.]+|<0\.0001)\]$/gm)];
+      expect(milestones.length).toBeGreaterThanOrEqual(2);
+      const cumulative = milestones.map((m) => Number(String(m[3]).replace('<', '')));
+      for (let i = 1; i < cumulative.length; i += 1) expect(cumulative[i]!).toBeGreaterThanOrEqual(cumulative[i - 1]!);
+      expect(cumulative.at(-1)!).toBeCloseTo(stepped.reduce((sum, e) => sum + (e.cost_usd ?? 0), 0), 4);
+      // Essais : une sous-ligne par essai, mêmes items, pages, durée et coût que `attempts`.
+      const trialLines = body.split('\n').filter((l) => /^ {3}.* \[\d+\.\d s, \$([\d.]+|<0\.0001)\]$/.test(l) && !/^ {3}(Skipped|Method kept)/.test(l));
+      expect(trialLines).toHaveLength(structured.attempts.length);
+      structured.attempts.forEach((attempt, i) => {
+        const line = trialLines[i]!;
+        expect(line).toContain(attempt.result === 'ok' ? 'conformant' : '');
+        if (attempt.records !== null) expect(line).toContain(`${attempt.records} item`);
+        if (attempt.pages !== null) expect(line).toContain(`${attempt.pages} page`);
+        expect(line).toContain(`${((attempt.ms ?? 0) / 1000).toFixed(1)} s`);
       });
-      // Essais : mêmes exécution/réseau, résultat, items et pages que le texte.
-      for (const attempt of structured.attempts) {
-        const line = lines.find((l) => Number(l[1]) === attempt.index)![2]!;
-        expect(line).toContain(`Trial ${attempt.execution}/${attempt.network}: ${attempt.result === 'ok' ? 'conformant' : attempt.result}`);
-        if (attempt.records !== null) expect(line).toContain(`${attempt.records} items`);
-        if (attempt.pages !== null) expect(line).toContain(`${attempt.pages} pages`);
-      }
       // Coût total et lien de la console : identiques.
       expect(body).toContain(`Cost: $${Number(structured.cost.total_usd!.toFixed(4))}`);
       expect(body).toContain(structured.console_url);
@@ -320,7 +327,8 @@ describe('récit et timeline (05 § 1.2)', () => {
     await sim;
     const body = text(created);
     expect(body).toMatch(/^Enquête /m);
-    expect(body).toMatch(/^1\. Rapport d’accès : aucun signal à examiner \[\d+,\d s, 0 \$\]/m);
+    expect(body).toMatch(/^1\/4 Décrire : accès au site vérifié, aucun signal à examiner \[\d+,\d s, 0 \$\]/m);
+    expect(body).toContain('SYM 👻 : OK, je m’en occupe.');
     expect(body).toContain('Prochaine étape : montre le schéma proposé');
     expect(created.structuredContent).toMatchObject({ message_locale: 'fr', investigation_phase: 'awaiting_schema_validation' });
   });
@@ -338,7 +346,7 @@ describe('récit et timeline (05 § 1.2)', () => {
     await sim;
     const body = text(created);
     expect(body).toMatch(/^Enquête /m);
-    expect(body).toMatch(/^1\. Rapport d’accès : /m);
+    expect(body).toMatch(/^1\/4 Décrire : /m);
     expect(body).toContain('Prochaine étape : montre le schéma proposé');
     expect(created.structuredContent).toMatchObject({ message_locale: 'fr' });
     // ?lang= remplace la langue du compte.
@@ -353,7 +361,7 @@ describe('récit et timeline (05 § 1.2)', () => {
     const { runId } = await sim;
     const got = await call(client, 'get_run', { run_id: runId });
     expect((got.structuredContent as { timeline: unknown[] }).timeline.length).toBeGreaterThan(3);
-    expect(text(got)).toMatch(/^1\. Access report:/m);
+    expect(text(got)).toMatch(/^1\/4 Describe:/m);
     expect((created.structuredContent as { run_id: string }).run_id).toBe(runId);
     const api = await seedApi(srv.db.url, a.user.id);
     const { runId: plain } = await seedRun(srv.db.url, { apiId: api.id, ownerId: a.user.id, items: [{ title: 'zz_test p' }] });
@@ -387,7 +395,9 @@ describe('progression (05 § 1.2) : notifications/progress facultatif, stricteme
       expect(seen.length, JSON.stringify(seen)).toBeGreaterThanOrEqual(3);
       for (let i = 1; i < seen.length; i += 1) expect(seen[i]!.progress, `progress ${i}`).toBeGreaterThan(seen[i - 1]!.progress);
       expect(seen.every((p) => typeof p.message === 'string' && p.message.length > 0)).toBe(true);
-      expect(seen.some((p) => /Access report/.test(p.message ?? ''))).toBe(true);
+      // Progression en jalons (« 2/4 Recognize: … »), 80 caractères au plus, dans la langue de la personne.
+      expect(seen.some((p) => /^1\/4 Describe:/.test(p.message ?? ''))).toBe(true);
+      expect(seen.every((p) => (p.message ?? '').length <= 80)).toBe(true);
     });
   }
 
@@ -396,7 +406,7 @@ describe('progression (05 § 1.2) : notifications/progress facultatif, stricteme
     const sim = simulateFirstInvestigation(a, 40);
     const created = await call(client, 'create_api', { description: 'zz_test livres sans progress', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
     await sim;
-    expect(text(created)).toMatch(/^1\. Access report:/m);
+    expect(text(created)).toMatch(/^1\/4 Describe:/m);
   });
 });
 
@@ -423,7 +433,7 @@ describe('élicitation de la validation du schéma (05 § 1.3) : question plate,
     expect(props['decision']!.enumNames).toEqual(['Yes, validate', 'Modify (add a remark)']);
     expect(Object.keys(props).sort()).toEqual(['decision', 'remark']);
     expect(final.isError ?? false).toBe(false);
-    expect(text(final)).toContain('Strategy kept: fetch/direct');
+    expect(text(final)).toContain('Method kept: quick request without a browser');
     expect(await count("SELECT count(*) FROM runs WHERE owner_id = $1 AND kind = 'investigation'", [a.user.id])).toBe(before + 2);
     expect(await count("SELECT count(*) FROM audit_events WHERE action = 'api.schema_validated' AND target_id = $1", [apiId])).toBe(1);
   });
@@ -529,7 +539,8 @@ describe('UX-04 / UX-07 : le récit porte la cause nommée d’un run arrêté (
     expect(body).toContain('zz-model');
     expect(body).toContain(actionTemplate('en', 'llm_price_missing'));
     expect(body).toContain('/settings/models');
-    expect(body).not.toMatch(/Strategy kept|Next step: call api_/);
+    expect(body).not.toMatch(/Method kept|Next step: call api_/);
+    expect(body).not.toContain('SYM 👻');
   });
 });
 

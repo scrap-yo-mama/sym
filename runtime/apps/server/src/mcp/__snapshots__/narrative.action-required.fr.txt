@@ -1,0 +1,6 @@
+Enquête zz-books · zz-books.example
+Le contact du robot n’est pas renseigné : il est requis avant la première enquête. Renseigne-le dans Réglages > Identité du robot ; rien n’a été envoyé ni dépensé.
+L’enquête s’est arrêtée : une action est attendue avant de reprendre.
+Coût : 0,006 $
+Prochaine étape : demande à l’utilisateur de faire l’action indiquée (Ma stack ou la console), puis renvoie la même demande.
+Console : https://sym.example/apis/zz-books

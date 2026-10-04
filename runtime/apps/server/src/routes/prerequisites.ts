@@ -28,10 +28,10 @@ type StoredLlm = { providers?: { id: string; api_key_secret_id?: string; models?
 
 const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-export type PrerequisitesView = { ready: boolean; missing: number; items: Item[] };
+type PrerequisitesView = { ready: boolean; missing: number; items: Item[] };
 
 /** Les prérequis de la personne `userId`, textes dans `locale`. */
-export async function prerequisitesView(ctx: ServerContext, userId: string, locale: string): Promise<PrerequisitesView> {
+async function prerequisitesView(ctx: ServerContext, userId: string, locale: string): Promise<PrerequisitesView> {
   const done = (id: string, ok: boolean | null, code: string, blocking: boolean, consolePath: string | null, params: Record<string, unknown> = {}): Item => {
     const texts = errorTexts(code, locale, params);
     return { id, ok, blocking, code: ok === false ? code : null, message: ok === false ? (texts.message ?? '') : '', action_label: ok === false ? texts.action_label : null, console_path: ok === false ? consolePath : null };

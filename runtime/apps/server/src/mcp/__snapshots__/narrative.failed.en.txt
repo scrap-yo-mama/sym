@@ -1,0 +1,6 @@
+Investigation zz-books · zz-books.example
+1/4 Describe: site access checked, no signal to review [0.2 s, $0]
+The investigation failed: extraction broken.
+Cost: $0.006
+Next step: tell the user what happened, then offer to adjust the request or to investigate again (run_api with force_investigate).
+Console: https://sym.example/apis/zz-books

@@ -33,7 +33,7 @@ describe('sondes', () => {
     const srv = await server();
     const res = await get(srv, '/api/health');
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: 'ok', version: '0.0.0' });
+    expect(res.json()).toEqual({ status: 'ok', version: expect.stringMatching(/^(?!0\.0\.0$)\d+\.\d+\.\d+/) });
     const versioned = await server({ RUNTIME_VERSION: '1.4.2-beta.1' });
     expect((await get(versioned, '/api/health')).json()).toEqual({ status: 'ok', version: '1.4.2-beta.1' });
   });
@@ -64,7 +64,7 @@ describe('sondes', () => {
     try {
       started = await prepareServer(serverEnv(tdb.url, generateMasterKey(), bootstrap), { schemaPollMs: 60_000 });
       const inject = (method: 'GET' | 'POST', url: string, payload?: object) => started!.app.inject({ method, url, ...(payload ? { payload } : {}) });
-      expect((await inject('GET', '/api/health')).json()).toEqual({ status: 'ok', version: '0.0.0' });
+      expect((await inject('GET', '/api/health')).json()).toEqual({ status: 'ok', version: expect.stringMatching(/^(?!0\.0\.0$)\d+\.\d+\.\d+/) });
       const before = await inject('GET', '/api/ready');
       expect(before.statusCode).toBe(503);
       expect(before.json()).toEqual({ status: 'not_ready', checks: { database: true, schema: false, key_check: false } });

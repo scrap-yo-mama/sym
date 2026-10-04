@@ -1,0 +1,7 @@
+Enquête zz-books · zz-books.example
+1/4 Décrire : accès au site vérifié, aucun signal à examiner [0,2 s, 0 $]
+Ce site refuse l’accès automatisé : SYM s’arrête là, sans insister. C’est la décision du site. Ce qui peut se faire à la place : chercher une API officielle, un export ou un partenariat ; utiliser une autre source ; écrire à l’éditeur du site pour demander l’accès ; ré-enquêter plus tard, si le site a changé.
+L’enquête s’est arrêtée. SYM n’essaie pas d’autre voie pour atteindre le site.
+Coût : 0,006 $
+Prochaine étape : propose à l’utilisateur une API officielle ou une autre source ; ne réessaie pas.
+Console : https://sym.example/apis/zz-books

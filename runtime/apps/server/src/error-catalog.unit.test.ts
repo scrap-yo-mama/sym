@@ -138,12 +138,19 @@ describe('enveloppe REST (03 § 10.3) : crochet onSend', () => {
     expect(typeof body['retryable']).toBe('boolean');
   });
 
-  test('une cause écrite par la route (what_to_do, retryable, field) est conservée', async () => {
-    const { body } = await run({ code: 'minimal_content', message: 'x', what_to_do: 'Custom guidance.', retryable: false, field: 'prix', details: { reason: 'constant' } }, { locale: 'fr' });
+  test('une cause écrite par la route (what_to_do, retryable, message) est conservée telle quelle, avec l’action du catalogue en plus', async () => {
+    const { body } = await run({ code: 'minimal_content', message: 'Le champ prix est constant.', what_to_do: 'Custom guidance.', retryable: false, field: 'prix' }, { locale: 'fr' });
     expect(body['what_to_do']).toBe('Custom guidance.');
     expect(body['retryable']).toBe(false);
     expect(body['field']).toBe('prix');
+    expect(body['message']).toBe('Le champ prix est constant.');
+    expect(body['action_label']).toMatch(/\S/);
+  });
+
+  test('les paramètres nommés (field, details) remplissent le message du catalogue', async () => {
+    const { body } = await run({ code: 'minimal_content', message: 'x', field: 'prix', details: { reason: 'constant' } }, { locale: 'fr' });
     expect(body['message']).toBe('Le champ prix est constant ou vide : constant.');
+    expect(body['what_to_do']).toBe('The field prix is constant or empty: constant. Make the field optional or keep it as it is.');
   });
 
   test('un message qui porte le détail de la requête (entrée hors schéma, plafond…) reste celui de la route', async () => {

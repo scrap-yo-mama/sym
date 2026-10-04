@@ -979,7 +979,10 @@
     "code_error": "Script error",
     "run_budget_exceeded": "Run budget exceeded",
     "budget_exceeded": "Budget exceeded",
-    "llm": "Model error ({code})"
+    "llm": "Model error ({code})",
+    "minimal_content": "Constant or empty field",
+    "compile_values_mismatch": "Values differ from the trial",
+    "agent_engine_error": "Agent browser failure"
   },
   "diffSummary": {
     "selector_changed": "The selector for {field} changed.",
@@ -2370,7 +2373,14 @@
       "invalid_locale": "Choose a language that is offered",
       "invalid_timezone": "Choose a time zone from the list",
       "generic": "Try again, or open the details in the console",
-      "llm_model_missing": "Choose a model in Settings > AI models"
+      "llm_model_missing": "Choose a model in Settings > AI models",
+      "invalid_export": "Fix the export file or export the API again",
+      "remote_ref": "Remove the remote references from the schema",
+      "integrity_mismatch": "Export the API again: the file was changed",
+      "unsupported_format": "Use an export from this version of SYM",
+      "invalid_strategy": "Export the API again, or import it without a strategy",
+      "invalid_fixtures": "Remove the examples that do not match the output schema",
+      "schema_too_large": "Shorten the schema"
     },
     "state": {
       "running": "The investigation is running.",
