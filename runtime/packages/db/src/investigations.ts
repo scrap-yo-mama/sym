@@ -368,8 +368,15 @@ export async function saveInvestigationStrategy(
     /** Source de la version (tâche 2.10, 18 §4.6) : demande, schéma, décisions, règles injectées et skills lus. */
     source?: StrategySource;
     rules?: readonly StrategyRuleRow[];
+    /**
+     * Stratégie compilée depuis la version retenue (constat UX-20 : essai E4 compilé en déclaratif `html`, vérifié sans
+     * LLM). La version `execution` (E4) est écrite d'abord et devient courante (`was_current` : repli par retour de version,
+     * 19 « Retour de version borné ») ; la version compilée (parent = la version E4) devient ensuite courante, dans la même
+     * transaction. Rend alors la version compilée et `fallbackVersion`, la version E4.
+     */
+    compiled?: { execution: Execution; spec: unknown; estCostUsd: number | null };
   },
-): Promise<{ version: number }> {
+): Promise<{ version: number; fallbackVersion?: number }> {
   // Schéma d'entrée (04 §1) : chaque champ a une description (500 caractères au plus), sinon refus, avant toute écriture.
   try {
     assertInputSchema(args.inputSchema);
@@ -411,6 +418,15 @@ export async function saveInvestigationStrategy(
        WHERE id = $1`,
       [args.apiId, version, JSON.stringify(args.outputSchema), JSON.stringify(args.inputSchema), JSON.stringify(args.state), args.outputColumns ?? schemaColumns(args.outputSchema)],
     );
-    return { version };
+    if (args.compiled === undefined) return { version };
+    const compiledVersion = version + 1;
+    await tx.query(
+      `INSERT INTO strategy_versions (api_id, version, owner_id, project_id, execution, network, spec, est_cost_usd, created_by, parent_version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10, $9)`,
+      [args.apiId, compiledVersion, args.ownerId, api.project_id, args.compiled.execution, args.network, JSON.stringify(args.compiled.spec), args.compiled.estCostUsd, version, args.createdBy ?? 'investigation'],
+    );
+    if (args.source !== undefined) await recordStrategySource(tx, { apiId: args.apiId, ownerId: args.ownerId, version: compiledVersion, source: args.source, rules: args.rules ?? [] });
+    await tx.query('UPDATE apis SET current_strategy_version = $2, updated_at = now() WHERE id = $1', [args.apiId, compiledVersion]);
+    return { version: compiledVersion, fallbackVersion: version };
   });
 }

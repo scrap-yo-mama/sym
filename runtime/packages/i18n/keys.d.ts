@@ -772,6 +772,8 @@ export type MessageKey =
   | 'investigation.gate.what'
   | 'investigation.gate.whatUnknown'
   | 'investigation.log.accessProbed'
+  | 'investigation.log.compileKept'
+  | 'investigation.log.compiled'
   | 'investigation.log.empty'
   | 'investigation.log.failed'
   | 'investigation.log.llmsTxt'

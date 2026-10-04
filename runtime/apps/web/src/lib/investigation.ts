@@ -12,6 +12,8 @@
 //   schema.validated       { run_id, by?: 'auto' | … }   (le schéma est validé : `auto` sous `auto_validate`, sinon par l'utilisateur)
 //   attempt.finished       { run_id, attempt: RunAttempt (+ why?: { code, params }), source?, exchange?, budget? }
 //   attempt.pruned         { run_id, by?: { execution, network, source? }, reason, pruned: [{ execution, network, source?, est_cost_usd? }] }
+//   strategy.compiled      { run_id, from: 'agent_fetch', to: 'fetch', ok, reason?, proposals?, ratio?, cost_usd? }  (essai E4 compilé en
+//                          stratégie déclarative html rejouée sans IA, ou compilation non retenue : E4 reste la stratégie)
 // `exchange` (carte requête/réponse de la colonne « Ce que voit l'agent », 06 § 2 ; ADR 0003, à confirmer par 3.1) :
 //   { request: { method, url }, response?: { status?, content_type?, bytes? } } — jamais d'en-tête ni de corps (INV8) ; la
 //   console ne garde de l'URL que l'origine et le chemin (ni requête ni fragment), et ignore une méthode ou un schéma inattendus.
@@ -146,6 +148,13 @@ export interface ActionView {
   resuming: boolean;
 }
 
+/** Compilation d'un essai E4 en stratégie déclarative rejouée sans IA (`strategy.compiled`). */
+export interface CompiledView {
+  ok: boolean;
+  /** Raison du refus (code stable) ; nulle si la compilation est retenue. */
+  reason: string | null;
+}
+
 export interface StrategyView {
   version: number | null;
   execution: Execution | null;
@@ -172,6 +181,8 @@ export interface InvestigationState {
   /** Couples écartés par le classifieur (`attempt.pruned`), grisés avec leur raison dans le plan. */
   pruned: PrunedStep[];
   strategy: StrategyView | null;
+  /** Compilation E4 → déclaratif html : retenue (rejeu sans IA) ou non ; nulle tant qu'aucune n'a eu lieu. */
+  compiled: CompiledView | null;
   blocked: BlockedView | null;
   action: ActionView | null;
   /** Fin de l'enquête : `sain`, `warning`, `erreur`, `bloquee` ou arrêtée par l'utilisateur. */
@@ -205,6 +216,7 @@ export function emptyInvestigation(): InvestigationState {
     plan: null,
     pruned: [],
     strategy: null,
+    compiled: null,
     blocked: null,
     action: null,
     terminal: false,
@@ -418,6 +430,10 @@ export function ingestEvent(state: InvestigationState, event: SseEvent, nowMs: n
         state.attempts.sort((a, b) => a.index - b.index);
       }
       if (state.action?.resuming) state.action = null;
+      break;
+    }
+    case 'strategy.compiled': {
+      state.compiled = { ok: data.ok === true, reason: data.ok === true ? null : text(data.reason) };
       break;
     }
     case 'status.changed': {

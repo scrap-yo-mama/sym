@@ -30,3 +30,4 @@ export { REPAIR_MAX_TOKENS, REPAIR_PROPOSAL_SCHEMA, REPAIR_SYSTEM_PROMPT, parseR
 export { runStepAgent, STEP_AGENT_SYSTEM_PROMPT, type SemanticTarget, type StepAgentArgs, type StepAgentObservation, type StepAgentOutcome, type StepAgentPage } from './step-agent.js';
 export { readSkillsPhase, renderSkillBodies, SKILL_PHASE_MAX_CALLS, type SkillBody } from './skills.js';
 export { JUDGE_MAX_TOKENS, JUDGE_SYSTEM_PROMPT, judgeCallCeilingUsd, judgeMessages, judgePromptVersion, proposeJudgement, type JudgeArgs, type JudgeResult } from './judge.js';
+export { compileHtmlStrategy, HTML_COMPILE_MAX_TOKENS, HTML_COMPILE_SYSTEM_PROMPT, htmlCompileCallCeilingUsd, htmlCompileMessages, htmlCompilePromptVersion, type HtmlCompileArgs, type HtmlCompileOutcome } from './html-compile.js';

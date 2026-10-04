@@ -26,9 +26,10 @@ type TaskReference =
       kind: 'conform';
       /**
        * Niveau E le moins cher que le PRODUIT atteint sur cette fixture dans le harnais (« moins cher atteint » : niveau retenu
-       * égal à celui-ci). L'enquête ne compile en E1 que des gisements de données (réponse JSON, blob embarqué : proposal.ts),
-       * jamais une page HTML par sélecteurs CSS, et le harnais n'a pas de Chromium (le XHR d'une SPA, vu en E3, lui échappe) :
-       * une page sans gisement relève donc de E4. E5 et E6 sont hors du banc (aucun navigateur) jusqu'à 2.13 et 4.2.
+       * égal à celui-ci). L'enquête retient E1 pour un gisement de données (réponse JSON, blob embarqué : proposal.ts) et pour
+       * une page HTML dont l'essai E4 conforme se compile en stratégie déclarative `html` vérifiée sans LLM (constat UX-20) ;
+       * le harnais n'a pas de Chromium (le XHR d'une SPA, vu en E3, lui échappe) : une page sans gisement ni recette
+       * compilée relève de E4. E5 et E6 sont hors du banc (aucun navigateur) jusqu'à 2.13 et 4.2.
        */
       level_e_min: Level;
       /** Nombre minimal d'items livrés conformes, et clés qui doivent y figurer (comparaison à la référence, pas au seul schéma). */
@@ -76,7 +77,7 @@ export const BENCH_TASKS: readonly BenchTask[] = [
     startPath: '/',
     description: 'Produits du catalogue rendu côté serveur (identifiant, titre, prix)',
     split: 'control',
-    reference: { kind: 'conform', level_e_min: 'E4', min_items: 2, record_key: 'id', sample_ids: ids(makeProducts(BENCH_SEED, 'ssr', 100)) },
+    reference: { kind: 'conform', level_e_min: 'E1', min_items: 2, record_key: 'id', sample_ids: ids(makeProducts(BENCH_SEED, 'ssr', 100)) },
   },
   {
     id: 'T-spa',

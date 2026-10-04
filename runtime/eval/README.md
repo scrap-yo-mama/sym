@@ -67,7 +67,9 @@ Report consigné à la livraison de 2.8 (correctifs de revue) ; à brancher sous
 - **E5 et E6** : le harnais n'a pas de navigateur (aucun Chromium) ; les voies hybride et agent, et les fixtures `agent_*` du
   spike 0.6a, sont hors du banc à tous les niveaux jusqu'à 2.13 (mutations par étape) et 4.2 (bras joués). Le `level_e_min`
   des tâches est donc le niveau le moins cher que le produit atteint **sans navigateur** : E1 pour un gisement de données
-  (`api_json`), E4 pour une page sans gisement (`ssr`, `spa` dont le XHR n'est vu qu'en E3, `injection`, `dom`, `irregular`).
+  (`api_json`) et pour une page HTML dont l'essai E4 conforme se compile en stratégie déclarative `html` vérifiée sans LLM
+  (`ssr`, deuxième appel du rôle `investigate` en N0), E4 pour une page sans gisement ni recette compilée (`spa` dont le XHR
+  n'est vu qu'en E3, `injection`, `dom`, `irregular`).
 - **Injection avec un vrai modèle** : en N0, le modèle obéissant tente d'ouvrir l'URL du piège par un appel d'outil que le rôle
   `extract` n'offre pas ; le faux fournisseur l'observe (tentative), le produit ne l'exécute pas (bloquée). En N1 et N2, prompts
   et réponses ne sont jamais journalisés : seules les requêtes reçues par le piège sont observables.

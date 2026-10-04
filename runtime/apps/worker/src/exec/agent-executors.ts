@@ -98,6 +98,11 @@ export type AgentOutcome = {
   readonly domainBlocked?: number;
   /** Requêtes refusées par la politique de requêtes de l'agent (`agent_request_blocked`, 19 §7) : codes seulement, jamais d'URL ni de valeur. */
   readonly requestPolicy?: { readonly blocked: number; readonly reasons: readonly string[] };
+  /**
+   * Essai E4 réussi : page servie (corps borné par `limits.max_response_bytes`, jamais écrit ni journalisé), gardée en
+   * mémoire pour la compilation en stratégie déclarative `html` par l'enquête (constat UX-20).
+   */
+  readonly page?: { readonly html: string; readonly url: string };
 };
 
 /** Options communes de la politique de requêtes de l'agent (PA-01) : valeurs sensibles du run et entrées du run. */
@@ -327,7 +332,9 @@ async function runAgentFetch(options: AgentFetchOptions, gate: AgentRequestGate)
     const llm = spend();
     // Coût inconnu (prix absent) : jamais un succès dont le plafond n'a pas pu être tenu.
     if (llm.usd === null) return { result: fail(budgetFailure(true), 1), llm };
-    return { result: conformRecords(out.records, options.outputSchema, 1, options.itemPolicy), llm };
+    const result = conformRecords(out.records, options.outputSchema, 1, options.itemPolicy);
+    const html = /html/i.test(exchange.headers['content-type'] ?? 'text/html');
+    return { result, llm, ...(result.ok && html ? { page: { html: exchange.body, url: exchange.url } } : {}) };
   } catch (error) {
     if (options.signal.aborted) throw error;
     return { result: fail(llmFailure(error), 1), llm: spend() };

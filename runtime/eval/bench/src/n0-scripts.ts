@@ -36,9 +36,25 @@ const CONTACTS_PROPOSAL = {
 const PRODUCT_FIELDS = [field('id', 'string', 'Identifiant du produit'), field('title', 'string', 'Titre du produit'), field('price', 'number', 'Prix en euros')];
 /**
  * Proposition sans gisement (page HTML sans API ni blob, ou SPA dont le XHR n'est vu qu'en E3) : seule la voie E4
- * (`agent_fetch`, rôle `extract`) est essayable ; la référence de ces tâches est donc E4 (catalog.ts, `level_e_min`).
+ * (`agent_fetch`, rôle `extract`) est essayable ; la référence de ces tâches est E4 (catalog.ts, `level_e_min`), sauf quand une
+ * recette `html` compilée suit (`T-ssr`, ci-dessous) : E1.
  */
 const pageProposal = (fields: Field[]) => ({ fields, sources: [] });
+/**
+ * Compilation de l'essai E4 conforme en stratégie déclarative `html` (constat UX-20, rôle `investigate`, 2e appel) : la
+ * bonne recette pour le catalogue `ssr` (cartes `article.product`, identifiant en `data-id`, prix « 12,50 € »). Vérifiée
+ * sans LLM sur la page capturée, elle est retenue (E1) : la référence de `T-ssr` est donc E1, et son rejeu ne rappelle
+ * jamais le LLM.
+ */
+const compileOp = (op: string, decimal: string | null = null) => ({ op, pattern: null, group: null, decimal, format: null });
+const SSR_HTML_RECIPE = {
+  records: 'article.product',
+  fields: [
+    { field: 'id', css: null, attr: 'data-id', ops: [] },
+    { field: 'title', css: 'h2.title a', attr: null, ops: [compileOp('trim')] },
+    { field: 'price', css: '.price', attr: null, ops: [compileOp('to_number', ',')] },
+  ],
+};
 const products = (site: string, n: number, count = n) =>
   makeProducts(BENCH_SEED, site, n)
     .slice(0, count)
@@ -58,7 +74,7 @@ export function taskScript(taskId: string): Record<string, ScriptedStep[]> | nul
     case 'T-api_json':
       return { [FAKE_MODELS.investigate]: [scripted.json(CONTACTS_PROPOSAL)] };
     case 'T-ssr':
-      return { [FAKE_MODELS.investigate]: [scripted.json(pageProposal(PRODUCT_FIELDS))], [FAKE_MODELS.extract]: times(12, scripted.json({ items: products('ssr', 100, 20) })) };
+      return { [FAKE_MODELS.investigate]: [scripted.json(pageProposal(PRODUCT_FIELDS)), scripted.json(SSR_HTML_RECIPE)], [FAKE_MODELS.extract]: times(12, scripted.json({ items: products('ssr', 100, 20) })) };
     case 'T-spa':
       return { [FAKE_MODELS.investigate]: [scripted.json(pageProposal(PRODUCT_FIELDS))], [FAKE_MODELS.extract]: times(12, scripted.json({ items: products('spa', 30) })) };
     case 'T-injection':

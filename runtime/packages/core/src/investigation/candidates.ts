@@ -4,7 +4,9 @@
 // LLM d'une page obtenue en E1) et E6 (agent de bout en bout, serveur seulement, ADR 0001) quand leur rôle LLM est
 // configuré ; croisés avec les réseaux AUTORISÉS (politique de l'API et proxys de l'admin, jamais élargis), chiffrés
 // (`estimateCostUsd`) et triés (`orderTrials`). E5 n'est pas essayé directement : il naît de la compilation d'une trace
-// E6 réussie (04 §3.1). Le tunnel ne sert que s'il est dans la politique réseau de l'API, jamais E6 ni un script.
+// E6 réussie (04 §3.1). De même, une stratégie déclarative à source `html` n'est pas un couple du plan : elle naît de la
+// compilation d'un essai E4 conforme, vérifiée sans LLM (html-compile.ts, UX-20). Le tunnel ne sert que s'il est dans la
+// politique réseau de l'API, jamais E6 ni un script.
 import type { AgentTraceStep } from '../agent/engine.js';
 import type { HybridSpec } from '../agent/specs.js';
 import type { Execution, Network } from '../model/enums.js';

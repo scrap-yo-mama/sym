@@ -138,6 +138,20 @@ describe('journal d’enquête', () => {
     expect(html).toContain(en.investigation.seen.lastTrial);
   });
 
+  test('stratégie compilée (UX-20) : « Stratégie compilée : rejeu sans IA » en fin de journal, en fr et en en', async () => {
+    const state = running();
+    state.compiled = { ok: true, reason: null };
+    const html = await render(InvestigationBoard, props(state));
+    expect(html).toContain('data-testid="compiled-line"');
+    expect(html).toContain(en.investigation.log.compiled);
+    const frHtml = await render(InvestigationBoard, props(state), { locale: 'fr' });
+    expect(frHtml).toContain('Stratégie compilée : rejeu sans IA');
+    expect(fr.investigation.log.compiled).toBe('Stratégie compilée : rejeu sans IA');
+    state.compiled = { ok: false, reason: 'values' };
+    expect(await render(InvestigationBoard, props(state))).toContain(en.investigation.log.compileKept);
+    expect(await render(InvestigationBoard, props(running()))).not.toContain('data-testid="compiled-line"');
+  });
+
   test('rendu français du journal', async () => {
     const html = await render(InvestigationBoard, props(running()), { locale: 'fr' });
     expect(html).toContain('Rapport d&#39;accès : page sondée');
