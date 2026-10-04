@@ -39,6 +39,12 @@ export interface FieldLocator {
   css?: string;
   attr?: string;
   fallback_paths?: string[];
+  /**
+   * Source HTML seulement : le sélecteur `css` est cherché sous le N-ième ancêtre de l'enregistrement (1 : son parent), et non
+   * sous l'enregistrement lui-même ; premier élément trouvé. Sert au titre d'un groupe de blocs (banc réel R04 : l'équipe
+   * d'une offre est le titre de la section qui réunit ses offres). Borné à 3 niveaux.
+   */
+  up?: number;
 }
 
 export interface FieldSpec extends FieldLocator {
@@ -126,6 +132,7 @@ const locatorProps = {
   css: { type: 'string', minLength: 1, maxLength: 300 },
   attr: { type: 'string', pattern: '^(text|[A-Za-z_:][A-Za-z0-9_:.-]{0,63})$' },
   fallback_paths: { type: 'array', maxItems: 5, items: PATH },
+  up: { type: 'integer', minimum: 1, maximum: 3 },
 };
 
 export const DECLARATIVE_SPEC_SCHEMA = {
@@ -459,6 +466,8 @@ export function validateDeclarativeSpec(input: unknown, options: ValidateSpecOpt
         tryCompile(() => (source.from === 'html' ? compileSelector(alt) : compileJsonPath(alt)), `${at}/fallback_paths/${k}`, issues);
       }
       if (source.from !== 'html' && effective.css !== undefined && effective.path === undefined) issues.push({ path: at, code: 'field_locator_mismatch', message: `la source « ${source.id} » est JSON : css n'a pas de sens` });
+      if (source.from !== 'html' && effective.up !== undefined) issues.push({ path: `${at}/up`, code: 'field_locator_mismatch', message: `la source « ${source.id} » est JSON : up n'a pas de sens` });
+      if (source.from === 'html' && effective.up !== undefined && effective.css === undefined) issues.push({ path: `${at}/up`, code: 'field_missing_locator', message: 'up exige un sélecteur css' });
     }
   }
 

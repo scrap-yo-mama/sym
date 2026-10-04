@@ -122,9 +122,17 @@ function htmlFieldValues(element: Element, loc: FieldLocator, ctx: Context): unk
     const v = read(element); // pas de sélecteur : l'élément lui-même
     return v === undefined ? [] : [v];
   }
+  // `up` : le sélecteur est cherché sous un ancêtre de l'enregistrement (titre du groupe), premier élément trouvé.
+  let root: Element = element;
+  for (let n = 0; n < (loc.up ?? 0); n += 1) {
+    const parent = root.parent;
+    if (parent === null || parent.type !== 'tag') return [];
+    root = parent as Element;
+  }
   for (const selector of selectors) {
     if (selector === undefined) continue;
-    const found = selectElements(selector, element, ctx.limits.maxItems);
+    const all = selectElements(selector, root, ctx.limits.maxItems);
+    const found = loc.up === undefined ? all : all.slice(0, 1);
     const values = found.map(read).filter((v): v is string => v !== undefined);
     if (values.length > 0) return values;
   }

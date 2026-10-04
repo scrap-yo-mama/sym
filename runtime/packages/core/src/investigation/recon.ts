@@ -439,7 +439,7 @@ export function storedCandidate(c: DataCandidate): StoredCandidate {
   const body = c.request.body_json;
   // Gisement `dom` : ni emplacements ni libellés constants dans l'état (sélecteurs et forme relus au run suivant).
   const { dom, ...rest } = c;
-  const skeleton = dom === undefined ? c.skeleton : Object.fromEntries(Object.entries(c.skeleton).map(([k, v]) => [k, v.split(';').filter((part) => !/^(prefix|suffix)=/.test(part)).join(';')]));
+  const skeleton = dom === undefined ? c.skeleton : Object.fromEntries(Object.entries(c.skeleton).map(([k, v]) => [k, v.split(';').filter((part) => !/^(prefix|suffix|value)=/.test(part)).join(';')]));
   return {
     ...rest,
     skeleton,

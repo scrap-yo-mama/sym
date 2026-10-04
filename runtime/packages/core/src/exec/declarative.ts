@@ -3,7 +3,8 @@
 // requête modèle, pagination, extraction validée contre `output_schema` (INV1), cadence par domaine avant chaque
 // requête (1.9), plafond de requêtes par run. Seul le transport change d'un exécuteur à l'autre. Aucun `eval` :
 // l'interpréteur de 1.1b fait toute l'extraction ; une réponse refusée (classe d'échec) n'est jamais extraite.
-import { selectElements, elementAttribute, parseHtml } from '../dsl/css.js';
+import { parseHtml } from '../dsl/css.js';
+import { findNextHref } from '../dsl/next-link.js';
 import { DslError } from '../dsl/errors.js';
 import { extractRecords, type ItemPolicy } from '../dsl/extract.js';
 import { queryValues } from '../dsl/jsonpath.js';
@@ -106,11 +107,11 @@ function tryParseJson(body: string, limits: DslLimits): unknown {
 
 /** Lien « suivant » d'une page HTML (`<link rel="next">` ou `<a rel="next">`), rendu comme un en-tête `Link`. */
 function htmlNextLink(body: string, limits: DslLimits): string | undefined {
-  if (!/rel\s*=\s*["']?next/i.test(body)) return undefined;
   try {
     const doc = parseHtml(body, limits);
-    const [first] = selectElements('link[rel~="next"], a[rel~="next"]', doc, 1);
-    const href = first === undefined ? undefined : elementAttribute(first, 'href');
+    // `rel=next` d'abord, puis le lien « suivant » reconnu par libellé, flèche ou classe (banc réel R07 : `li.next > a`,
+    // relatif, sans rel) : même règle qu'à la reconnaissance. L'URL est résolue puis vérifiée (hôte) par l'appelant.
+    const href = findNextHref(doc);
     return href === undefined || href === '' ? undefined : `<${href}>; rel="next"`;
   } catch {
     return undefined;
@@ -204,6 +205,12 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
      */
     let previousPage: string | undefined;
     const seenPages = new Set<string>();
+    /**
+     * Liste HTML paginée : enregistrements déjà livrés (contenu identique) écartés ; une page qui n'apporte QUE des doublons
+     * est la fin de la liste (banc réel R02 : les 6 dernières pages ne servent que 12 programmes répétés).
+     */
+    const htmlList = spec.sources.every((s) => s.from === 'html') && (pagination?.type === 'page_param' || pagination?.type === 'offset' || pagination?.type === 'next_link');
+    const delivered = new Set<string>();
     const scrollVia: Transport | undefined = options.scroll === undefined ? undefined : (_request, sig) => options.scroll!(sig);
     /** Preuve d'une sortie réussie : première page aux enregistrements écartés, sinon la dernière page lue. */
     let rejectedPage: HttpExchange | undefined;
@@ -256,7 +263,16 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       }
       escalated ||= out.ok && out.escalated;
       if (rejectedPage === undefined && out.ok && out.attempts[out.source_index]?.problems.some((p) => p.record !== null) === true) rejectedPage = exchange;
-      for (const r of got) records.push(r);
+      if (htmlList && got.length > 0) {
+        const fresh = got.filter((r) => {
+          const key = JSON.stringify(r);
+          if (delivered.has(key)) return false;
+          delivered.add(key);
+          return true;
+        });
+        if (fresh.length === 0 && pages > 1) return done('no_next', false);
+        for (const r of fresh) records.push(r);
+      } else for (const r of got) records.push(r);
       if (records.length >= limits.maxItems) {
         records.length = limits.maxItems;
         return done('max_items', true);

@@ -105,3 +105,57 @@ describe('pagination par le chemin (param url.path, path_pattern)', () => {
     if (out.ok) expect(out.records.map((x) => x['title'])).toEqual(['bien 1', 'bien 2', 'bien 3']);
   });
 });
+
+describe('banc réel : lien « suivant » sans rel=next, doublons entre pages (R02, R07)', () => {
+  it('next_link : lien « next » dans li.next, relatif, suivi jusqu’à la page sans lien ; même hôte seulement', async () => {
+    const seen: string[] = [];
+    const pager = (n: number) => (n < 3 ? `<ul class="pager"><li class="current">Page ${n}</li><li class="next"><a href="page-${n + 1}.html">next</a></li></ul>` : '');
+    const out = await runDeclarative({
+      spec: htmlSpec({ type: 'next_link', stop: [{ when: 'records_empty' }, { when: 'repeated_cursor' }], limits: { hard_max_pages: 200 } }),
+      input: {},
+      outputSchema: SCHEMA,
+      signal,
+      transport: async (r) => {
+        seen.push(new URL(r.url).pathname);
+        const m = /page-(\d+)\.html$/.exec(r.url);
+        const n = m === null ? 1 : Number(m[1]);
+        return ok(r.url, page([`livre ${n}`]).replace('</body>', `${pager(n)}</body>`));
+      },
+    });
+    expect(out).toMatchObject({ ok: true, pages: 3, stop: 'no_next' });
+    expect(seen).toEqual(['/nos-biens/', '/nos-biens/page-2.html', '/nos-biens/page-3.html']);
+    const evil = await runDeclarative({
+      spec: htmlSpec({ type: 'next_link', stop: [{ when: 'records_empty' }, { when: 'repeated_cursor' }], limits: { hard_max_pages: 200 } }),
+      input: {},
+      outputSchema: SCHEMA,
+      signal,
+      transport: async (r) => ok(r.url, page(['a']).replace('</body>', '<a href="https://evil.zz_test.localhost/p2">Suivant ›</a></body>')),
+    });
+    expect(evil).toMatchObject({ ok: false });
+  });
+
+  it('?page=N : enregistrements déjà livrés écartés ; une page qui n’apporte que des doublons arrête la liste', async () => {
+    const PARAM = { type: 'page_param', param: 'url.query.page', start: 1, stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 200 } };
+    const raw = { ...htmlSpec(PATH_PAGINATION), request: { method: 'GET', url: BASE, allowed_hosts: [HOST], params: [{ at: 'url.query.page', role: 'pagination' }] }, pagination: PARAM };
+    const check = validateDeclarativeSpec(raw, { outputSchema: SCHEMA });
+    if (!check.ok) throw new Error(JSON.stringify(check.errors));
+    const seen: number[] = [];
+    // Pages 1 à 3 : biens distincts ; pages 4 et suivantes : les mêmes 3 programmes répétés (ordre changeant), jusqu'à 6.
+    const out = await runDeclarative({
+      spec: check.spec,
+      input: {},
+      outputSchema: SCHEMA,
+      signal,
+      transport: async (r) => {
+        const n = Number(new URL(r.url).searchParams.get('page') ?? '1');
+        seen.push(n);
+        if (n <= 3) return ok(r.url, page([`bien ${n}a`, `bien ${n}b`]));
+        if (n <= 6) return ok(r.url, page(n % 2 === 0 ? ['prog 1', 'prog 2', 'prog 3', 'prog 1'] : ['prog 3', 'prog 1', 'prog 2']));
+        return ok(r.url, page([]));
+      },
+    });
+    expect(out).toMatchObject({ ok: true, stop: 'no_next' });
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+    if (out.ok) expect(out.records.map((x) => x['title'])).toEqual(['bien 1a', 'bien 1b', 'bien 2a', 'bien 2b', 'bien 3a', 'bien 3b', 'prog 1', 'prog 2', 'prog 3']);
+  });
+});
