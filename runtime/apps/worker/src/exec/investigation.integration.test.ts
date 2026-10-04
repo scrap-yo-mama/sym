@@ -8,11 +8,12 @@
 // budget dépassé → `erreur`, validation du schéma en deux temps (`validate_schema`), étape 0 d'abord
 // (`assert_access_report_first`), robots.txt qui interdit le chemin sans effet sur l'enquête (D-91).
 import { randomUUID } from 'node:crypto';
-import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, Secret, secretValues, validateOutput, type RunExecutor } from '@runtime/core';
+import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, parseApiExport, sealExport, Secret, secretValues, validateOutput, type RunExecutor } from '@runtime/core';
 import { firstCostInversion, milestoneHeading, type InvestigationMilestone } from '@runtime/core/investigation';
 import * as net from '@runtime/core/net';
 import {
   createRun,
+  importApi,
   keyCheck,
   listInvestigationEvents,
   migrateUp,
@@ -423,6 +424,64 @@ describe('enquête (tâche 2.1)', () => {
     // N = 3 : trois mises en forme par le rôle extract ; le coût LLM des essais est imputé à l'essai.
     expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
     expect(run.attempts[0]!.cost_usd).toBeGreaterThan(0);
+  });
+
+  test('UX-28 — import d’une stratégie E4 (agent_fetch) : ni reconnaissance ni schéma proposé, l’essai passe par le rôle extract (N = 3), version created_by import, API saine', async () => {
+    withExtract = true;
+    const items = { items: [{ title: 'Lampe Zztest 0001', price: 12.5 }, { title: 'Table Zztest 0002', price: 40 }] };
+    fake.setScenario(EXTRACT_MODEL, [scripted.json(items), scripted.json(items), scripted.json(items)]);
+    const page = `${base(SSR_HOST)}/`;
+    const doc = sealExport({
+      format: 'scrapyomama.api',
+      format_version: '1.0',
+      min_runtime_version: '0.0.0',
+      exported_at: '2026-10-05T10:00:00.000Z',
+      api: {
+        slug: 'zz-test-import-e4',
+        description: 'liste des produits du catalogue',
+        source_url: page,
+        input_schema: { type: 'object', additionalProperties: false, properties: {} },
+        output_schema: { type: 'object', additionalProperties: false, required: ['title', 'price'], properties: { title: { type: 'string' }, price: { type: 'number' } } },
+        output_columns: ['title', 'price'],
+        views: {},
+        purpose: null,
+        legal_basis: null,
+        contains_personal_data: false,
+        max_cost_usd: 0.5,
+        budget_daily_usd: 5,
+        network_policy: { allow: ['direct'] },
+        alert_targets: [],
+      },
+      strategy: {
+        execution: 'agent_fetch',
+        network: 'direct',
+        spec: { schema_version: 1, kind: 'agent_fetch', request: { url: page, allowed_hosts: [SSR_HOST] }, via: 'fetch', instruction: 'Return every product of the page with its title and price.', limits: { max_response_bytes: 5_000_000, max_input_chars: 60_000, timeout_ms: 120_000 } },
+        est_cost_usd: 0.004,
+      },
+      history: [],
+      schedules: [],
+    });
+    const parsed = parseApiExport(JSON.parse(JSON.stringify(doc)), { runtimeVersion: '9.9.9' });
+    if (!parsed.ok) throw new Error(`export illisible : ${parsed.code} ${parsed.message}`);
+    const { apiId, runId } = await withActor(pool, actorA, async (tx) => {
+      const made = await importApi(tx, queue, { ownerId: A, slug: 'zz-test-import-e4', trigger: 'rest', export: parsed.export, networkPolicy: { allow: ['direct'] } });
+      await tx.query('UPDATE apis SET domain_pacing = $2 WHERE id = $1', [made.apiId, JSON.stringify({ min_delay_ms: 5, max_requests_per_run: 200, max_wait_ms: 60000 })]);
+      return made;
+    });
+    const run = await waitRun(runId);
+    expect(run).toMatchObject({ state: 'succeeded', items: 2, strategy_version: 1 });
+    // « 0 enquête » de l'IA : ni reconnaissance ni schéma proposé, seule la stratégie du fichier est essayée (par le rôle `extract`).
+    // La compilation html d'un E4 retenu (rejeu à coût nul) reste permise : elle n'est pas une enquête.
+    const kinds = (await eventsOf(run.id)).map((e) => e.kind);
+    expect(kinds).not.toContain('reconnaissance.finished');
+    expect(kinds).not.toContain('schema.proposed');
+    expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
+    const attempts = await attemptsOf(run.id);
+    expect(attempts.map((a) => [a.execution, a.result_class])).toEqual([['agent_fetch', 'ok']]);
+    // Le coût estimé de l'essai vient du prix du modèle d'extraction (jamais inconnu ni 0 quand le prix est réglé).
+    expect(Number(attempts[0]!.est_cost_usd)).toBeGreaterThan(0);
+    expect((await pool.query<{ execution: string; created_by: string }>('SELECT execution, created_by FROM strategy_versions WHERE api_id = $1', [apiId])).rows).toEqual([{ execution: 'agent_fetch', created_by: 'import' }]);
+    expect((await pool.query<{ status: string }>('SELECT status FROM apis WHERE id = $1', [apiId])).rows[0]!.status).toBe('sain');
   });
 
   test('assert_html_replay_no_llm — page HTML statique : l’essai E4 conforme est compilé en déclaratif html (vérifié sans LLM), E4 gardé en repli, puis le rejeu compte 0 appel LLM', async () => {

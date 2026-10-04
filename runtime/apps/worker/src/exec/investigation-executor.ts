@@ -782,7 +782,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const planFor = (strategies: readonly BuiltStrategy[]): PlanEntry[] =>
       (
         imported !== undefined
-          ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null })
+          ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null, llmPrice: imported.execution === 'agent_fetch' ? (rolePrice(config, 'extract') ?? null) : null })
           : buildTrialPlan({
               strategies,
               networks,
@@ -802,6 +802,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       let outputSchema: Record<string, unknown>;
       if (imported !== undefined && state.validated_schema !== undefined) {
         outputSchema = state.validated_schema;
+        // E4 importé (UX-28) : le rôle `extract` met la page en forme à chaque essai ; ni reconnaissance ni appel du rôle `investigate`.
+        if (imported.execution === 'agent_fetch') config = deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
       } else {
         // --- 1. Reconnaissance (à chaque run : l'état ne garde aucune valeur du site, 17 §6) ------------------------
         // Premier run (ou import sans stratégie : schéma validé par le fichier, aucun gisement relevé) : gisements frais.

@@ -13,6 +13,7 @@
 // planifications sont recréées DÉSACTIVÉES ; aucune cible d'alerte n'est créée (références à configurer).
 import {
   API_EXPORT_FORMAT,
+  assertInputSchema,
   API_EXPORT_FORMAT_VERSION,
   API_EXPORT_MIN_RUNTIME_VERSION,
   exportableStrategy,
@@ -24,6 +25,25 @@ import {
   type JobQueue,
   type RunTrigger,
 } from '@runtime/core';
+
+/** Schéma d'entrée d'une API qui n'en a pas posé (enquête échouée) : un objet fermé sans paramètre, toujours relisible à l'import (UX-16). */
+const EMPTY_INPUT_SCHEMA = { type: 'object', additionalProperties: false, properties: {} } as const;
+
+/** Schéma d'entrée stocké s'il est acceptable à l'import, sinon l'objet vide : un export ne doit jamais être refusé par son propre format. */
+function exportableInputSchema(stored: Record<string, unknown>): Record<string, unknown> {
+  try {
+    assertInputSchema(stored);
+    return stored;
+  } catch {
+    return { ...EMPTY_INPUT_SCHEMA };
+  }
+}
+
+/** Un schéma de sortie validé a au moins un champ ; `{}` est celui d'une API dont l'enquête n'a rien validé. */
+const hasValidatedFields = (schema: Record<string, unknown>): boolean => {
+  const properties = schema['properties'];
+  return typeof properties === 'object' && properties !== null && Object.keys(properties).length > 0;
+};
 import type pg from 'pg';
 import { schemaColumns, startInvestigation } from './investigations.js';
 import { validateSchedule } from './schedules.js';
@@ -100,7 +120,7 @@ export async function exportApi(db: Queryable, input: { apiId: string; ownerId: 
       // Description de l'API, à défaut celle de la demande d'enquête (une API créée hors console peut ne pas en avoir).
       description: api.description.trim() !== '' ? api.description : (api.request_description ?? '').trim(),
       source_url: api.source_url,
-      input_schema: api.input_schema,
+      input_schema: exportableInputSchema(api.input_schema),
       output_schema: api.output_schema,
       output_columns: columns,
       views: viewColumns === undefined ? {} : { columns: viewColumns },
@@ -165,16 +185,19 @@ export async function importApi(
   );
   const apiId = rows[0]!.id;
   const strategy = doc.strategy;
+  // Export d'une API en `erreur` (enquête échouée, aucun schéma validé, aucune stratégie) : rien à importer, l'enquête repart de la
+  // demande d'origine, comme une création (UX-16). Un fichier qui porte un schéma ou une stratégie reste importé tel quel.
+  const nothingToImport = strategy === null && !hasValidatedFields(api.output_schema);
   const { runId } = await startInvestigation(tx, queue, {
     apiId,
     ownerId: input.ownerId,
     trigger: input.trigger,
-    request: { url: api.source_url, description: api.description, auto_validate: false },
-    imported: {
+    request: { url: api.source_url, description: api.description, auto_validate: nothingToImport },
+    ...(nothingToImport ? {} : { imported: {
       outputSchema: api.output_schema,
       ...(api.output_columns === undefined ? {} : { outputColumns: api.output_columns }),
       strategy: strategy === null ? null : { execution: strategy.execution, network: strategy.network, spec: strategy.spec, input_schema: api.input_schema },
-    },
+    } }),
   });
   for (const s of schedules) {
     await tx.query(

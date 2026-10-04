@@ -70,6 +70,17 @@ function draft(over: Partial<ApiExportDraft> = {}): ApiExportDraft {
 
 const parse = (doc: unknown, runtimeVersion = '0.1.0') => parseApiExport(doc, { runtimeVersion });
 
+/** Stratégie E4 (`agent_fetch`) du propriétaire, avec ses références de règles (UX-28). */
+const AGENT_FETCH_SPEC = {
+  schema_version: 1,
+  kind: 'agent_fetch',
+  request: { url: 'https://www.zz-test.example/catalogue', allowed_hosts: ['www.zz-test.example'] },
+  via: 'fetch',
+  instruction: 'Return every item of the page with its id, name and score.',
+  limits: { max_response_bytes: 5_000_000, max_input_chars: 60_000, timeout_ms: 120_000 },
+  rules: { rules: [{ ref: `zz-rule@1#${'a'.repeat(64)}`, level: 'api' as const }], skills: [] },
+};
+
 describe('format portable (16 § 6)', () => {
   test('enveloppe scellée : clés triées à toute profondeur, empreinte sha256 sur le JSON canonique sans `integrity`', () => {
     const sealed = sealExport(draft());
@@ -178,10 +189,51 @@ describe('format portable (16 § 6)', () => {
   test('exportableStrategy : la version courante n’est exportée que déclarative, sans script, session ni tunnel', () => {
     expect(exportableStrategy({ execution: 'fetch', network: 'direct', spec: SPEC, script_ref: null, est_cost_usd: '0.000100' })).toEqual({ execution: 'fetch', network: 'direct', spec: SPEC, est_cost_usd: 0.0001 });
     expect(exportableStrategy({ execution: 'hybrid', network: 'direct', spec: SPEC, script_ref: null, est_cost_usd: null })).toBeNull();
+    expect(exportableStrategy({ execution: 'agent', network: 'direct', spec: AGENT_FETCH_SPEC, script_ref: null, est_cost_usd: null })).toBeNull();
     expect(exportableStrategy({ execution: 'fetch', network: 'direct', spec: null, script_ref: 'zz/script.js', est_cost_usd: null })).toBeNull();
     expect(exportableStrategy({ execution: 'fetch', network: 'tunnel', spec: SPEC, script_ref: null, est_cost_usd: null })).toBeNull();
     expect(exportableStrategy({ execution: 'fetch', network: 'direct', spec: { ...SPEC, request: { ...SPEC.request, session: { mode: 'cookie', domain: 'zz-test.example' } } }, script_ref: null, est_cost_usd: null })).toBeNull();
     expect(exportableStrategy({ execution: 'fetch', network: 'direct', spec: { ...SPEC, request: { ...SPEC.request, params: [{ at: 'header.x', role: 'session' }] } }, script_ref: null, est_cost_usd: null })).toBeNull();
+  });
+});
+
+describe('stratégie agent_fetch portée par le fichier (UX-28)', () => {
+  test('exportableStrategy : E4 s’exporte sans les références de règles du propriétaire ; spec invalide, hors serveur ou tunnel : null', () => {
+    const out = exportableStrategy({ execution: 'agent_fetch', network: 'direct', spec: AGENT_FETCH_SPEC, script_ref: null, est_cost_usd: '0.004000' });
+    expect(out).toMatchObject({ execution: 'agent_fetch', network: 'direct', est_cost_usd: 0.004 });
+    expect(out!.spec['kind']).toBe('agent_fetch');
+    expect(out!.spec).not.toHaveProperty('rules');
+    expect(JSON.stringify(out)).not.toContain('zz-rule@1');
+    expect(exportableStrategy({ execution: 'agent_fetch', network: 'tunnel', spec: AGENT_FETCH_SPEC, script_ref: null, est_cost_usd: null })).toBeNull();
+    expect(exportableStrategy({ execution: 'agent_fetch', network: 'direct', spec: { ...AGENT_FETCH_SPEC, request: { ...AGENT_FETCH_SPEC.request, headers: { authorization: 'x' } } }, script_ref: null, est_cost_usd: null })).toBeNull();
+    // Une spécification déclarative sous l'étiquette agent_fetch (ou l'inverse) n'est pas exportée.
+    expect(exportableStrategy({ execution: 'agent_fetch', network: 'direct', spec: SPEC, script_ref: null, est_cost_usd: null })).toBeNull();
+    expect(exportableStrategy({ execution: 'fetch', network: 'direct', spec: AGENT_FETCH_SPEC, script_ref: null, est_cost_usd: null })).toBeNull();
+  });
+
+  test('parseApiExport : la stratégie E4 d’un fichier est relue (spec validée, hôtes dans le site de la demande) ; hôte voisin ou règles refusés', () => {
+    const { rules: _rules, ...portable } = AGENT_FETCH_SPEC;
+    const ok = parse(sealExport(draft({ strategy: { execution: 'agent_fetch', network: 'direct', spec: portable, est_cost_usd: 0.004 } })));
+    if (!ok.ok) throw new Error(`attendu ok : ${ok.code} ${ok.message}`);
+    expect(ok.export.strategy).toMatchObject({ execution: 'agent_fetch', network: 'direct' });
+    const neighbour = parse(sealExport(draft({ strategy: { execution: 'agent_fetch', network: 'direct', spec: { ...portable, request: { url: 'https://evil.example/', allowed_hosts: ['evil.example'] } }, est_cost_usd: null } })));
+    expect(neighbour).toMatchObject({ ok: false, code: 'invalid_strategy' });
+    const withRules = parse(sealExport(draft({ strategy: { execution: 'agent_fetch', network: 'direct', spec: AGENT_FETCH_SPEC, est_cost_usd: null } })));
+    expect(withRules).toMatchObject({ ok: false, code: 'invalid_strategy' });
+    const mismatch = parse(sealExport(draft({ strategy: { execution: 'agent_fetch', network: 'direct', spec: SPEC, est_cost_usd: null } })));
+    expect(mismatch).toMatchObject({ ok: false, code: 'invalid_strategy' });
+  });
+
+  test('buildImportedPlan : E4 importé s’essaie sans navigateur (via fetch), au prix du modèle d’extraction ; sans prix, coût inconnu', () => {
+    const networks = [{ mode: 'direct' as const, perGbUsd: 0 }];
+    const priced = buildImportedPlan({ execution: 'agent_fetch', spec: AGENT_FETCH_SPEC, networks, browser: false, llmPrice: { in: 1, out: 5 } });
+    expect(priced.map((p) => [p.execution, p.network, p.source])).toEqual([['agent_fetch', 'direct', 'import']]);
+    expect(priced[0]!.est_cost_usd).toBeGreaterThan(0);
+    expect(buildImportedPlan({ execution: 'agent_fetch', spec: AGENT_FETCH_SPEC, networks, browser: false })[0]!.est_cost_usd).toBeNull();
+    // Via la page ouverte (fetch_in_page) : il faut Chromium, comme E2.
+    const inPage = { ...AGENT_FETCH_SPEC, via: 'fetch_in_page' };
+    expect(buildImportedPlan({ execution: 'agent_fetch', spec: inPage, networks, browser: false })).toEqual([]);
+    expect(buildImportedPlan({ execution: 'agent_fetch', spec: inPage, networks, browser: true })).toHaveLength(1);
   });
 });
 

@@ -2499,7 +2499,7 @@ export interface components {
         };
         ApiExportStrategy: {
             /** @enum {string} */
-            execution: "fetch" | "fetch_in_page" | "playwright";
+            execution: "fetch" | "fetch_in_page" | "playwright" | "agent_fetch";
             /** @enum {string} */
             network: "direct" | "dc_proxy" | "res_proxy";
             /** @description Stratégie déclarative (04b § 2), sans session ni secret. */
@@ -4482,6 +4482,8 @@ export interface operations {
         parameters: {
             query?: {
                 confirm?: boolean;
+                /** @description Nom de la copie (UX-16) : son slug, en minuscules sans accent, suffixé d'un jeton court seulement s'il est déjà pris. Un nom sans lettre ni chiffre est refusé (400 `invalid_request`). */
+                name?: string;
             };
             header?: never;
             path?: never;

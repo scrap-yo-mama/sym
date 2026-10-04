@@ -602,6 +602,16 @@ paths:
           required: false
           schema:
             type: boolean
+        - name: name
+          in: query
+          required: false
+          description: >-
+            Nom de la copie (UX-16) : son slug, en minuscules sans accent, suffixé d'un jeton court seulement s'il est déjà pris.
+            Un nom sans lettre ni chiffre est refusé (400 `invalid_request`).
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 80
       requestBody:
         required: true
         content:
@@ -4747,7 +4757,7 @@ components:
       properties:
         execution:
           type: string
-          enum: [fetch, fetch_in_page, playwright]
+          enum: [fetch, fetch_in_page, playwright, agent_fetch]
         network:
           type: string
           enum: [direct, dc_proxy, res_proxy]

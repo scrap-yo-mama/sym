@@ -13,7 +13,7 @@ import { exportApi, importApi, InvestigationStateError, PortabilityError, schema
 import type { FastifyInstance } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { apiOpenApi } from '../rest/api-openapi.js';
-import { ApiInputError, checkNetworkPolicy, freeSlug, readApiBySlug, readOwnApi } from '../rest/apis.js';
+import { ApiInputError, checkNetworkPolicy, freeSlug, freeSlugFromName, readApiBySlug, readOwnApi } from '../rest/apis.js';
 import { rejectIfKeyRateLimited, rejectWithoutAck, reserveRunSlot, responsibleUseAcked, RunSlotError, sendRunSlotError, triggerOf } from '../rest/shared.js';
 import { createdView, investigationError } from './apis.js';
 import { audit, notFound, sendError } from './guard.js';
@@ -46,11 +46,13 @@ export function portabilityRoutes(app: FastifyInstance, ctx: ServerContext): voi
       .send(formatExport(doc));
   });
 
-  app.post<{ Body: unknown; Querystring: { confirm?: boolean } }>(
+  app.post<{ Body: unknown; Querystring: { confirm?: boolean; name?: string } }>(
     '/api/apis/import',
-    { bodyLimit: IMPORT_BODY_LIMIT, schema: { body: { type: 'object' }, querystring: { type: 'object', properties: { confirm: { type: 'boolean' } } } } },
+    { bodyLimit: IMPORT_BODY_LIMIT, schema: { body: { type: 'object' }, querystring: { type: 'object', properties: { confirm: { type: 'boolean' }, name: { type: 'string', minLength: 1, maxLength: 80 } } } } },
     async (request, reply) => {
       const actor = request.actor!;
+      // UX-16 : `name` nomme la copie (son slug) ; refusé AVANT toute écriture (aperçu compris) s'il ne donne aucun caractère de slug.
+      if (request.query.name !== undefined && /^[^\p{L}\p{N}]*$/u.test(request.query.name)) return sendError(reply, 400, 'invalid_request', 'name : un nom lisible est attendu');
       const parsed = parseApiExport(request.body, { runtimeVersion: ctx.appVersion });
       if (!parsed.ok) return sendError(reply, 400, parsed.code, parsed.message);
       const doc = parsed.export;
@@ -89,7 +91,8 @@ export function portabilityRoutes(app: FastifyInstance, ctx: ServerContext): voi
       if (!URL.canParse(doc.api.source_url)) return sendError(reply, 400, 'invalid_request', 'api.source_url : URL absolue attendue');
       let created: { apiId: string; runId: string };
       try {
-        const slug = await freeSlug(ctx, doc.api.description, doc.api.source_url);
+        const named = request.query.name === undefined ? null : await freeSlugFromName(ctx, request.query.name);
+        const slug = named ?? (await freeSlug(ctx, doc.api.description, doc.api.source_url));
         const queue = await ctx.jobs();
         created = await withActor(ctx.pool, actor, async (tx) => {
           await reserveRunSlot(tx, ctx, { kind: 'investigation' });
