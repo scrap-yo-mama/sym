@@ -37,6 +37,11 @@ const signal = new AbortController().signal;
 const origin = (host: string) => `http://${host}:${port}`;
 const origins = () => ({ site: origin(SITE_HOST), trap: origin(TRAP_HOST) });
 const hitsOn = (prefix: string) => hits.filter((h) => h.startsWith(prefix));
+// Les requêtes de la page partent pendant le chargement et peuvent atteindre le serveur après le rendu de l’extraction : on attend leur arrivée (jusqu’à 5 s) avant de compter.
+const waitHits = async (prefix: string): Promise<string[]> => {
+  for (let i = 0; i < 100 && hitsOn(prefix).length === 0; i++) await new Promise((r) => setTimeout(r, 50));
+  return hitsOn(prefix);
+};
 
 const html = (body: string) => `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>zz_test</title></head><body>${body}</body></html>`;
 
@@ -258,8 +263,8 @@ describe('non-régression — le trafic propre de la page n’est ni coupé ni c
     const out = await withEgress((egress) =>
       runAgentExecutor({ ...common(), spec: agentSpec(), egress, agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }), engineFor: engineFor(), pool, allowWriteActions: false, taskId: 'zz_test_chatty', version: 1 }),
     );
-    expect(hitsOn(`GET ${SITE_HOST}/api/graphql`).length).toBeGreaterThan(0);
-    expect(hitsOn(`GET ${SITE_HOST}/api/long`).length).toBeGreaterThan(0);
+    expect((await waitHits(`GET ${SITE_HOST}/api/graphql`)).length).toBeGreaterThan(0);
+    expect((await waitHits(`GET ${SITE_HOST}/api/long`)).length).toBeGreaterThan(0);
     expect(out.requestPolicy).toBeUndefined();
     expect(out.compileFailure).toBeUndefined();
     expect(out.compiled).toBeDefined();
@@ -282,8 +287,8 @@ describe('non-régression — le trafic propre de la page n’est ni coupé ni c
     });
     const out = await withEgress((egress) => runAgentFetchExecutor({ spec: e4, outputSchema: ITEM, llm, modelId: EXTRACT_MODEL, signal, maxCostUsd: 0.5, browser: { pool, egress, guard } }));
     expect(out.result.ok).toBe(true);
-    expect(hitsOn(`POST ${SITE_HOST}/api/data`).length).toBeGreaterThan(0);
-    expect(hitsOn(`GET ${SITE_HOST}/api/graphql`).length).toBeGreaterThan(0);
+    expect((await waitHits(`POST ${SITE_HOST}/api/data`)).length).toBeGreaterThan(0);
+    expect((await waitHits(`GET ${SITE_HOST}/api/graphql`)).length).toBeGreaterThan(0);
     expect(out.requestPolicy).toBeUndefined();
   }, 180_000);
 });
