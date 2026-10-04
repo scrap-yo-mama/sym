@@ -11,7 +11,7 @@ export type RunError = { code: string; message: string; what_to_do: string; retr
  * contact posé mais illisible (UX-05) porte la même raison que le contact absent : dans les deux cas, aucun contact utilisable ;
  * seul le message change (« corrige » au lieu de « renseigne »).
  */
-const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string; investigation?: true }> = {
+const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string; investigation?: true; started?: true }> = {
   instance_contact_missing: {
     code: 'instance_contact_missing',
     message: 'Renseigne le contact du robot dans Réglages > Identité du robot, ou la variable INSTANCE_CONTACT.',
@@ -34,6 +34,15 @@ const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string; inves
       'Ask the user to fix the robot contact (an e-mail address or an http(s) URL) in the console (Settings > Robot identity, /settings/robot) or the INSTANCE_CONTACT variable, then call again: nothing was fetched and nothing was spent.',
     retryable: true,
   },
+  // D-123 : run d'une API sans plafond par run, coupé par sa borne, le budget du jour restant de l'utilisateur.
+  user_budget_daily_usd: {
+    code: 'budget_exceeded',
+    message: "Le budget du jour de ce compte est atteint (coûts LLM et proxy) : le run s'est arrêté. Il se réinitialise à minuit UTC ; un admin peut le relever (USER_BUDGET_DAILY_USD).",
+    what_to_do:
+      'The daily USD budget of this account ran out during the run (LLM and proxy costs), so the run stopped. Do not retry today: tell the user it resets at 00:00 UTC and that an admin can raise it (USER_BUDGET_DAILY_USD). Costs already incurred remain charged.',
+    retryable: false,
+    started: true,
+  },
 };
 
 /**
@@ -43,9 +52,9 @@ const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string; inves
 Object.assign(RUN_ERRORS, {
   trial_cost_over_cap: {
     code: 'trial_cost_over_cap',
-    message: "Un essai coûte plus que le plafond par run de l'API (max_cost_usd) : monte max_cost_usd, puis ré-enquête.",
+    message: "Un essai coûte plus que le plafond par run fixé sur l'API (max_cost_usd) : relève ce plafond ou retire-le (aucun plafond par défaut), puis ré-enquête.",
     what_to_do:
-      "A trial needed more than the per-run cost cap of the API (max_cost_usd) and was stopped; the investigation budget was not used up. Show the user the cost of each trial (timeline), ask whether to raise max_cost_usd in the API settings (console), then investigate again (run_api with force_investigate).",
+      "A trial needed more than the per-run cost cap set on this API (max_cost_usd) and was stopped; the investigation budget was not used up. Show the user the cost of each trial (timeline), ask whether to raise that cap or remove it (no per-run cap is the default) in the API settings (console), then investigate again (run_api with force_investigate).",
     retryable: false,
     investigation: true,
   },
@@ -106,6 +115,7 @@ function describe(code: string, detail: string): RunError | null {
  */
 export function runNotStarted(run: { state: string; error_detail?: string | null }): boolean {
   if (runErrorOf(run) === null || runInvestigationFailed(run)) return false;
+  if (RUN_ERRORS[run.error_detail!.split(':', 1)[0]!]?.started === true) return false;
   return run.error_detail !== 'llm_price_missing';
 }
 

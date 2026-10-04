@@ -3,7 +3,7 @@
 // LLM partagent UN plafond `max_cost_usd` ; chaque run de moteur reçoit le reliquat ; un coût LLM inconnu (prix absent)
 // rend le plafond intenable, donc épuisé.
 import { describe, expect, test } from 'vitest';
-import { AttemptBudgetExceededError, AttemptCost } from './attempt-cost.js';
+import { AttemptBudgetExceededError, AttemptCost, relabelRunBudget } from './attempt-cost.js';
 
 describe('AttemptCost — plafond partagé proxy + LLM', () => {
   test('dépense = proxy + LLM ; reliquat ; épuisé au plafond', () => {
@@ -62,5 +62,21 @@ describe('AttemptCost — coût prévu de l’appel suivant (UX-32)', () => {
     expect(() => cost.assertAvailable(0.09)).not.toThrow();
     expect(() => cost.assertAvailable(0.11)).toThrow(expect.objectContaining({ unpriced: false, message: 'max_cost_usd' }));
     expect(() => cost.assertAvailable(null)).not.toThrow();
+  });
+});
+
+// D-123 : sans plafond par run, la borne d'un run est le budget du jour restant ; un run coupé par elle le dit
+// (`user_budget_daily_usd`), jamais « max_cost_usd » (qui inviterait à monter un plafond que personne n'a fixé).
+describe('relabelRunBudget — motif d’un run coupé par sa borne de coût (D-123)', () => {
+  const cut = { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'max_cost_usd', strategy_version: 1 } as const;
+  test('API sans plafond : `max_cost_usd` devient `user_budget_daily_usd`', () => {
+    expect(relabelRunBudget(cut, null)).toEqual({ ...cut, error_detail: 'user_budget_daily_usd' });
+  });
+  test('plafond fixé par le membre : motif inchangé ; autres fins inchangées', () => {
+    expect(relabelRunBudget(cut, 0.5)).toBe(cut);
+    const other = { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'llm_price_missing' } as const;
+    expect(relabelRunBudget(other, null)).toBe(other);
+    const ok = { state: 'succeeded', outcome: 'clean', items: 3 } as const;
+    expect(relabelRunBudget(ok, null)).toBe(ok);
   });
 });

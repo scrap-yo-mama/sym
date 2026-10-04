@@ -2,10 +2,11 @@
 // Lectures et écritures des exécuteurs (tâche 1.6) : la cible d'un run (API + version de stratégie figée) et le dataset
 // produit. Données d'utilisateur : lues et écrites sous `withActor` avec le propriétaire du run (RLS, INV12), jamais
 // sous l'identité système. Les proxys de l'admin (`settings.proxies`) sont une configuration d'instance (identité système).
-import type { Execution, Network, StrategyCompilable } from '@runtime/core';
+import { COST_CAPS_DEFAULTS, type Execution, type Network, type StrategyCompilable } from '@runtime/core';
 import type pg from 'pg';
 import { ensureDatasetItemsPartitions } from './partitions.js';
 import { withActor } from './rls.js';
+import { userBudgetCommittedUsd } from './runs.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -16,7 +17,13 @@ export type RunTarget = {
     readonly outputSchema: unknown;
     readonly networkPolicy: unknown;
     readonly domainPacing: { min_delay_ms?: number; max_requests_per_run?: number; max_wait_ms?: number };
+    /**
+     * Borne de coût EFFECTIVE du run, toujours finie et connue avant tout appel (D-123) : le plafond de l'API s'il est fixé
+     * (`costCapUsd`), sinon le budget du jour restant de l'utilisateur. Un essai d'enquête la remplace par sa propre borne.
+     */
     readonly maxCostUsd: number;
+    /** `apis.max_cost_usd` borné par `MAX_COST_USD_PER_RUN` ; `null` : aucun plafond par run (défaut, D-123). */
+    readonly costCapUsd: number | null;
     readonly allowWriteActions: boolean;
     /** `apis.requires` (04b) : `session_domain` = domaine connecté par l'extension (mode tunnel, tâche 2.7). */
     readonly requires: { readonly session_domain?: string | null; readonly tunnel?: boolean };
@@ -45,10 +52,17 @@ export type RunTarget = {
 
 /**
  * API et version de stratégie d'un run, lues comme le propriétaire (RLS). `null` : API invisible pour lui.
- * `caps.maxCostUsdPerRun` (`MAX_COST_USD_PER_RUN`, PA-02) borne `maxCostUsd` : les lignes déjà en base (importées,
- * antérieures au plafond, défaut 0,5 au-dessus d'un plafond plus bas) ne dépassent jamais le plafond d'instance.
+ * `caps.maxCostUsdPerRun` (`MAX_COST_USD_PER_RUN`, PA-02) borne le plafond fixé (`costCapUsd`) : les lignes déjà en base
+ * (importées, antérieures au plafond) ne dépassent jamais le plafond d'instance.
+ * D-123 : sans plafond fixé, `maxCostUsd` vaut le budget du jour restant de l'utilisateur (`caps.userBudgetDailyUsd`, défaut
+ * de l'instance sinon) moins sa dépense du jour et les enveloppes de ses runs actifs, au moment de la lecture (≥ 0). Un run
+ * sans plafond ne réserve aucune enveloppe (`ENVELOPE_SQL`) : ce reste ne compte donc pas le run lui-même. Une enquête ne
+ * lit pas cette borne (son budget est réservé à l'admission) : elle lit `costCapUsd`.
  */
-export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerId: string; version: number | null; caps?: { readonly maxCostUsdPerRun: number } }): Promise<RunTarget | null> {
+export async function loadRunTarget(
+  pool: pg.Pool,
+  args: { apiId: string; ownerId: string; version: number | null; caps?: { readonly maxCostUsdPerRun: number; readonly userBudgetDailyUsd?: number }; now?: Date },
+): Promise<RunTarget | null> {
   return withActor(pool, { userId: args.ownerId, role: 'member' }, async (tx) => {
     const { rows } = await tx.query<{
       id: string;
@@ -56,7 +70,7 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
       output_schema: unknown;
       network_policy: unknown;
       domain_pacing: RunTarget['api']['domainPacing'];
-      max_cost_usd: string;
+      max_cost_usd: string | null;
       allow_write_actions: boolean;
       requires: RunTarget['api']['requires'] | null;
       requires_session: boolean;
@@ -92,6 +106,15 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
         };
       }
     }
+    const perRun = args.caps?.maxCostUsdPerRun ?? Number.POSITIVE_INFINITY;
+    const costCapUsd = api.max_cost_usd === null ? null : Math.min(Number(api.max_cost_usd), perRun);
+    let maxCostUsd = costCapUsd;
+    if (maxCostUsd === null) {
+      const daily = args.caps?.userBudgetDailyUsd ?? COST_CAPS_DEFAULTS.userBudgetDailyUsd;
+      const caps = { userBudgetDailyUsd: daily, maxCostUsdPerRun: args.caps?.maxCostUsdPerRun ?? COST_CAPS_DEFAULTS.maxCostUsdPerRun };
+      const committed = await userBudgetCommittedUsd(tx, args.ownerId, caps, args.now ?? new Date());
+      maxCostUsd = Math.max(0, Math.round((daily - committed) * 1e6) / 1e6);
+    }
     return {
       api: {
         id: api.id,
@@ -99,7 +122,8 @@ export async function loadRunTarget(pool: pg.Pool, args: { apiId: string; ownerI
         outputSchema: api.output_schema,
         networkPolicy: api.network_policy,
         domainPacing: api.domain_pacing ?? {},
-        maxCostUsd: Math.min(Number(api.max_cost_usd), args.caps?.maxCostUsdPerRun ?? Number.POSITIVE_INFINITY),
+        maxCostUsd,
+        costCapUsd,
         allowWriteActions: api.allow_write_actions,
         requires: api.requires ?? {},
         requiresSession: api.requires_session,

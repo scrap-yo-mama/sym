@@ -170,6 +170,28 @@ describe('plafonds d’instance : import d’un fichier forgé et lecture par le
     await withClient(srv.db.url, (c) => c.query('UPDATE apis SET max_cost_usd = 0.5 WHERE id = $1', [apiG.id]));
     expect((await loadRunTarget(pool, { apiId: apiG.id, ownerId: g.id, version: null, caps: { maxCostUsdPerRun: 0.1 } }))!.api.maxCostUsd).toBe(0.1);
   });
+
+  test('D-123 : API sans plafond (NULL par défaut) : borne effective = budget du jour restant, jamais illimitée', async () => {
+    const n = await party('n');
+    const apiN = await seedApi(srv.db.url, n.id);
+    // Une API neuve n'a plus de plafond par run.
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND max_cost_usd IS NULL', [apiN.id])).toBe(1);
+    const pool = srv.started.ctx.pool;
+    const fresh = (await loadRunTarget(pool, { apiId: apiN.id, ownerId: n.id, version: null, caps: { maxCostUsdPerRun: 2, userBudgetDailyUsd: 7 } }))!;
+    expect(fresh.api.costCapUsd).toBeNull();
+    expect(fresh.api.maxCostUsd).toBe(7);
+    // La dépense du jour (et non celle de la veille) réduit la borne ; budget épuisé : 0, jamais négatif.
+    await spend(n, apiN.id, 2.5);
+    await spend(n, apiN.id, 3, { daysAgo: 1 });
+    expect((await loadRunTarget(pool, { apiId: apiN.id, ownerId: n.id, version: null, caps: { maxCostUsdPerRun: 2, userBudgetDailyUsd: 7 } }))!.api.maxCostUsd).toBe(4.5);
+    expect((await loadRunTarget(pool, { apiId: apiN.id, ownerId: n.id, version: null, caps: { maxCostUsdPerRun: 2, userBudgetDailyUsd: 2 } }))!.api.maxCostUsd).toBe(0);
+    // Sans plafonds passés : le budget du jour par défaut de l'instance (50 $) tient lieu de borne finie.
+    expect((await loadRunTarget(pool, { apiId: apiN.id, ownerId: n.id, version: null }))!.api.maxCostUsd).toBe(47.5);
+    // Un plafond fixé par le membre reste la borne, bornée par MAX_COST_USD_PER_RUN.
+    await withClient(srv.db.url, (c) => c.query('UPDATE apis SET max_cost_usd = 3 WHERE id = $1', [apiN.id]));
+    const capped = (await loadRunTarget(pool, { apiId: apiN.id, ownerId: n.id, version: null, caps: { maxCostUsdPerRun: 2, userBudgetDailyUsd: 7 } }))!;
+    expect(capped.api).toMatchObject({ costCapUsd: 2, maxCostUsd: 2 });
+  });
 });
 
 describe('réservation de l’enveloppe maximale (08b § 3, PA-02)', () => {
@@ -186,13 +208,32 @@ describe('réservation de l’enveloppe maximale (08b § 3, PA-02)', () => {
       expect(third.json()).toMatchObject({ error: { code: 'budget_exceeded' } });
       expect(third.headers['retry-after']).toBeUndefined();
       expect(await count("SELECT count(*) FROM runs WHERE owner_id = $1 AND state = 'queued'", [h.id])).toBe(2);
-      // Une enquête (enveloppe par défaut 1 USD) ne passe pas non plus.
+      // Une enquête (enveloppe par défaut 3 USD, bornée au budget du jour de 1 USD) ne passe pas non plus.
       const inv = await post(h, '/api/apis', { description: 'Les livres zz test de la rafale, avec titre et prix', url: 'https://zz-test-burst.example/' });
       expect(inv.statusCode).toBe(429);
       expect(inv.json()).toMatchObject({ error: { code: 'budget_exceeded' } });
       // Un run qui se termine libère son enveloppe (seule la dépense réelle reste).
       await withClient(srv.db.url, (c) => c.query("UPDATE runs SET state = 'succeeded', outcome = 'clean', finished_at = now(), duration_ms = 1 WHERE owner_id = $1", [h.id]));
       expect((await run()).statusCode).toBe(202);
+    });
+  });
+
+  test('D-123 : run d’une API sans plafond admis tant qu’il reste du budget du jour (aucune enveloppe de MAX_COST_USD_PER_RUN réservée)', async () => {
+    await withCaps({ daily: 1, perRun: 10 }, async () => {
+      const o = await party('o');
+      const apiO = await seedApi(srv.db.url, o.id);
+      await spend(o, apiO.id, 0.7);
+      const run = () => post(o, `/api/apis/${apiO.slug}/runs`, { input: {} });
+      // 0,3 $ restants, moins que MAX_COST_USD_PER_RUN : admis (le worker le borne au budget restant).
+      expect((await run()).statusCode).toBe(202);
+      expect((await run()).statusCode).toBe(202);
+      // Budget du jour atteint : refus clair (réinitialisation à minuit UTC, l'admin peut le relever).
+      await spend(o, apiO.id, 0.3);
+      const refused = await run();
+      expect(refused.statusCode).toBe(429);
+      expect(refused.json()).toMatchObject({ error: { code: 'budget_exceeded' } });
+      expect(refused.json<{ error: { message: string } }>().error.message).toMatch(/minuit UTC/);
+      expect(refused.json<{ error: { message: string } }>().error.message).toMatch(/USER_BUDGET_DAILY_USD/);
     });
   });
 

@@ -82,3 +82,29 @@ describe('fins d’échec d’enquête : cause exacte et suite proposée (UX-29,
     expect(runInvestigationFailed({ state: 'failed', error_detail: 'instance_contact_missing' })).toBe(false);
   });
 });
+
+// D-123 : plus de plafond par run par défaut. Un run sans plafond coupé par le budget du jour le dit (quand il se
+// réinitialise, qui peut le relever) ; le message d'un essai trop cher ne parle de max_cost_usd que parce qu'un plafond a été
+// fixé, et propose de le relever OU de le retirer.
+describe('D-123 : budget du jour, plafond par run facultatif', () => {
+  test('run coupé par le budget du jour restant : code budget_exceeded, minuit UTC, admin, jamais « monter max_cost_usd »', () => {
+    const run = { state: 'failed', error_detail: 'user_budget_daily_usd' };
+    const error = runErrorOf(run)!;
+    expect(error).toMatchObject({ code: 'budget_exceeded', retryable: false });
+    expect(error.message).toMatch(/budget du jour/);
+    expect(error.message).toMatch(/minuit UTC/);
+    expect(error.message).toMatch(/USER_BUDGET_DAILY_USD/);
+    expect(error.what_to_do).toMatch(/00:00 UTC/);
+    expect(error.what_to_do).toMatch(/admin/);
+    expect(`${error.message} ${error.what_to_do}`).not.toMatch(/max_cost_usd/);
+    expect(runNotStarted(run)).toBe(false);
+    expect(runInvestigationFailed(run)).toBe(false);
+  });
+
+  test('essai plus cher que le plafond fixé : relever ou retirer ce plafond', () => {
+    const error = runErrorOf({ state: 'failed', error_detail: 'trial_cost_over_cap' })!;
+    expect(error.message).toMatch(/retire/);
+    expect(error.what_to_do).toMatch(/remove/);
+    expect(error.what_to_do).not.toMatch(/raise max_cost_usd in/);
+  });
+});
