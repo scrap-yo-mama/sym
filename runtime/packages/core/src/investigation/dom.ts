@@ -1316,10 +1316,17 @@ function loadMoreLabel(el: Element): string | null {
   return text.length > 0 && text.length <= 50 && LOAD_MORE.test(text) ? text : null;
 }
 
-/** Bouton « charger plus » de la page (hors `nav`, `header`, `footer`), avec un sélecteur qui ne désigne que lui. */
+const insideForm = (el: Element): boolean => {
+  for (let p = parentElement(el); p !== null; p = parentElement(p)) if (p.name === 'form') return true;
+  return false;
+};
+
+/** Bouton « charger plus » de la page (hors `nav`, `header`, `footer`, hors formulaire), avec un sélecteur qui ne désigne que lui. */
 export function detectLoadMore(doc: Document): DomLoadMore | null {
   for (const el of trySelect('a, button, [role=button], input', doc, 20_000) ?? []) {
     if (insideSkipped(el)) continue;
+    // Un bouton d'envoi d'un formulaire (recherche, contact) n'est jamais cliqué : il naviguerait ou écrirait.
+    if (insideForm(el) && !(el.name === 'button' && (el.attribs['type'] ?? '').toLowerCase() === 'button')) continue;
     const label = loadMoreLabel(el);
     if (label === null) continue;
     const id = el.attribs['id'];
