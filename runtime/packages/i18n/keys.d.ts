@@ -986,6 +986,7 @@ export type MessageKey =
   | 'narrative.attempt_pruned'
   | 'narrative.investigation_finished'
   | 'narrative.investigation_started'
+  | 'narrative.investigation_started_redirected'
   | 'narrative.next_step'
   | 'narrative.persistence.attempt'
   | 'narrative.persistence.exhausted'

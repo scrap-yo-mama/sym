@@ -27,6 +27,16 @@ export function narrativeLine(renderer: Renderer, event: NarrativeEvent, locale:
   const time = (ms: unknown) => fmtDuration(asNumber(ms), locale);
   switch (event.kind) {
     case 'investigation.started':
+      // URL de départ redirigée de façon permanente vers un autre site (R09) : le récit dit d'où vient le domaine adopté.
+      if (typeof p.redirected_from === 'string' && p.redirected_from !== '') {
+        let from = p.redirected_from;
+        try {
+          from = new URL(p.redirected_from).hostname;
+        } catch {
+          // origine illisible : rendue telle quelle
+        }
+        return renderer.render('narrative.investigation_started_redirected', { domain: asString(p.domain), from }, locale);
+      }
       return renderer.render(narrativeKey(event.kind), { domain: asString(p.domain) }, locale);
     case 'phase.started': {
       const phase = asString(p.phase);

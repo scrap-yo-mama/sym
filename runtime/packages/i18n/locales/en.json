@@ -2239,6 +2239,7 @@
   },
   "narrative": {
     "investigation_started": "Investigation of {domain} started.",
+    "investigation_started_redirected": "Investigation of {domain} started ({from} permanently redirects there).",
     "phase": {
       "access_check": "Access report: probing the page and reading the usage signals of the site",
       "reconnaissance": "Reconnaissance: looking at how the page gets its data",

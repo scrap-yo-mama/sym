@@ -442,10 +442,13 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     // `investigation_budget_usd` ; une tentative du mode « SYM ne lâche pas » (2.16) le borne encore au reste de son
     // plafond et du budget du jour (`budget_cap_usd`) : le plafond annoncé est strict.
     const budgetUsd = Math.min(request.budget_usd, state.budget_cap_usd ?? Number.POSITIVE_INFINITY, deps.costCaps?.userBudgetDailyUsd ?? Number.POSITIVE_INFINITY);
-    const pageUrl = new URL(request.url).href;
-    const host = new URL(pageUrl).hostname.toLowerCase();
+    // Page de la demande ; l'étape 0 peut adopter l'URL finale d'une redirection permanente vers un autre site (R09).
+    let pageUrl = new URL(request.url).href;
+    let host = new URL(pageUrl).hostname.toLowerCase();
     // Domaines de l'API (04b §2) : la page et ses sous-domaines (ou ceux du domaine sans `www.`), jamais un voisin.
-    const scope = siteScope(host);
+    let scope = siteScope(host);
+    /** URL de la demande quand l'étape 0 a adopté sa redirection permanente (dit dans le récit). */
+    let redirectedFrom: string | null = null;
     const baseElapsed = state.elapsed_ms;
     const deadlineMs = started + Math.max(0, request.timeout_s * 1000 - baseElapsed);
     // `investigation_timeout_s` borne CHAQUE phase (étape 0, reconnaissance, appel LLM, essais), pas seulement les essais.
@@ -673,6 +676,40 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         userAgent,
         ...(from === null ? {} : { from }),
       };
+      // Redirection permanente de l'URL de départ vers un autre site (banc R09, `lu.ma` → `luma.com`) : l'hôte final devient
+      // le domaine de l'API, si la garde SSRF l'admet ; sa mémoire de refus est relue avant toute autre requête.
+      if (state.imported === undefined) {
+        const moved = await permanentRedirectTarget({ sessionBase, guard: deps.guard, url: pageUrl, ceiling, signal, ...(pacer === undefined ? {} : { pacer }) });
+        if (moved.proxyUsd > 0) {
+          await charge(ctx, moved.proxyUsd);
+          spent = round6(spent + moved.proxyUsd);
+        }
+        if (moved.url !== null) {
+          redirectedFrom = pageUrl;
+          pageUrl = moved.url;
+          host = new URL(pageUrl).hostname.toLowerCase();
+          scope = siteScope(host);
+          await ctx.log('info', 'start_url_redirect_adopted', { from_host: new URL(redirectedFrom).hostname, to_host: host });
+          let movedDomain: string;
+          try {
+            movedDomain = registrableDomain(host);
+          } catch {
+            movedDomain = host;
+          }
+          if (movedDomain !== domain) {
+            domain = movedDomain;
+            const movedMemory = await (deps.memory?.read ?? ((a) => readCatalogMemory(deps.pool, a)))({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain });
+            const movedRefusal = priorRefusalDecision(movedMemory.refusals, domain, movedMemory.statusReason);
+            if (movedRefusal.action === 'stop') {
+              await save('done');
+              await ctx.log('warn', 'prior_refusal', { domain, at: movedRefusal.refusal.at, reason: movedRefusal.reason });
+              await event(EV.finished, { outcome: 'failed', failure_class: 'forbidden', detail: 'prior_refusal', at: 'memory', budget: budgetView() });
+              await applyStatus({ type: 'prior_refusal' });
+              return { state: 'failed', failure_class: 'forbidden', retryable: false, error_detail: 'prior_refusal' };
+            }
+          }
+        }
+      }
       const session: NetworkSession = openNetworkSession({
         ...sessionBase,
         allowedHosts: [host],
@@ -703,7 +740,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     };
 
     try {
-      await event(EV.started, { phase, url: narrativeUrl(pageUrl), domain: host, network: ports.mode === 'tunnel' ? 'tunnel' : first?.mode, budget: budgetView() });
+      await event(EV.started, { phase, url: narrativeUrl(pageUrl), domain: host, ...(redirectedFrom === null ? {} : { redirected_from: narrativeUrl(redirectedFrom) }), network: ports.mode === 'tunnel' ? 'tunnel' : first?.mode, budget: budgetView() });
 
       // --- 0. Rapport d'accès -------------------------------------------------------------------------------------
       // En tunnel, la sonde part du Chrome de l'utilisateur : sa langue réelle, non relevée (21 § 6.4, § 6.6).
@@ -1632,6 +1669,74 @@ async function charge(ctx: RunCtx, proxyUsd: number, llmUsd: number | null = 0, 
   if (ctx.chargeCost === undefined) return;
   if (proxyUsd === 0 && llmUsd === 0 && tokens === undefined) return;
   await ctx.chargeCost({ proxy_usd: round6(proxyUsd), llm_usd: llmUsd, ...(tokens === undefined ? {} : { tokens }) });
+}
+
+/** Sauts de redirection permanente suivis au plus par la sonde de l'étape 0 (R09). */
+const MAX_PERMANENT_HOPS = 3;
+const PERMANENT_REDIRECTS = new Set([301, 308]);
+
+/**
+ * Redirection permanente de l'URL de départ vers un AUTRE site (banc R09 : `lu.ma/paris` répond 301 vers
+ * `luma.com/paris`) : sonde GET qui ne suit pas les redirections, par une session réseau de l'enquête (garde SSRF à chaque
+ * connexion, verrou de domaines sur l'hôte sondé, plafond de coût, User-Agent du robot), cadencée ; au plus
+ * `MAX_PERMANENT_HOPS` sauts 301 ou 308. Un saut dans la portée du site courant est suivi tel quel ; un hôte hors portée
+ * n'est adopté qu'après la garde (résolution contrôlée : jamais une adresse privée, réservée ou de métadonnées cloud), en
+ * http(s), sans identifiants dans l'URL. Une redirection temporaire (302, 307), une erreur ou un refus de la garde laissent
+ * l'URL telle quelle : l'étape 0 décide comme avant (`domain_not_allowed` si la page sort du site). `url: null` : rien
+ * d'adopté ; le coût proxy de la sonde est toujours rendu.
+ */
+async function permanentRedirectTarget(args: {
+  sessionBase: SessionBase;
+  guard: SsrfGuard;
+  url: string;
+  ceiling: number;
+  signal: AbortSignal;
+  pacer?: RequestPacer;
+}): Promise<{ url: string | null; proxyUsd: number }> {
+  let current = new URL(args.url);
+  let adopted = false;
+  let proxyUsd = 0;
+  for (let hop = 0; hop < MAX_PERMANENT_HOPS; hop += 1) {
+    const hopHost = current.hostname.toLowerCase();
+    const session = openNetworkSession({ ...args.sessionBase, allowedHosts: [hopHost], allowedHostSuffixes: [siteScope(hopHost)], costCeiling: { maxUsd: Math.max(0, args.ceiling - proxyUsd) } });
+    const got = await (async (): Promise<{ status: number; location: string | null } | null> => {
+      try {
+        if (args.pacer !== undefined) {
+          const slot = await args.pacer.acquire(current.href);
+          if (!slot.granted) return null;
+        }
+        const response = await session.fetch(current.href, { method: 'GET', headers: { accept: 'text/html,application/json;q=0.9,*/*;q=0.8' }, signal: args.signal }, { followRedirects: false });
+        await response.body?.cancel().catch(() => undefined);
+        await args.pacer?.report(current.href, { status: response.status, retryAfter: response.headers.get('retry-after'), failureClass: null }).catch(() => undefined);
+        return { status: response.status, location: response.headers.get('location') };
+      } catch {
+        args.signal.throwIfAborted();
+        return null;
+      } finally {
+        proxyUsd += session.usage().costUsd;
+        await session.close().catch(() => undefined);
+      }
+    })();
+    if (got === null || !PERMANENT_REDIRECTS.has(got.status) || got.location === null) break;
+    let next: URL;
+    try {
+      next = new URL(got.location, current);
+    } catch {
+      break;
+    }
+    if ((next.protocol !== 'http:' && next.protocol !== 'https:') || next.username !== '' || next.password !== '') break;
+    next.hash = '';
+    if (!withinSiteScope(next.hostname, siteScope(hopHost))) {
+      try {
+        await args.guard.resolve(next.hostname, next.port === '' ? (next.protocol === 'https:' ? 443 : 80) : Number(next.port));
+      } catch {
+        break;
+      }
+      adopted = true;
+    }
+    current = next;
+  }
+  return { url: adopted ? current.href : null, proxyUsd: Math.round(proxyUsd * 1e6) / 1e6 };
 }
 
 /** Domaines de l'API vus par la passe : la page, et les hôtes capturés qui sont dans sa portée de site (04b §2). */
