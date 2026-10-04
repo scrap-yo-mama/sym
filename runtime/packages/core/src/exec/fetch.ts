@@ -5,6 +5,7 @@
 import { DslError } from '../dsl/errors.js';
 import type { RenderedRequest } from '../dsl/template.js';
 import type { NetworkSession } from '../net/modes/session.js';
+import { decodeBody } from './charset.js';
 import { runDeclarative, type DeclarativeRunOptions, type DeclarativeRunResult } from './declarative.js';
 import type { HttpExchange, Transport } from './types.js';
 
@@ -26,7 +27,7 @@ export function encodeRequestBody(request: RenderedRequest): BodyInit {
   return { body: body.value, contentType: 'text/plain;charset=UTF-8' };
 }
 
-async function readCapped(stream: ReadableStream<Uint8Array> | null, max: number): Promise<string> {
+async function readCapped(stream: ReadableStream<Uint8Array> | null, max: number, contentType?: string): Promise<string> {
   if (stream === null) return '';
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
@@ -41,7 +42,7 @@ async function readCapped(stream: ReadableStream<Uint8Array> | null, max: number
     }
     chunks.push(value);
   }
-  return new TextDecoder('utf-8').decode(Buffer.concat(chunks));
+  return decodeBody(Buffer.concat(chunks), contentType);
 }
 
 /** Transport E1 : la session réseau de l'essai (garde SSRF à chaque connexion, redirections recontrôlées). */
@@ -56,7 +57,7 @@ export function fetchTransport(session: Pick<NetworkSession, 'fetch'>, options: 
       ...(body === undefined ? {} : { body }),
       signal: AbortSignal.any([signal, AbortSignal.timeout(options.timeoutMs)]),
     });
-    const text = await readCapped(response.body as ReadableStream<Uint8Array> | null, options.maxResponseBytes);
+    const text = await readCapped(response.body as ReadableStream<Uint8Array> | null, options.maxResponseBytes, response.headers.get('content-type') ?? undefined);
     const out: Record<string, string> = {};
     response.headers.forEach((value, name) => {
       out[name.toLowerCase()] = value;

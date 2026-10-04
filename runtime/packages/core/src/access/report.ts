@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { elementAttribute, elementText, parseHtml, selectElements } from '../dsl/css.js';
 import { DEFAULT_DSL_LIMITS } from '../dsl/limits.js';
+import { decodeBody } from '../exec/charset.js';
 import { classifyExchange, classifyTransportError } from '../exec/classify.js';
 import { failureRoute } from '../exec/guard.js';
 import type { ExecFailure, HttpExchange, RequestPacer } from '../exec/types.js';
@@ -315,7 +316,7 @@ export function sessionAccessProbe(session: Pick<NetworkSession, 'fetch'> & Part
       }
     }
     const sent = session.sentAcceptLanguage?.();
-    return { status: response.status, headers, body: Buffer.concat(chunks).toString('utf8'), url: response.url === '' ? url : response.url, ...(sent === undefined ? {} : { sent_accept_language: sent }) };
+    return { status: response.status, headers, body: decodeBody(Buffer.concat(chunks), headers['content-type']), url: response.url === '' ? url : response.url, ...(sent === undefined ? {} : { sent_accept_language: sent }) };
   };
 }
 
