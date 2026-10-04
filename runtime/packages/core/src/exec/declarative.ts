@@ -199,9 +199,9 @@ function dedupeKeys(spec: DeclarativeSpec): { prepare: (firstPage: readonly Reco
 /** Compteur annoncé par l'en-tête d'une liste (« 359 annonces », « 1 437 salons ») : nombre entier, ou `undefined`. */
 function announcedCount(body: string): number | undefined {
   const text = body.slice(0, 400_000).replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]{0,2000}>/g, ' ').replace(/&nbsp;/g, ' ');
-  const m = /(?:^|[^\d.,])(\d{1,3}(?:[   .]\d{3})+|\d{1,7})\s+(?:annonces?|r[ée]sultats?|biens?|offres?|programmes?|salons?|produits?|items?|results?|listings?|properties|jobs)\b/i.exec(text);
+  const m = /(?:^|[^\d.,])(\d{1,3}(?:[ \u00a0\u202f.]\d{3})+|\d{1,7})\s+(?:annonces?|r[ée]sultats?|biens?|offres?|programmes?|salons?|produits?|items?|results?|listings?|properties|jobs)\b/i.exec(text);
   if (m === null) return undefined;
-  const n = Number((m[1] as string).replace(/[   .]/g, ''));
+  const n = Number((m[1] as string).replace(/[ \u00a0\u202f.]/g, ''));
   return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
 

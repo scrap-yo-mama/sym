@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { decodeBody, readCharset } from './charset.js';
 import { fetchTransport } from './fetch.js';
 
+type Session = Parameters<typeof fetchTransport>[0];
+
 const TEXT = 'ÉTUDES SUPÉRIEURES : salon de l’été à Dôle';
 /** Octets Windows-1252 de `TEXT` (le guillemet typographique ’ vaut 0x92). */
 const cp1252 = (text: string): Uint8Array => Uint8Array.from(Array.from(text, (c) => (c === '’' ? 0x92 : c.charCodeAt(0))));
@@ -51,16 +53,14 @@ describe('decodeBody : jeu de caractères d’un corps reçu', () => {
 
 describe('fetchTransport : le corps est décodé selon le charset reçu (E1, rejeu)', () => {
   it('page Windows-1252 : accents conservés, plus de caractère de remplacement', async () => {
-    const session = {
-      fetch: async () => new Response(Buffer.from(page('', TEXT)), { status: 200, headers: { 'content-type': 'text/html; charset=windows-1252' } }),
-    };
+    const session = { fetch: async () => new Response(Buffer.from(page('', TEXT)), { status: 200, headers: { 'content-type': 'text/html; charset=windows-1252' } }) } as unknown as Session;
     const exchange = await fetchTransport(session, { maxResponseBytes: 1_000_000, timeoutMs: 1000 })({ method: 'GET', url: 'http://zz_test_cp1252.localhost/', headers: {} }, new AbortController().signal);
     expect(exchange.body).toContain(TEXT);
-    expect(exchange.body).not.toContain('�');
+    expect(exchange.body).not.toContain('\uFFFD');
   });
 
   it('page Windows-1252 sans charset d’en-tête, déclarée dans la balise meta', async () => {
-    const session = { fetch: async () => new Response(Buffer.from(page('<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">', TEXT)), { status: 200, headers: { 'content-type': 'text/html' } }) };
+    const session = { fetch: async () => new Response(Buffer.from(page('<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">', TEXT)), { status: 200, headers: { 'content-type': 'text/html' } }) } as unknown as Session;
     const exchange = await fetchTransport(session, { maxResponseBytes: 1_000_000, timeoutMs: 1000 })({ method: 'GET', url: 'http://zz_test_cp1252.localhost/', headers: {} }, new AbortController().signal);
     expect(exchange.body).toContain(TEXT);
   });
