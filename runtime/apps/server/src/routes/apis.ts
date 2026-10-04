@@ -63,7 +63,7 @@ import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
 import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
-import { instanceContactMissing } from './identity.js';
+import { rejectWithoutInstanceContact } from './identity.js';
 
 /** Confirmation des étapes instruites affichées (version et empreinte reçues de la fiche, 2.13). */
 const instructedConfirmSchema = {
@@ -248,6 +248,15 @@ async function investigationOf(ctx: ServerContext, actor: Actor, apiId: string):
   return withActor(ctx.pool, actor, async (db) => (await db.query<{ investigation: InvestigationState | null }>('SELECT investigation FROM apis WHERE id = $1 AND owner_id = $2', [apiId, actor.userId])).rows[0]?.investigation ?? null);
 }
 
+/** Attend (borné) que l'API quitte `enquete` après l'échec de son enquête : le statut est posé juste après la fin du run. */
+async function waitApiLeavesEnquete(ctx: ServerContext, actor: Actor, apiId: string, deadline: number, signal: AbortSignal): Promise<void> {
+  for (;;) {
+    const api = await withActor(ctx.pool, actor, (db) => readApiById(db, apiId));
+    if (api === null || api.status !== 'enquete' || Date.now() >= deadline || signal.aborted) return;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(ctx.rest.pollMs, Math.max(1, deadline - Date.now()))));
+  }
+}
+
 /** Corps de `ApiCreated` (05 § 4.1) : phase, schéma proposé et échantillon (propriétaire), rapport d'accès, run. */
 export async function createdView(ctx: ServerContext, actor: Actor, apiId: string, runId: string) {
   return withActor(ctx.pool, actor, async (db) => {
@@ -341,10 +350,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const body = request.body;
     if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
     // UX-04 : sans contact d'instance, l'enquête échouerait aussitôt (17 § 5) : refus AVANT de créer l'API ou le run.
-    if (await instanceContactMissing(ctx)) {
-      const missing = runErrorFor('instance_contact_missing');
-      return sendError(reply, 409, missing.code, missing.message);
-    }
+    if (await rejectWithoutInstanceContact(ctx, reply)) return reply;
     // Validation automatique : le schéma proposé n'est pas encore connu ; s'il porte `x-personal`, la case est exigée.
     if (body.auto_validate === true && (await rejectWithoutAck(ctx, reply, actor, true))) return reply;
     let policy: Record<string, unknown> | null = null;
@@ -404,7 +410,11 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (wait > 0) {
       const controller = new AbortController();
       request.raw.once('close', () => controller.abort());
+      const deadline = Date.now() + wait * 1000;
       const row = await waitForRun(ctx, actor, created.runId, wait, controller.signal);
+      // UX-07 : le worker clôt le run PUIS applique le statut (`run_stopped`, transaction suivante) ; une enquête échouée
+      // pendant l'attente ne se répond qu'avec le statut qui en découle, jamais `failed` + `enquete` (attente bornée).
+      if (row?.state === 'failed') await waitApiLeavesEnquete(ctx, actor, created.apiId, Math.min(deadline, Date.now() + 2_000), controller.signal);
       // Validation automatique terminée : l'enveloppe RunResult (05 § 4.1, `auto_validate`).
       if (row !== null && body.auto_validate === true && isTerminalRunState(row.state)) return reply.code(201).send(await buildRunResult(ctx, actor, row));
     }
@@ -606,6 +616,8 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     // `force_investigate` sur une API bloquée reste refusé par la machine (409 `blocked`, ne pas réessayer).
     const guardBlocked = trigger === 'manual' && actor.via !== 'ui';
     if (guardBlocked && api.status === 'bloquee') return humanOnly();
+    // UX-04 : la ré-enquête échouerait aussitôt sans contact du robot : refus avant de créer le run.
+    if (await rejectWithoutInstanceContact(ctx, reply)) return reply;
     if (await activeInvestigation(ctx, actor, api.id)) return sendError(reply, 409, 'investigation_in_progress', 'une enquête est déjà en file, en cours ou en pause sur cette API');
     const state = await investigationOf(ctx, actor, api.id);
     if (state === null) return sendError(reply, 409, 'no_investigation_request', 'aucune demande d’enquête connue pour cette API (créée hors enquête) : recréez-la');

@@ -17,6 +17,7 @@ import { ApiInputError, checkNetworkPolicy, freeSlug, readApiBySlug, readOwnApi 
 import { rejectIfKeyRateLimited, rejectWithoutAck, reserveRunSlot, responsibleUseAcked, RunSlotError, sendRunSlotError, triggerOf } from '../rest/shared.js';
 import { createdView, investigationError } from './apis.js';
 import { audit, notFound, sendError } from './guard.js';
+import { rejectWithoutInstanceContact } from './identity.js';
 
 /** Un export tient largement sous 1 Mio (schémas bornés à 256 Kio chacun, stratégie, planifications) : au-delà, 413. */
 const IMPORT_BODY_LIMIT = 1024 * 1024;
@@ -80,6 +81,8 @@ export function portabilityRoutes(app: FastifyInstance, ctx: ServerContext): voi
           requires_ack: personal && !(await responsibleUseAcked(ctx, actor.userId)),
         };
       }
+      // UX-04 : l'import repasse par l'enquête, qui échouerait aussitôt sans contact du robot : refus avant toute écriture.
+      if (await rejectWithoutInstanceContact(ctx, reply)) return reply;
       // 17 § 11 : la case « j'ai lu » avant une API à données personnelles (comme à la création et à la validation).
       if (await rejectWithoutAck(ctx, reply, actor, personal ? true : {})) return reply;
       if (await rejectIfKeyRateLimited(ctx, reply, actor)) return reply;
