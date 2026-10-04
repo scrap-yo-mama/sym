@@ -43,7 +43,7 @@ export type TimelineAccess = { kind: 'access_report'; step: number; signal: 'all
  * l'enquête finie. Codes et nombres seulement (aucun texte du site dans la chronologie) : l'aperçu de 3 éléments est dans
  * l'événement `reconnaissance.finished` du flux (`GET /api/runs/{id}/events`), `preview_items` en donne le nombre.
  */
-export type TimelineSource = {
+type TimelineSource = {
   source_id: string;
   type: 'dom' | 'json' | 'xhr' | 'blob';
   count: number | null;
