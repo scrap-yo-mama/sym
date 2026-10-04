@@ -317,7 +317,7 @@ export type ProposalOutcome =
   | { readonly ok: false; readonly reason: 'invalid_schema' | 'no_valid_source' | 'no_conformant_sample'; readonly rejected: readonly { readonly candidate: string; readonly reason: string }[] };
 
 /** Champ d'un chemin virtuel du squelette (jointure, URL de fiche), `undefined` si le chemin n'en est pas un. */
-function virtualField(path: string, candidate: DataCandidate, type: string, required: boolean): Record<string, unknown> | undefined {
+export function virtualField(path: string, candidate: DataCandidate, type: string, required: boolean): Record<string, unknown> | undefined {
   const url = /^(.+)\^url$/.exec(path);
   if (url !== null) {
     const hit = candidate.urls?.find((u) => u.local === url[1]);

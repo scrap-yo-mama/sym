@@ -113,6 +113,7 @@ import {
   capturedBody,
   fidelityCheck,
   fidelityDiff,
+  fixFieldMapping,
   fidelitySamples,
   missingRequiredFields,
   relaxRequired,
@@ -1375,6 +1376,61 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         return verdict;
       };
       /**
+       * Une nouvelle carte des champs d'un couple, essayée par UNE exécution du même couple (2 pages si elle pagine), puis jugée
+       * comme la première (contenu minimal, fidélité). Acceptée, elle remplace la spécification du couple (retenue avec lui).
+       * `event` : code du journal (`fidelity_remap`, `fidelity_fix`).
+       */
+      const tryMapping = async (pair: TrialPair, entry: PlanEntry, spec: Record<string, unknown>, paginated: boolean, event: string): Promise<boolean> => {
+        const strategy = { spec: spec as unknown as DeclarativeSpec, paginated };
+        const ceilingUsd = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - liveTrialSpent()));
+        const checkTarget: RunTarget = {
+          api: { ...target.api, outputSchema, maxCostUsd: ceilingUsd },
+          strategy: { version: 0, execution: entry.execution, network: entry.network, spec, scriptRef: null, estCostUsd: entry.est_cost_usd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
+        };
+        let checked: StrategyTrial | null = null;
+        try {
+          const timeout = AbortSignal.timeout(Math.max(1, deadlineMs - now()));
+          checked = await deps.strategy.trial({ ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(strategy.paginated, 'sample') }, checkTarget, checkTarget.strategy!);
+        } catch (error) {
+          if (ctx.signal.aborted) throw error;
+          logger.warn(trialErrorLog(ctx.runId, entry.execution, error), 'enquête : essai de la nouvelle carte en erreur');
+        }
+        if (checked !== null) promotionUsd = round6(promotionUsd + checked.proxyUsd + (checked.llmUsd ?? 0));
+        const r = checked?.result;
+        const natural = r?.ok === true && r.pages === 1 && (r.stop === 'records_empty' || r.stop === 'no_next' || r.stop === 'no_pagination');
+        const pagesOk = r?.ok === true && (!strategy.paginated || r.pages >= 2 || natural);
+        const minimal = r?.ok === true ? minimalContentCheck([r.records], outputSchema) : null;
+        const verdict = r?.ok === true && pagesOk && minimal?.ok === true ? await fidelityOf(strategy.spec, entry.source, r.records) : null;
+        const ok = verdict?.ok === true && r?.ok === true;
+        await ctx.log('info', event, { source: entry.source, ok, reason: ok ? null : r === undefined ? 'trial_error' : !r.ok ? (r.failure.detail ?? r.failure.failure_class) : !pagesOk ? 'pagination_page2' : minimal?.ok === false ? minimal.detail : 'fidelity' });
+        if (!ok || r?.ok !== true) return false;
+        entries.set(pair, { ...entry, spec, paginated });
+        lastRecords.set(pair, r.records);
+        sampleOutputs.set(pair, [r.records]);
+        return true;
+      };
+      /**
+       * Avant TOUTE escalade vers une voie à LLM (banc réel R09 : `start_date` recevait l'organisateur, puis `agent_fetch` et `agent`
+       * brûlaient le budget), une nouvelle tentative BON MARCHÉ de la voie déterministe ou JSON : le code corrige l'affectation
+       * du champ refusé d'après le différentiel du contrôle de fidélité (date : champ ISO de la réponse ; libellé : chemin joint),
+       * vérifiée sur les données capturées, puis par une exécution du même couple. Aucun LLM ; une fois par gisement.
+       */
+      const fixed = new Set<string>();
+      const fixMapping = async (pair: TrialPair, entry: PlanEntry, issues: readonly FidelityIssue[]): Promise<boolean> => {
+        if (fixed.has(entry.source)) return false;
+        fixed.add(entry.source);
+        const candidate = reconCandidates.find((c) => c.id === entry.source) ?? null;
+        const body = candidate === null || reconCapture === null ? undefined : capturedBody(candidate, reconCapture);
+        const fix = fixFieldMapping({ spec: entry.spec as unknown as DeclarativeSpec, candidate, issues, outputSchema, body });
+        if (fix === null) {
+          await ctx.log('info', 'fidelity_fix', { source: entry.source, ok: false, reason: 'no_fix' });
+          return false;
+        }
+        const ok = await tryMapping(pair, entry, fix.spec as unknown as Record<string, unknown>, entry.paginated, 'fidelity_fix');
+        if (ok) await ctx.log('info', 'fidelity_fix_applied', { source: entry.source, fields: fix.changes.map((c) => c.field) });
+        return ok;
+      };
+      /**
        * Nouvelle proposition des emplacements d'UN gisement après un refus de fidélité (une fois par gisement) : rôle
        * `investigate` avec le schéma validé, la carte précédente et le différentiel (codes) ; la nouvelle stratégie est
        * essayée par UNE exécution du même couple (2 pages si elle pagine), puis jugée comme la première. Acceptée, elle
@@ -1418,31 +1474,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           return false;
         }
         const spec = strategy.spec as unknown as Record<string, unknown>;
-        const ceilingUsd = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - liveTrialSpent()));
-        const checkTarget: RunTarget = {
-          api: { ...target.api, outputSchema, maxCostUsd: ceilingUsd },
-          strategy: { version: 0, execution: entry.execution, network: entry.network, spec, scriptRef: null, estCostUsd: entry.est_cost_usd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
-        };
-        let checked: StrategyTrial | null = null;
-        try {
-          const timeout = AbortSignal.timeout(Math.max(1, deadlineMs - now()));
-          checked = await deps.strategy.trial({ ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(strategy.paginated, 'sample') }, checkTarget, checkTarget.strategy!);
-        } catch (error) {
-          if (ctx.signal.aborted) throw error;
-          logger.warn(trialErrorLog(ctx.runId, entry.execution, error), 'enquête : essai de la nouvelle carte en erreur');
-        }
-        if (checked !== null) promotionUsd = round6(promotionUsd + checked.proxyUsd + (checked.llmUsd ?? 0));
-        const r = checked?.result;
-        const natural = r?.ok === true && r.pages === 1 && (r.stop === 'records_empty' || r.stop === 'no_next' || r.stop === 'no_pagination');
-        const pagesOk = r?.ok === true && (!strategy.paginated || r.pages >= 2 || natural);
-        const minimal = r?.ok === true ? minimalContentCheck([r.records], outputSchema) : null;
-        const verdict = r?.ok === true && pagesOk && minimal?.ok === true ? await fidelityOf(strategy.spec, entry.source, r.records) : null;
-        const ok = verdict?.ok === true && r?.ok === true;
-        await ctx.log('info', 'fidelity_remap', { source: entry.source, ok, reason: ok ? null : r === undefined ? 'trial_error' : !r.ok ? (r.failure.detail ?? r.failure.failure_class) : !pagesOk ? 'pagination_page2' : minimal?.ok === false ? minimal.detail : 'fidelity' });
-        if (!ok || r?.ok !== true) return false;
-        entries.set(pair, { ...entry, spec, paginated: strategy.paginated });
-        lastRecords.set(pair, r.records);
-        sampleOutputs.set(pair, [r.records]);
+        const tried = await tryMapping(pair, entry, spec, strategy.paginated, 'fidelity_remap');
+        if (!tried) return false;
         proposal = next;
         await save(phase, { proposal: next });
         return true;
@@ -1600,6 +1633,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               const records = (sampleOutputs.get(pair) ?? []).flat();
               const verdict = await fidelityOf(entry.spec as unknown as DeclarativeSpec, entry.source, records);
               if (verdict.ok) return null;
+              if (await fixMapping(pair, entry, verdict.issues)) return null;
               if (await remap(pair, entry, verdict.issues)) return null;
               return { failure_class: 'extraction', detail: 'fidelity' };
             },
