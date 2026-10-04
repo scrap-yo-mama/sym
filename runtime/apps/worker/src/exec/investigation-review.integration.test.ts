@@ -204,14 +204,14 @@ describe('identité du robot pendant l’enquête (D-33, 17 §5)', () => {
 });
 
 describe('fin sans stratégie conforme : erreur quelle que soit la classe du dernier essai (04 §6, transition 2)', () => {
-  test('toutes les voies en 503 persistants → erreur (investigation_budget_exhausted), phase done, récit fermé', async () => {
+  test('toutes les voies en 503 persistants → erreur (no_conformant_strategy : aucun essai conforme, UX-29), phase done, récit fermé', async () => {
     fake.setScenario(MODEL, [scripted.json(PROPOSAL)]);
     const apiId = await insertApi('zz_test_rv_all_503');
     const run = await investigate(apiId, { url: site.url(DOWN, '/'), description: 'liste des produits', auto_validate: true });
     expect(run).toMatchObject({ state: 'failed', failure_class: 'transient' });
     expect(run.attempts.length).toBeGreaterThan(0);
     expect(run.attempts.every((a) => a.result === 'transient')).toBe(true);
-    expect(await apiRow(apiId)).toMatchObject({ status: 'erreur', status_reason: 'investigation_budget_exhausted', investigation_phase: 'done' });
+    expect(await apiRow(apiId)).toMatchObject({ status: 'erreur', status_reason: 'no_conformant_strategy', investigation_phase: 'done' });
     expect((await kindsOf(run.id)).at(-1)).toBe('investigation.finished');
   });
 

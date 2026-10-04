@@ -24,7 +24,7 @@
 // { read_skill } exécuté dans notre processus, `integrations` (clients MCP) TOUJOURS vide en V1 (18 §5).
 import { Stagehand, type ModelConfiguration } from '@browserbasehq/stagehand';
 import { READ_SKILL_TOOL, toolRegistryForPhase, type AgentEngine, type AgentPhase, type AgentRunContext, type AgentRunResult, type AgentRunStatus, type AgentTask, type AgentTraceStep } from '@runtime/core';
-import { computeUsage, createRedactor, type CapabilityProfile, type ModelPrice, type RawUsage, type RedactConfig } from '@runtime/llm';
+import { computeUsage, createRedactor, estimateCallUsd, type CapabilityProfile, type ModelPrice, type RawUsage, type RedactConfig } from '@runtime/llm';
 import { z } from 'zod';
 import type { SemanticClick, SemanticRecorder } from './semantic-recorder.js';
 import { AgentToolsetNotClosedError, assertStagehandLocalOnly, STAGEHAND_EXCLUDED_TOOLS, toolsOutsideClosedList } from './stagehand-guards.js';
@@ -327,11 +327,21 @@ export class StagehandEngine implements AgentEngine {
       return { usd: unpriced ? null : known, usage: u };
     };
 
-    /** Plafond de coût : coût du run + dépense ailleurs ; inconnu (non tarifé) = intenable. Vrai si le run doit s'arrêter. */
-    const overBudget = (): boolean => {
+    /**
+     * Plafond de coût : coût du run + dépense ailleurs (+ coût PRÉVU du prochain appel, `nextUsd`) ; inconnu (non tarifé) =
+     * intenable. Vrai si le run doit s'arrêter. Le coût prévu (entrée de la requête, sortie du dernier appel) empêche
+     * l'appel qui franchirait le plafond (constat UX-32 : essai agent facturé 0,534 $ pour 0,50 $).
+     */
+    const overBudget = (nextUsd = 0): boolean => {
       const own = cost().usd;
       const elsewhere = this.#opts.spentElsewhereUsd?.() ?? 0;
-      return own === null || elsewhere === null || own + elsewhere >= task.limits.maxCostUsd;
+      return own === null || elsewhere === null || own + elsewhere >= task.limits.maxCostUsd || own + elsewhere + nextUsd > task.limits.maxCostUsd;
+    };
+    /** Coût prévu d'un appel : prompt et outils tels qu'envoyés (caractères / 4), sortie du dernier appel ; 0 sans prix. */
+    const nextCallUsd = (params: { prompt?: unknown; tools?: unknown }): number => {
+      const last = calls.at(-1);
+      const lastOut = last === undefined ? 0 : computeUsage({ raw: last.usage, price: this.#opts.price, requestChars: last.requestChars, responseChars: last.responseChars }).tokens_out;
+      return estimateCallUsd({ requestChars: jsonLength({ prompt: params.prompt, tools: params.tools }), outputTokens: lastOut, price: this.#opts.price }) ?? 0;
     };
     const stopForBudget = (): Error => {
       costExceeded = true;
@@ -353,7 +363,7 @@ export class StagehandEngine implements AgentEngine {
             throw error;
           }
         }
-        if (overBudget()) throw stopForBudget();
+        if (overBudget(nextCallUsd(params))) throw stopForBudget();
         const names = (params.tools ?? []).map((t) => t.name);
         const outside = toolsOutsideClosedList(names, toolRegistryForPhase(this.#opts.phase ?? 'e5_e6').tools);
         if (outside.length > 0) {

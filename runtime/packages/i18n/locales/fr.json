@@ -905,6 +905,11 @@
     "write_step_broken": "Une étape qui agit sur le site a cassé ; rien n'est réparé seul.",
     "step_cascade": "{n} étapes cassées : une nouvelle enquête est nécessaire.",
     "not_compilable": "Aucune stratégie rejouable sans agent. Le mode « agent instruit » existe, avec un coût à chaque run.",
+    "investigation_budget_exhausted": "Le budget d'enquête est dépensé sans stratégie conforme : monte budget_usd pour ré-enquêter.",
+    "investigation_timeout": "La durée d'enquête est écoulée sans stratégie conforme : monte timeout_s pour ré-enquêter.",
+    "trial_cost_over_cap": "Un essai coûte plus que le plafond par run de l'API (max_cost_usd) : monte max_cost_usd pour ré-enquêter.",
+    "no_conformant_strategy": "Aucun essai n'a rendu d'items conformes : la chronologie de l'enquête donne chaque essai et son motif.",
+    "investigation_error": "L'enquête s'est arrêtée sur une erreur de mise en route : le détail du run la nomme.",
     "session_step_broken": "Une étape a cassé sur une page connectée ; aucun agent n'y agit seul.",
     "field_constant": "Le champ {field} a la même valeur sur tous les items.",
     "pattern_shift": "Le format du champ {field} a changé ({p} % des items).",
@@ -946,6 +951,11 @@
     "write_step_broken": "Étape à effet cassée",
     "step_cascade": "Plusieurs étapes cassées",
     "not_compilable": "Aucune stratégie rejouable",
+    "investigation_budget_exhausted": "Budget d'enquête dépensé",
+    "investigation_timeout": "Durée d'enquête écoulée",
+    "trial_cost_over_cap": "Essai trop coûteux pour le plafond",
+    "no_conformant_strategy": "Aucune stratégie conforme",
+    "investigation_error": "Enquête en erreur",
     "session_step_broken": "Étape cassée sur une page connectée"
   },
   "reasonAction": {

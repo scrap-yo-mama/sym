@@ -905,6 +905,11 @@
     "write_step_broken": "A step that acts on the site broke; nothing is repaired on its own.",
     "step_cascade": "{n} steps broke: a new investigation is needed.",
     "not_compilable": "No strategy replays without an agent. The “instructed agent” mode exists, with a cost on every run.",
+    "investigation_budget_exhausted": "The investigation budget is spent without a conformant strategy: raise budget_usd to investigate again.",
+    "investigation_timeout": "The investigation time ran out without a conformant strategy: raise timeout_s to investigate again.",
+    "trial_cost_over_cap": "A trial costs more than the per-run cap of the API (max_cost_usd): raise max_cost_usd to investigate again.",
+    "no_conformant_strategy": "No trial returned conformant items: the investigation timeline gives each trial and its reason.",
+    "investigation_error": "The investigation stopped on a setup error: the run detail names it.",
     "session_step_broken": "A step broke on a signed-in page; no agent acts there on its own.",
     "field_constant": "Field {field} has the same value on every item.",
     "pattern_shift": "The format of field {field} changed ({p} % of items).",
@@ -946,6 +951,11 @@
     "write_step_broken": "Acting step broken",
     "step_cascade": "Several steps broken",
     "not_compilable": "No replayable strategy",
+    "investigation_budget_exhausted": "Investigation budget spent",
+    "investigation_timeout": "Investigation time over",
+    "trial_cost_over_cap": "Trial too costly for the cap",
+    "no_conformant_strategy": "No conformant strategy",
+    "investigation_error": "Investigation error",
     "session_step_broken": "Step broken on a signed-in page"
   },
   "reasonAction": {

@@ -648,6 +648,28 @@ describe('enquête (tâche 2.1)', () => {
     expect(logs.map((l) => l.data)).toEqual([expect.objectContaining({ code: 'agent_request_blocked', execution: 'agent_fetch', reasons: ['sensitive_value'] })]);
     expect(JSON.stringify(logs)).not.toContain(secret);
     expect(fake.byRole[EXTRACT_MODEL] ?? 0).toBe(0);
+    // UX-29 : la fin dit sa vraie cause (aucune stratégie conforme), jamais « budget d'enquête épuisé ».
+    expect(await apiRow(apiId)).toMatchObject({ status: 'erreur', status_reason: 'no_conformant_strategy' });
+    expect(await detailOf(run.id)).toBe('no_conformant_strategy');
+  });
+
+  test('UX-29, UX-32 — essai plus cher que max_cost_usd : l’appel qui franchirait le plafond n’est jamais envoyé ; raison trial_cost_over_cap, distincte du budget d’enquête', async () => {
+    withExtract = true;
+    fake.setScenario(MODEL, [scripted.json({ fields: [{ name: 'title', type: 'string', required: true, personal: false, description: 'Titre' }], sources: [] })]);
+    const items = { items: [{ title: 'Lampe Zztest 0001' }] };
+    fake.setScenario(EXTRACT_MODEL, [scripted.json(items), scripted.json(items), scripted.json(items)]);
+    const apiId = await insertApi('zz_test_inv_trial_over_cap');
+    // Plafond par run sous le coût prévu de la mise en forme E4 (page de 20 cartes, ~1 $ par million de jetons d'entrée).
+    await pool.query('UPDATE apis SET max_cost_usd = 0.0002 WHERE id = $1', [apiId]);
+    const run = await investigate(apiId, { url: `${base(SSR_HOST)}/`, description: 'liste des produits du catalogue', auto_validate: true });
+    expect(run).toMatchObject({ state: 'failed' });
+    expect(fake.byRole[EXTRACT_MODEL] ?? 0).toBe(0);
+    const attempt = (await eventsOf(run.id)).find((e) => e.kind === 'attempt.finished')!.payload as { attempt: { result: string; cost_usd: number }; why?: { code: string } };
+    expect(attempt.attempt).toMatchObject({ result: 'run_budget_exceeded' });
+    expect(attempt.attempt.cost_usd).toBeLessThanOrEqual(0.0002);
+    expect(attempt.why).toMatchObject({ code: 'max_cost_usd' });
+    expect(await apiRow(apiId)).toMatchObject({ status: 'erreur', status_reason: 'trial_cost_over_cap' });
+    expect(await detailOf(run.id)).toBe('trial_cost_over_cap');
   });
 
   test('page HTML statique, compilation refusée (valeurs divergentes deux fois) : E4 gardé tel quel, raison dans le récit', async () => {

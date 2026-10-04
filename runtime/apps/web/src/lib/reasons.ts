@@ -62,7 +62,13 @@ export type StepReasonCode = (typeof STEP_REASON_CODES)[number];
  */
 const QUALITY_REASON_CODES = ['field_constant', 'pattern_shift', 'sentinel_values', 'duplicate_items', 'new_enum_value', 'prior_refusal', 'judge_flag'] as const;
 
-export const REASON_CODES: readonly string[] = [...SPEC_REASON_CODES, ...EXTRA_REASON_CODES, ...STEP_REASON_CODES, ...QUALITY_REASON_CODES];
+/**
+ * Raisons d'une fin d'échec d'enquête (transition 2, constats UX-05, UX-12, UX-29, UX-32) : une par cause, jamais « budget
+ * d'enquête épuisé » par défaut. Mêmes noms que `INVESTIGATION_FAILURE_REASONS` du noyau (`not_compilable` est déjà listé).
+ */
+const INVESTIGATION_FAILURE_REASON_CODES = ['investigation_budget_exhausted', 'investigation_timeout', 'trial_cost_over_cap', 'no_conformant_strategy', 'investigation_error'] as const;
+
+export const REASON_CODES: readonly string[] = [...SPEC_REASON_CODES, ...EXTRA_REASON_CODES, ...STEP_REASON_CODES, ...QUALITY_REASON_CODES, ...INVESTIGATION_FAILURE_REASON_CODES];
 
 /**
  * Action proposée par un code de 19b § 3 (`reasonAction.<code>`) et l'onglet de la fiche qui la porte. « Ouvrir le

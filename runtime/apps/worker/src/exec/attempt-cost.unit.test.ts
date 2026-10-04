@@ -52,3 +52,15 @@ describe('AttemptCost — plafond partagé proxy + LLM', () => {
     expect(cost.openRun().limitUsd).toBe(0);
   });
 });
+
+// Recette 2026-10-04 (UX-32) : essai agent facturé 0,513 puis 0,534 $ pour max_cost_usd 0,50 $ : le contrôle avant l'appel
+// ne regardait que la dépense passée. Il compte désormais le coût prévu de l'appel.
+describe('AttemptCost — coût prévu de l’appel suivant (UX-32)', () => {
+  test('refus AVANT l’appel qui dépasserait le plafond ; un appel qui tient part', () => {
+    const cost = new AttemptCost(0.5);
+    cost.addLlm(() => 0.4);
+    expect(() => cost.assertAvailable(0.09)).not.toThrow();
+    expect(() => cost.assertAvailable(0.11)).toThrow(expect.objectContaining({ unpriced: false, message: 'max_cost_usd' }));
+    expect(() => cost.assertAvailable(null)).not.toThrow();
+  });
+});

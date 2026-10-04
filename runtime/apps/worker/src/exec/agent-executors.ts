@@ -329,8 +329,8 @@ async function runAgentFetch(options: AgentFetchOptions, gate: AgentRequestGate)
       truncated,
       itemSchema: options.outputSchema,
       signal: AbortSignal.any([options.signal, AbortSignal.timeout(options.spec.limits.timeout_ms)]),
-      // Plafond tenu avant chaque envoi (premier appel, réparations, réessais).
-      beforeCall: () => cost.assertAvailable(),
+      // Plafond tenu avant chaque envoi (premier appel, réparations, réessais), coût prévu de l'envoi compris (UX-32).
+      beforeCall: (call) => cost.assertAvailable(call.estimateUsd),
     });
     const llm = spend();
     // Coût inconnu (prix absent) : jamais un succès dont le plafond n'a pas pu être tenu.
@@ -671,7 +671,7 @@ async function runHybridDelegated(options: HybridOptions, agentBrowser: NonNulla
         truncated: view.text.length > text.length,
         itemSchema: options.outputSchema,
         signal: AbortSignal.any([options.signal, deadline]),
-        beforeCall: () => cost.assertAvailable(),
+        beforeCall: (call) => cost.assertAvailable(call.estimateUsd),
       });
       spend = addSpend(spend, extractSpend());
       if (spend?.usd === null) return { result: fail(budgetFailure(true), 1), llm: spend };

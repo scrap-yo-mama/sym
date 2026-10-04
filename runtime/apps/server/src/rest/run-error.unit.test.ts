@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // UX-04 : la cause stable d'un run en échec est publiée avec son message, sa marche à suivre et `retryable`.
 import { describe, expect, test } from 'vitest';
-import { runErrorFor, runErrorOf, runNotStarted } from './run-error.js';
+import { runErrorFor, runErrorOf, runInvestigationFailed, runNotStarted } from './run-error.js';
 
 describe('cause d’un run en échec (UX-04)', () => {
   test('instance_contact_missing : code stable, message lisible, what_to_do, retryable', () => {
@@ -60,5 +60,25 @@ describe('cause d’un run en échec (UX-04)', () => {
     expect(runErrorOf({ state: 'succeeded', error_detail: 'instance_contact_missing' })).toBeNull();
     expect(runErrorOf({ state: 'failed', error_detail: 'https://zz-test.example/secret' })).toBeNull();
     expect(runErrorOf({ state: 'failed', error_detail: null })).toBeNull();
+  });
+});
+
+// Recette 2026-10-04 (UX-29, UX-32) : « budget d'enquête épuisé » affiché pour un essai au-dessus de max_cost_usd ou une
+// enquête sans stratégie conforme. Chaque fin a son code (celui de la raison de statut), son message et sa suite.
+describe('fins d’échec d’enquête : cause exacte et suite proposée (UX-29, UX-32)', () => {
+  test('plafond d’essai, aucune conforme, budget, durée : codes de la transition 2, jamais « could not start »', () => {
+    const cases = [
+      ['trial_cost_over_cap', 'trial_cost_over_cap', /max_cost_usd/],
+      ['no_conformant_strategy', 'no_conformant_strategy', /timeline/],
+      ['investigation_budget_usd', 'investigation_budget_exhausted', /budget_usd/],
+      ['investigation_timeout_s', 'investigation_timeout', /timeout_s/],
+    ] as const;
+    for (const [detail, code, hint] of cases) {
+      const run = { state: 'failed', error_detail: detail };
+      expect(runErrorOf(run)).toMatchObject({ code, retryable: false, what_to_do: expect.stringMatching(hint) });
+      expect(runNotStarted(run)).toBe(false);
+      expect(runInvestigationFailed(run)).toBe(true);
+    }
+    expect(runInvestigationFailed({ state: 'failed', error_detail: 'instance_contact_missing' })).toBe(false);
   });
 });

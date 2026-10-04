@@ -6,7 +6,7 @@ import { resolveToolChoice, roleProblems, samplingParamsRejected, withoutUnsuppo
 import { createRedactor, type RedactConfig, type Redactor } from './redact.js';
 import { compileOriginal, extractJson, toTransportSchema, validateOriginal, wrapRoot, WRAP_KEY } from './schema.js';
 import { OpenAICompatTransport, DEFAULT_MAX_REQUEST_BYTES } from './transport.js';
-import { charsOf, computeUsage, UsageMeter, type CallUsage, type ModelPrice, type RunUsage } from './usage.js';
+import { charsOf, computeUsage, estimateCallUsd, UsageMeter, type CallUsage, type ModelPrice, type RunUsage } from './usage.js';
 import type { CallOptions, ChatMessage, ChatRequest, ChatResult, JsonSchema, LlmTransport, ToolChoice, ToolDef } from './types.js';
 
 export interface ModelConfig {
@@ -104,10 +104,15 @@ export interface ChatCall {
   shrinkInput?: (messages: ChatMessage[]) => ChatMessage[] | null;
   /**
    * Garde appelée avant CHAQUE envoi (premier essai, réessai, réparation, repli) : une exception l'empêche et remonte
-   * telle quelle, sans réessai ni repli (plafond de coût de l'essai, tâche 2.4).
+   * telle quelle, sans réessai ni repli (plafond de coût de l'essai, tâche 2.4). Reçoit le coût PRÉVU de l'envoi
+   * (`estimateCallUsd` : entrée de la requête, sortie du dernier appel ; null sans prix), pour refuser l'appel qui
+   * franchirait le plafond plutôt que le constater après (UX-32).
    */
-  beforeCall?: () => void;
+  beforeCall?: BeforeCall;
 }
+
+/** Garde avant l'envoi ; `estimateUsd` : coût prévu de cet envoi (borne basse), null si le prix du modèle est absent. */
+export type BeforeCall = (call: { readonly estimateUsd: number | null }) => void;
 
 export type StructuredLevel = 'S1' | 'S2' | 'S3' | 'S4';
 
@@ -122,7 +127,7 @@ export interface StructuredCall {
   maxTokens?: number;
   signal?: AbortSignal;
   /** Voir `ChatCall.beforeCall`. */
-  beforeCall?: () => void;
+  beforeCall?: BeforeCall;
   /**
    * Aucun outil dans la requête, même l'outil de soumission de S2 (E4, `judge`, `reflect` : phases sans outil, 19 §7,
    * `assert_e4_no_tools`) : S2 descend en S3 si le profil le permet, sinon en S4.
@@ -151,6 +156,8 @@ export class LlmClient {
   readonly meter = new UsageMeter();
   readonly #config: LlmConfig;
   readonly #hooks: Required<Pick<ClientHooks, 'sleep' | 'random' | 'now'>> & ClientHooks;
+  /** Jetons de sortie du dernier appel facturé : sortie attendue de l'envoi suivant (coût prévu, UX-32). */
+  #lastOutputTokens = 0;
   readonly #transports = new Map<string, LlmTransport>();
   readonly #redactor: Redactor | undefined;
   readonly #noted = new Set<string>();
@@ -270,8 +277,9 @@ export class LlmClient {
       const { request: profiled, dropped } = withoutUnsupportedSampling(model.profile, request);
       for (const param of dropped) this.#noteDropped(provider.id, model.id, param);
       const sent = this.#withoutRejected(provider.id, model.id, profiled);
-      // Hors du try : une garde qui refuse n'est ni une erreur du fournisseur, ni réessayée.
-      options.beforeCall?.();
+      // Hors du try : une garde qui refuse n'est ni une erreur du fournisseur, ni réessayée. Coût prévu de l'envoi : la
+      // requête telle qu'envoyée, et la sortie du dernier appel de ce client (une réparation la reproduit).
+      options.beforeCall?.({ estimateUsd: estimateCallUsd({ requestChars: charsOf(sent.messages), outputTokens: this.#lastOutputTokens, price: model.price, at: this.#hooks.now() }) });
       const started = Date.now();
       const callOptions: CallOptions = options.signal === undefined ? {} : { signal: options.signal };
       try {
@@ -338,6 +346,7 @@ export class LlmClient {
   #account(model: ModelConfig, raw: ChatResult['usage'], request: ChatRequest, responseChars: number): CallUsage {
     const usage = computeUsage({ raw, price: model.price, requestChars: charsOf(request.messages), responseChars, at: this.#hooks.now() });
     this.meter.add(usage);
+    this.#lastOutputTokens = usage.tokens_out;
     return usage;
   }
 

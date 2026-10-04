@@ -10,7 +10,7 @@
 // 4. le prompt et la réponse ne sont jamais journalisés (`assert_llm_prompts_not_logged`).
 import { createHash, randomBytes } from 'node:crypto';
 import { toolRegistryForPhase } from '@runtime/core';
-import type { ChatMessage, JsonSchema, LlmClient, LlmCallResult } from '@runtime/llm';
+import type { BeforeCall, ChatMessage, JsonSchema, LlmClient, LlmCallResult } from '@runtime/llm';
 
 export const EXTRACT_SYSTEM_PROMPT = [
   'You are a data extraction function inside a web data API.',
@@ -78,8 +78,8 @@ export async function extractRecordsWithLlm(
     /** Règles embarquées dans la stratégie E4 : texte reconstruit depuis les références épinglées de `spec.rules`. */
     rules?: string;
     signal?: AbortSignal;
-    /** Garde avant chaque envoi (plafond de coût de l'essai) : voir `ChatCall.beforeCall`. */
-    beforeCall?: () => void;
+    /** Garde avant chaque envoi (plafond de coût de l'essai, coût prévu de l'envoi) : voir `ChatCall.beforeCall`. */
+    beforeCall?: BeforeCall;
   },
 ): Promise<LlmExtraction> {
   const result = await client.generateStructured<{ items: unknown[] }>('extract', {

@@ -11,7 +11,7 @@ export type RunError = { code: string; message: string; what_to_do: string; retr
  * contact posé mais illisible (UX-05) porte la même raison que le contact absent : dans les deux cas, aucun contact utilisable ;
  * seul le message change (« corrige » au lieu de « renseigne »).
  */
-const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string }> = {
+const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string; investigation?: true }> = {
   instance_contact_missing: {
     code: 'instance_contact_missing',
     message: 'Renseigne le contact du robot dans Réglages > Identité du robot, ou la variable INSTANCE_CONTACT.',
@@ -35,6 +35,43 @@ const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string }> = {
     retryable: true,
   },
 };
+
+/**
+ * Fins d'échec d'une enquête qui ont démarré (constats UX-29, UX-32) : même code que la raison de statut (transition 2),
+ * la suite proposée pour l'agent. Le récit (`get_run`) donne chaque essai et son motif.
+ */
+Object.assign(RUN_ERRORS, {
+  trial_cost_over_cap: {
+    code: 'trial_cost_over_cap',
+    message: "Un essai coûte plus que le plafond par run de l'API (max_cost_usd) : monte max_cost_usd, puis ré-enquête.",
+    what_to_do:
+      "A trial needed more than the per-run cost cap of the API (max_cost_usd) and was stopped; the investigation budget was not used up. Show the user the cost of each trial (timeline), ask whether to raise max_cost_usd in the API settings (console), then investigate again (run_api with force_investigate).",
+    retryable: false,
+    investigation: true,
+  },
+  no_conformant_strategy: {
+    code: 'no_conformant_strategy',
+    message: "Aucun essai n'a rendu d'items conformes : la chronologie donne chaque essai et son motif.",
+    what_to_do:
+      'No trial returned items that match the output schema. Read each trial and its reason in the timeline (get_run), tell the user, then either adjust the description or the schema and investigate again (run_api with force_investigate), or report_problem.',
+    retryable: false,
+    investigation: true,
+  },
+  investigation_budget_usd: {
+    code: 'investigation_budget_exhausted',
+    message: "Le budget d'enquête est dépensé sans stratégie conforme : monte budget_usd pour ré-enquêter.",
+    what_to_do: 'The investigation budget (budget_usd) is spent without a conformant strategy. Ask the user whether to investigate again with a higher budget_usd (run_api with force_investigate).',
+    retryable: false,
+    investigation: true,
+  },
+  investigation_timeout_s: {
+    code: 'investigation_timeout',
+    message: "La durée d'enquête est écoulée sans stratégie conforme : monte timeout_s pour ré-enquêter.",
+    what_to_do: 'The investigation time (timeout_s) ran out without a conformant strategy. Ask the user whether to investigate again with a longer timeout_s (run_api with force_investigate).',
+    retryable: false,
+    investigation: true,
+  },
+});
 
 export type RunErrorDetail = 'instance_contact_missing' | 'instance_contact_invalid' | 'llm_price_missing';
 
@@ -68,8 +105,14 @@ function describe(code: string, detail: string): RunError | null {
  * phrase « could not start » lui convient. Un run qui a déjà appelé le modèle (`llm_price_missing` nu) a démarré.
  */
 export function runNotStarted(run: { state: string; error_detail?: string | null }): boolean {
-  if (runErrorOf(run) === null) return false;
+  if (runErrorOf(run) === null || runInvestigationFailed(run)) return false;
   return run.error_detail !== 'llm_price_missing';
+}
+
+/** Vrai si la cause nommée est une fin d'échec d'enquête démarrée (plafond d'essai, aucune conforme, budget, durée). */
+export function runInvestigationFailed(run: { state: string; error_detail?: string | null }): boolean {
+  if (runErrorOf(run) === null || typeof run.error_detail !== 'string') return false;
+  return RUN_ERRORS[run.error_detail.split(':', 1)[0]!]?.investigation === true;
 }
 
 /** Cause d'un run terminé en échec (`failed`), ou null si elle n'est pas nommée. */

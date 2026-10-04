@@ -475,6 +475,28 @@ describe('garde avant chaque appel (plafond de coût de l’essai, tâche 2.4)',
   });
 });
 
+describe('coût prévu de l’appel passé à beforeCall (UX-32)', () => {
+  test('entrée estimée sur la requête envoyée (caractères / 4), sortie sur le dernier appel ; null sans prix', async () => {
+    const bad = scripted.json({ title: 'Livre', price: 'cher' }, { prompt_tokens: 100, completion_tokens: 1_000 });
+    fake.setScenario('extract', [bad, scripted.json({ title: 'Livre', price: 3 })]);
+    const PRICE_IN = 1;
+    const PRICE_OUT = 2;
+    const { client } = setup({ models: { extract: { id: 'extract', price: { in: PRICE_IN, out: PRICE_OUT } } } });
+    const seen: (number | null)[] = [];
+    const schema = { type: 'object', properties: { title: { type: 'string' }, price: { type: 'number' } }, required: ['title', 'price'], additionalProperties: false } as const;
+    await client.generateStructured('extract', { messages: user('x'.repeat(4_000)), schema, beforeCall: (call) => void seen.push(call?.estimateUsd ?? null) });
+    expect(seen).toHaveLength(2);
+    // 1er appel : au moins 1 000 jetons d'entrée (4 000 caractères), aucune sortie connue.
+    expect(seen[0]).toBeGreaterThanOrEqual(1_000 * PRICE_IN / 1e6);
+    // Réparation : la sortie du 1er appel (1 000 jetons) est attendue de nouveau.
+    expect(seen[1]!).toBeGreaterThanOrEqual(seen[0]! + 1_000 * PRICE_OUT / 1e6);
+    fake.setScenario('extract', [scripted.text('ok')]);
+    const unpriced: unknown[] = [];
+    await setup().client.chat('extract', { messages: user('x'), beforeCall: (call) => void unpriced.push(call?.estimateUsd) });
+    expect(unpriced).toEqual([null]);
+  });
+});
+
 describe('échantillonnage non supporté (D-42 : claude-opus-4-8 compatible OpenAI répond 400 à temperature et top_p)', () => {
   const noSampling = profile({ sampling: { temperature: false, top_p: false } });
 

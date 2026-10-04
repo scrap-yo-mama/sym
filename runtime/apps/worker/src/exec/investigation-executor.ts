@@ -53,6 +53,7 @@ import {
   type CatalogDossier,
   type CostCaps,
   type FailureClass,
+  type InvestigationFailureCause,
   type InvestigationPhase,
   type RunContext as RunCtx,
   type RunExecutor,
@@ -354,7 +355,7 @@ async function closeInvestigation(deps: InvestigationExecutorDeps, ctx: RunCtx, 
     logger.warn({ runId: ctx.runId, err: internalErrorDetail(error) }, 'enquête : phase non close');
   }
   try {
-    const step = (await ctx.applyStatus?.({ type: 'investigation_failed', cause: 'budget_exhausted' })) ?? null;
+    const step = (await ctx.applyStatus?.({ type: 'investigation_failed', cause: 'error' })) ?? null;
     if (step?.ok === true) await appendInvestigationEvent(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, kind: EV.statusChanged, payload: { run_id: ctx.runId, status: step.status, status_reason: step.reason } });
   } catch (error) {
     logger.warn({ runId: ctx.runId, err: internalErrorDetail(error) }, 'enquête : statut non appliqué');
@@ -367,16 +368,29 @@ async function closeInvestigation(deps: InvestigationExecutorDeps, ctx: RunCtx, 
   return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: detail };
 }
 
+/** Détail d'une fin d'enquête → cause exacte de `investigation_failed` (constats UX-29, UX-32) ; tout autre détail : `error`. */
+const FAILURE_CAUSE_BY_DETAIL: Readonly<Record<string, InvestigationFailureCause>> = {
+  not_compilable: 'not_compilable',
+  trial_cost_over_cap: 'trial_cost_over_cap',
+  no_conformant_strategy: 'no_conformant_strategy',
+  // Plafond du nombre d'essais, ou aucune source exploitable : essais (ou reconnaissance) finis sans stratégie conforme.
+  max_attempts: 'no_conformant_strategy',
+  no_data_source: 'no_conformant_strategy',
+  client_signature: 'no_conformant_strategy',
+  investigation_budget_usd: 'budget_exhausted',
+  investigation_timeout_s: 'timeout',
+};
+
 /**
  * Événement de statut d'une fin d'enquête en échec (04 §6) : refus et défis (4), connexion, paiement, limite de compte (3)
- * par `run_failed` ; seule une trace E6 non compilable en E5 conforme, sans `instructed_mode`
- * (2.13, 19 §4) : `not_compilable` (2, ou 21 pour une ré-enquête) ; tout le reste : budget épuisé (2 ou 21).
+ * par `run_failed` ; sinon `investigation_failed` (2, ou 21 pour une ré-enquête) avec la cause EXACTE du détail : budget
+ * d'enquête, durée, essai au-dessus du plafond par run, aucune stratégie conforme, trace non compilable (2.13, 19 §4), ou
+ * erreur de mise en route. Jamais « budget épuisé » par défaut (UX-05, UX-12, UX-29, UX-32).
  */
 export function investigationFailureEvent(failure: ExecFailure): StatusEventInput {
   const cls = failure.failure_class;
   if (BLOCKING.has(cls) || ACTION.has(cls)) return { type: 'run_failed', failureClass: cls, ...(failure.status === undefined ? {} : { httpStatus: failure.status }) };
-  if (failure.detail === 'not_compilable') return { type: 'investigation_failed', cause: 'not_compilable' };
-  return { type: 'investigation_failed', cause: 'budget_exhausted' };
+  return { type: 'investigation_failed', cause: FAILURE_CAUSE_BY_DETAIL[failure.detail] ?? 'error' };
 }
 
 /**
@@ -485,10 +499,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       await event(EV.finished, { outcome: 'stopped', stop_reason: reason, detail, at, budget: budgetView() });
       return { state: 'failed', failure_class: null, stop_reason: reason, retryable: false, error_detail: detail };
     };
-    /** Budget, durée ou nombre d'essais épuisés sans stratégie conforme : `erreur` (2) ou statut précédent (21). */
+    /** Budget, durée ou nombre d'essais épuisés sans stratégie conforme : `erreur` (2) ou statut précédent (21), cause exacte. */
     const budgetExhausted = async (reason: string): Promise<RunResult> => {
       await save('done');
-      await applyStatus({ type: 'investigation_failed', cause: 'budget_exhausted' });
+      await applyStatus({ type: 'investigation_failed', cause: FAILURE_CAUSE_BY_DETAIL[reason] ?? 'budget_exhausted' });
       await event(EV.finished, { outcome: 'budget_exhausted', reason, budget: budgetView() });
       return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: reason };
     };
@@ -1386,7 +1400,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           if (geo !== undefined) return await finishFailed({ failure_class: 'network', retryable: false, detail: geo.detail! }, 'testing');
           const last = outcome.tried.at(-1);
           const lastClass = last?.result;
-          const detail = last?.detail === 'not_compilable' ? 'not_compilable' : 'no_conformant_strategy';
+          // Un essai coupé par le plafond par run de l'API (`max_cost_usd`) : cause propre, distincte du budget d'enquête et
+          // de l'absence de stratégie conforme (UX-32) ; la suite proposée est de monter `max_cost_usd`.
+          const detail = last?.detail === 'not_compilable' ? 'not_compilable' : outcome.tried.some((t) => t.detail === 'max_cost_usd') ? 'trial_cost_over_cap' : 'no_conformant_strategy';
           return await finishFailed({ failure_class: lastClass === undefined || lastClass === 'ok' ? 'extraction' : lastClass, retryable: false, detail }, 'testing');
         }
       }

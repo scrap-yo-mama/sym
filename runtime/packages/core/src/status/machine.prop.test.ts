@@ -10,6 +10,7 @@ import {
   DEGRADED_SIGNALS,
   gateRun,
   initialStatusState,
+  INVESTIGATION_FAILURE_REASONS,
   quietPeriodMs,
   TRANSITIONS,
   withStale,
@@ -50,8 +51,8 @@ function modelStep(m: ModelState, ev: StatusEventInput, now: number): Expected {
     case 'investigation_failed':
       if (m.status !== 'enquete') return same;
       // Tentative de persistance (prev = erreur) : tout échec repasse par la 21, jamais par la 2 (D-49).
-      if (m.prev === 'erreur' || (ev.cause === 'budget_exhausted' && m.prev !== null)) return go([21], m.prev!, 'reinvestigation_failed', { prev: null });
-      return go([2], 'erreur', 'investigation_budget_exhausted', { prev: null });
+      if (m.prev !== null) return go([21], m.prev, ev.cause === 'not_compilable' ? 'not_compilable' : 'reinvestigation_failed', { prev: null });
+      return go([2], 'erreur', INVESTIGATION_FAILURE_REASONS[ev.cause], { prev: null });
     case 'prior_refusal':
       // Mémoire négative (2.12) : enquête arrêtée par la transition 4.
       return m.status === 'enquete' ? go([4], 'bloquee', 'prior_refusal', { prev: null }) : same;
@@ -245,6 +246,9 @@ const commandArbs = [
   fc.constantFrom<StatusEventInput>(
     { type: 'investigation_succeeded' },
     { type: 'investigation_failed', cause: 'budget_exhausted' },
+    { type: 'investigation_failed', cause: 'trial_cost_over_cap' },
+    { type: 'investigation_failed', cause: 'no_conformant_strategy' },
+    { type: 'investigation_failed', cause: 'error' },
     { type: 'prior_refusal' },
   ).map((e) => cmd(`InvestigationResult(${JSON.stringify(e)})`, (m, r) => drive(m, r, e))),
   fc.constantFrom<ReinvestigationTrigger>('manual', 'schema_changed', 'force_investigate', 'rules_changed').map((trigger) =>

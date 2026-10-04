@@ -4,6 +4,7 @@ import {
   BLOCKING_CLASSES as BLOCKING,
   INVESTIGATION_ACTION_CLASSES,
   INVESTIGATION_ACTION_REASONS,
+  INVESTIGATION_FAILURE_REASONS,
   REPAIR_ACTION_CLASSES,
   REPAIR_ACTION_REASONS,
   type Status,
@@ -35,7 +36,7 @@ const REPLAY_FAILURES = [
 
 export const TRANSITIONS: readonly TransitionDef[] = [
   { id: 1, from: 'enquete', to: 'sain', slug: 'enquete_to_sain', reasons: ['strategy_conform'] },
-  { id: 2, from: 'enquete', to: 'erreur', slug: 'enquete_to_erreur', reasons: ['investigation_budget_exhausted', 'not_compilable'] },
+  { id: 2, from: 'enquete', to: 'erreur', slug: 'enquete_to_erreur', reasons: Object.values(INVESTIGATION_FAILURE_REASONS) },
   {
     id: 3, from: 'enquete', to: 'action_requise', slug: 'enquete_to_action_requise',
     reasons: [...INVESTIGATION_ACTION_CLASSES, ...INVESTIGATION_ACTION_REASONS],

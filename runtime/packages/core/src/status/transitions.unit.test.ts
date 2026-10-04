@@ -49,6 +49,24 @@ describe('assert_status_transitions', () => {
     ]);
   });
 
+  // Recette 2026-10-04 (UX-29, UX-32) : trois causes rangées sous « budget d'enquête épuisé » (books, lemlist, Qonto :
+  // 0,02 à 0,29 $ dépensés sur 1 $ ; Janssens : essai agent au-dessus de max_cost_usd). Une raison exacte par fin d'échec.
+  test('transition_02 : une raison par fin d’échec de l’enquête (budget, durée, plafond d’essai, aucune conforme, non compilable, erreur)', () => {
+    const cases = [
+      ['budget_exhausted', 'investigation_budget_exhausted'],
+      ['timeout', 'investigation_timeout'],
+      ['trial_cost_over_cap', 'trial_cost_over_cap'],
+      ['no_conformant_strategy', 'no_conformant_strategy'],
+      ['not_compilable', 'not_compilable'],
+      ['error', 'investigation_error'],
+    ] as const;
+    for (const [cause, reason] of cases) {
+      expect(run(st('enquete'), { type: 'investigation_failed', cause }).path).toEqual([[2, 'enquete', 'erreur', reason]]);
+      // Ré-enquête d'une API qui avait une stratégie : statut précédent (21), raison inchangée.
+      expect(run(st('enquete', { previousStatus: 'sain' }), { type: 'investigation_failed', cause }).path).toEqual([[21, 'enquete', 'sain', cause === 'not_compilable' ? 'not_compilable' : 'reinvestigation_failed']]);
+    }
+  });
+
   test('transition_03_enquete_to_action_requise', () => {
     for (const cls of ['auth_required', 'payment_required', 'account_limit'] as const) {
       expect(run(st('enquete'), { type: 'run_failed', failureClass: cls }).path).toEqual([[3, 'enquete', 'action_requise', cls]]);

@@ -644,7 +644,10 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
   }, 180_000);
 
   test('assert_run_cost_capped — E4 : le client du rôle extract est plafonné ; une réparation qui dépasserait le reliquat n’est pas envoyée', async () => {
-    const bad = scripted.json({ items: [{ id: 'zz_test_product_x', title: 't', price_eur: 'cher', category: null }] });
+    // Recette 2026-10-04 (UX-32) : le contrôle compte le coût PRÉVU de l'envoi (entrée de la requête, sortie du dernier
+    // appel). Réponse hors schéma de 4 000 jetons de sortie au prix « bon marché » : 0,008 $ ; la réparation, qui en attend
+    // autant, franchirait le plafond de 0,01 $ : elle n'est jamais envoyée (avant : envoyée, 0,016 $ facturés).
+    const bad = scripted.json({ items: [{ id: 'zz_test_product_x', title: 't', price_eur: 'cher', category: null }] }, { prompt_tokens: 10, completion_tokens: 4_000 });
     fake.setScenario(EXTRACT_MODEL, [bad, bad, bad]);
     const out = await runAgentFetchExecutor({
       spec: {
@@ -656,15 +659,16 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
         limits: { max_response_bytes: 1_000_000, max_input_chars: 60_000, timeout_ms: 30_000 },
       },
       outputSchema: itemSchema('F-E4'),
-      llm: extractClient(DEAR),
+      llm: extractClient(CHEAP),
       modelId: EXTRACT_MODEL,
       signal,
-      maxCostUsd: 0.03,
+      maxCostUsd: 0.01,
       session: openNetworkSession({ rung: { mode: 'direct' }, guard, allowedHosts: [AGENT_HOSTS.e4] }),
     });
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'run_budget_exceeded', detail: 'max_cost_usd' } });
-    // 0,02 $ puis 0,04 $ : la 3e requête (2e réparation) n'est jamais envoyée.
-    expect(fake.requests).toBe(2);
+    expect(fake.requests).toBe(1);
+    expect(out.llm?.usd).not.toBeNull();
+    expect(out.llm!.usd!).toBeLessThanOrEqual(0.01);
   });
 
   test('assert_llm_cost_null_when_price_missing — E6 sans prix du modèle : arrêt après le premier appel, coût null (jamais 0), classe run_budget_exceeded (llm_price_missing)', async () => {
@@ -714,33 +718,41 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
     expect(fake.requests).toBe(1);
   });
 
-  test('assert_stagehand_cost_from_raw_usage — E6, fournisseur sans usage : jetons estimés d’après la taille du prompt et de la réponse, coût jamais 0, arrêt au plafond max_cost_usd', async () => {
-    fake.setScenario(AGENT_MODEL, withRawUsage(stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref().title}"` } }])], { items: [ref()] }), null));
-    const out = await withEgress([AGENT_HOSTS.e6], (egress) =>
-      runAgentExecutor({
-        spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
-        outputSchema: itemSchema('F-E6'),
-        signal,
-        guard,
-        egress,
-        agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
-        // Prix « cher » : le premier prompt de Stagehand (plusieurs milliers de caractères) dépasse à lui seul 0,50 $.
-        engineFor: engineFor({ price: DEAR }),
-        pool,
-        allowWriteActions: false,
-        maxCostUsd: 0.5,
-        taskId: 'zz_test_no_usage',
-        version: 1,
-      }),
-    );
-    expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'run_budget_exceeded', detail: 'max_cost_usd' } });
-    expect(out.llm?.usd).not.toBeNull();
-    expect(out.llm!.usd!).toBeGreaterThan(0.5);
-    expect(out.llm?.tokens.estimated).toBe(true);
-    expect(out.llm!.tokens.in).toBeGreaterThan(0);
-    expect(fake.byRole[AGENT_MODEL]).toBe(1);
-    expect(out.compiled).toBeUndefined();
-  }, 120_000);
+  test('assert_stagehand_cost_from_raw_usage — E6, fournisseur sans usage : jetons estimés d’après la taille du prompt et de la réponse, coût jamais 0 ; l’appel dont le coût prévu dépasse max_cost_usd n’est pas envoyé (UX-32)', async () => {
+    const run = (maxCostUsd: number, taskId: string) => {
+      fake.reset();
+      fake.setScenario(AGENT_MODEL, withRawUsage(stagehandScript([scripted.toolCalls([{ name: 'act', arguments: { action: `click the link "${ref().title}"` } }])], { items: [ref()] }), null));
+      return withEgress([AGENT_HOSTS.e6], (egress) =>
+        runAgentExecutor({
+          spec: { schema_version: 1, kind: 'agent', start_url: url(AGENT_HOSTS.e6), allowed_hosts: [AGENT_HOSTS.e6], instruction: task('F-E6').instruction, limits: { max_steps: 10, timeout_ms: 90_000 } },
+          outputSchema: itemSchema('F-E6'),
+          signal,
+          guard,
+          egress,
+          agentBrowser: (o) => launchAgentBrowser({ ...o, egressServer: egress.server }),
+          engineFor: engineFor({ price: DEAR }),
+          pool,
+          allowWriteActions: false,
+          maxCostUsd,
+          taskId,
+          version: 1,
+        }),
+      );
+    };
+    // Plafond large : les appels partent ; sans usage du fournisseur, le coût vient des tailles (jamais 0).
+    const wide = await run(1_000, 'zz_test_no_usage');
+    expect(wide.llm?.usd).not.toBeNull();
+    expect(wide.llm!.usd!).toBeGreaterThan(0);
+    expect(wide.llm?.tokens.estimated).toBe(true);
+    expect(wide.llm!.tokens.in).toBeGreaterThan(0);
+    // Prix « cher » : le premier prompt de Stagehand (plusieurs milliers de caractères) coûterait à lui seul plus de 0,50 $ :
+    // il n'est pas envoyé (avant UX-32 : envoyé, puis plus de 0,50 $ facturés).
+    const capped = await run(0.5, 'zz_test_no_usage_capped');
+    expect(capped.result).toMatchObject({ ok: false, failure: { failure_class: 'run_budget_exceeded', detail: 'max_cost_usd' } });
+    expect(fake.byRole[AGENT_MODEL] ?? 0).toBe(0);
+    expect(capped.llm?.usd ?? 0).toBeLessThanOrEqual(0.5);
+    expect(capped.compiled).toBeUndefined();
+  }, 240_000);
 
   test('assert_stagehand_cost_from_raw_usage — E6, usage.cost seul (OpenRouter) et modèle sans prix configuré : coût du fournisseur retenu (08 §1), jamais llm_price_missing', async () => {
     const PROVIDER_USD = 0.001;

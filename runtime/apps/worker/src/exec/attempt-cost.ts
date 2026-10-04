@@ -6,8 +6,9 @@
 //   faite ailleurs pendant qu'il tourne (proxy, autres appels) ;
 // - un coût LLM inconnu (prix absent, ni `usage.cost` du fournisseur) n'est jamais compté 0 : il rend le plafond
 //   intenable, donc l'essai épuisé (`run_budget_exceeded`, `llm_price_missing`).
-// Le contrôle se fait avant l'envoi : un appel déjà parti est imputé tel quel, le dépassement est borné par ce seul appel
-// et l'essai s'arrête aussitôt.
+// Le contrôle se fait avant l'envoi, avec le coût PRÉVU de l'appel (entrée de la requête, sortie du dernier appel) : l'appel
+// qui franchirait le plafond ne part pas (constat UX-32 : 0,534 $ facturés pour 0,50 $ quand seule la dépense passée était
+// comparée). Un appel parti est imputé tel quel ; seul l'écart entre le coût prévu et le coût réel peut encore dépasser.
 
 /** Plafond atteint (ou intenable, `unpriced`) : aucun appel de plus. */
 export class AttemptBudgetExceededError extends Error {
@@ -88,11 +89,14 @@ export class AttemptCost {
     return spent === null || spent >= this.maxUsd;
   }
 
-  /** Lève `AttemptBudgetExceededError` si plus aucun appel ne peut partir. */
-  assertAvailable(): void {
+  /**
+   * Lève `AttemptBudgetExceededError` si l'appel ne peut pas partir : plafond atteint, ou dépense + coût prévu de l'appel
+   * (`nextUsd`, null ou absent : inconnu, seul le plafond atteint compte) au-delà du plafond (UX-32).
+   */
+  assertAvailable(nextUsd: number | null = null): void {
     const spent = this.spentUsd();
     if (spent === null) throw new AttemptBudgetExceededError(true);
-    if (spent >= this.maxUsd) throw new AttemptBudgetExceededError(false);
+    if (spent >= this.maxUsd || round(spent + (nextUsd ?? 0)) > this.maxUsd) throw new AttemptBudgetExceededError(false);
   }
 
   /** Ouvre un run de moteur : plafond = reliquat, dépense ailleurs comptée depuis l'ouverture. */

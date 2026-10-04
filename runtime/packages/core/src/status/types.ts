@@ -76,11 +76,30 @@ export type ApiStatusState = {
   stale: boolean;
 };
 
+/**
+ * Fins d'échec d'une enquête (transition 2, ou 21 pour une ré-enquête) et leur raison exacte (constats UX-05, UX-12,
+ * UX-29, UX-32 : plus aucune cause rangée par défaut sous « budget d'enquête épuisé ») :
+ * - `budget_exhausted` : `investigation_budget_usd` dépensé ; `timeout` : `investigation_timeout_s` atteint ;
+ * - `trial_cost_over_cap` : un essai a demandé plus que le plafond par run de l'API (`max_cost_usd`) ;
+ * - `no_conformant_strategy` : essais finis (ou aucune source) sans stratégie conforme ;
+ * - `not_compilable` : seule une trace E6 non compilable en E5 était conforme (2.13) ;
+ * - `error` : erreur de mise en route ou interne (configuration, LLM, imprévu), le détail du run la nomme.
+ */
+export const INVESTIGATION_FAILURE_REASONS = {
+  budget_exhausted: 'investigation_budget_exhausted',
+  timeout: 'investigation_timeout',
+  trial_cost_over_cap: 'trial_cost_over_cap',
+  no_conformant_strategy: 'no_conformant_strategy',
+  not_compilable: 'not_compilable',
+  error: 'investigation_error',
+} as const;
+export type InvestigationFailureCause = keyof typeof INVESTIGATION_FAILURE_REASONS;
+
 export type StatusEventInput =
   /** Fin d'enquête avec une stratégie conforme (1). */
   | { type: 'investigation_succeeded' }
-  /** Enquête sans résultat conforme : budget épuisé (2 ou 21), ou trace E6 non compilable en E5 conforme sans `instructed_mode` (2.13). */
-  | { type: 'investigation_failed'; cause: 'budget_exhausted' | 'not_compilable' }
+  /** Enquête sans résultat conforme (2 ou 21) : une cause exacte par fin d'échec (`INVESTIGATION_FAILURE_REASONS`). */
+  | { type: 'investigation_failed'; cause: InvestigationFailureCause }
   /** Échec d'un run ou d'une étape : refus (3, 4, 14, 15), indisponibilité (6, 8), échec non transitoire (10, 11). */
   | { type: 'run_failed'; failureClass: FailureClass; httpStatus?: number }
   /** Run arrêté sans classe d'échec : proxy non configuré ou tunnel hors ligne (3), défi en tunnel (10/11 puis 14, ou 14). */

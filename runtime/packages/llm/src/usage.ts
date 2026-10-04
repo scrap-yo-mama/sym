@@ -60,6 +60,17 @@ export function charsOf(messages: ChatMessage[]): number {
   return total;
 }
 
+/**
+ * Coût PRÉVU d'un appel, connu avant l'envoi (constat UX-32 : un essai à 0,534 $ pour un plafond de 0,50 $) : entrée estimée
+ * sur la taille de la requête (caractères / 4, comme l'estimation sans usage), sortie attendue en jetons (celle du dernier
+ * appel, 0 pour le premier) ; borne basse, au prix frais (sans remise de cache). null sans prix (le coût ne se prévoit pas).
+ */
+export function estimateCallUsd(input: { readonly requestChars: number; readonly outputTokens: number; readonly price: ModelPrice | undefined; readonly at?: Date }): number | null {
+  if (input.price === undefined) return null;
+  const raw = { prompt_tokens: Math.ceil(Math.max(0, input.requestChars) / 4), completion_tokens: Math.max(0, input.outputTokens) } as RawUsage;
+  return computeUsage({ raw, price: input.price, requestChars: input.requestChars, responseChars: 0, ...(input.at === undefined ? {} : { at: input.at }) }).cost_usd;
+}
+
 export interface UsageInput {
   raw: RawUsage | null;
   price: ModelPrice | undefined;

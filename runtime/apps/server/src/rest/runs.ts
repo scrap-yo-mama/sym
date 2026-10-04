@@ -10,7 +10,7 @@ import { withActor } from '@runtime/db';
 import type pg from 'pg';
 import type { ServerContext } from '../context.js';
 import type { Actor } from '../routes/guard.js';
-import { runErrorOf, runNotStarted } from './run-error.js';
+import { runErrorOf, runInvestigationFailed, runNotStarted } from './run-error.js';
 import { iso, reasonMessage, usd, usdOrNull } from './shared.js';
 import { investigationTimeline } from './timeline.js';
 
@@ -244,6 +244,7 @@ function messageOf(r: RunRow, status: string, total: number, awaitingSchema: boo
   if (r.state === 'failed') {
     // Cause nommée (UX-04) : la phrase la dit, au lieu de la seule classe d'échec.
     const error = runErrorOf(r);
+    if (error !== null && runInvestigationFailed(r)) return `The investigation failed (${error.code}): ${error.what_to_do} The API is now ${status}.`;
     if (error !== null) return `The run ${runNotStarted(r) ? 'could not start' : 'ended without a known cost'} (${error.code}): ${error.message} The API is now ${status}.`;
     return `The run failed (${r.failure_class ?? 'unknown'}); the API is now ${status}.`;
   }

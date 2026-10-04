@@ -7,6 +7,7 @@ import {
   BLOCKING_CLASSES,
   INVESTIGATION_ACTION_CLASSES,
   INVESTIGATION_ACTION_REASONS,
+  INVESTIGATION_FAILURE_REASONS,
   REPAIR_ACTION_CLASSES,
   REPAIR_ACTION_REASONS,
   type ActionReason,
@@ -73,7 +74,8 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
     case 'investigation_failed':
       if (status !== 'enquete') return reject(state, 'not_investigating');
       // Tentative de persistance (D-49) : tout échec repasse par la 21 vers `erreur`, jamais par la 2 (robots.txt compris).
-      if (((event.cause === 'budget_exhausted' || event.cause === 'not_compilable') && state.previousStatus !== null) || state.previousStatus === 'erreur') {
+      // Ré-enquête d'une API qui avait un statut : la 21 y revient, quelle que soit la cause.
+      if (state.previousStatus !== null) {
         // 21 : ré-enquête d'une API existante sans stratégie conforme, ancienne version gardée.
         const reason = event.cause === 'not_compilable' ? 'not_compilable' : 'reinvestigation_failed';
         return apply(state, ctx, [{ id: 21, to: state.previousStatus, reason, patch: { previousStatus: null } }]);
@@ -82,7 +84,7 @@ export function applyStatusEvent(state: ApiStatusState, event: StatusEventInput,
         {
           id: 2,
           to: 'erreur',
-          reason: event.cause === 'not_compilable' ? 'not_compilable' : 'investigation_budget_exhausted',
+          reason: INVESTIGATION_FAILURE_REASONS[event.cause],
           patch: { previousStatus: null },
         },
       ]);
