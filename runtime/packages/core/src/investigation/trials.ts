@@ -7,7 +7,7 @@
 // (tâche 2.2) : les N exécutions s'arrêtent à 2 pages, une exécution de plus, au plafond dur, doit finir par la fin
 // naturelle de la liste (sans quoi la règle est journalisée « non vérifiée », jamais présentée comme vérifiée). Le classifieur élague (`pruneAfter`), un refus ou un défi arrête
 // tout (INV6), une connexion requise rend la main. Plafonds : `investigation_budget_usd`, `investigation_timeout_s`,
-// nombre d'essais ; chaque exécution tourne sous le plus petit de `max_cost_usd` et du budget restant.
+// nombre d'essais ; chaque exécution tourne sous le plus petit de `max_cost_usd` (s'il est fixé, D-123) et du budget restant.
 // Orchestration pure : l'exécution d'un couple, le journal et l'horloge sont des ports.
 import type { FailureClass } from '../model/enums.js';
 import { cheaperPairs } from '../rules/plan.js';
@@ -16,9 +16,9 @@ import { pruneAfter, type TrialPair } from './plan.js';
 /** Exécutions d'un couple exigées pour le dire conforme (04 §4, « à valider »). */
 export const INVESTIGATION_SAMPLES = 3;
 
-/** Défauts de l'enquête (04 §4, « à valider » : le CDC ne les chiffre pas). */
+/** Défauts de l'enquête (04 §4, « à valider » : le CDC ne les chiffre pas). Budget : 3 $ depuis D-123 (1 $ avant). */
 export const INVESTIGATION_DEFAULTS = Object.freeze({
-  budgetUsd: 1,
+  budgetUsd: 3,
   timeoutSeconds: 600,
   maxAttempts: 12,
 });
@@ -112,8 +112,8 @@ export type TrialBudget = {
   /** Échéance de `investigation_timeout_s` (epoch ms). */
   readonly deadlineMs: number;
   readonly maxAttempts: number;
-  /** `max_cost_usd` de l'API : plafond d'un run. */
-  readonly maxCostPerRunUsd: number;
+  /** `max_cost_usd` de l'API : plafond d'un run ; `null` : aucun plafond par run (D-123), seul le budget restant borne. */
+  readonly maxCostPerRunUsd: number | null;
 };
 
 export type BudgetStop = 'investigation_budget_usd' | 'investigation_timeout_s' | 'max_attempts';
@@ -177,25 +177,26 @@ export async function runTrials(
         budgetStop = 'investigation_timeout_s';
         return { stop: true, run: null, perRunCap: false };
       }
-      const ceilingUsd = Math.min(budget.maxCostPerRunUsd, left);
+      const perRunCap = budget.maxCostPerRunUsd;
+      const ceilingUsd = perRunCap === null ? left : Math.min(perRunCap, left);
       const run = await ports.execute(pair, index, { ceilingUsd, deadlineMs: budget.deadlineMs }, purpose);
       // Un coût inconnu ne se tient pas sous un budget : l'enquête s'arrête là (08 §1, jamais 0 par défaut).
       if (run.cost_usd === null) budgetStop = 'investigation_budget_usd';
       else runsSpent = Math.round((runsSpent + run.cost_usd) * 1e6) / 1e6;
-      let perRunCap = false;
+      let overRunCap = false;
       if (!run.ok) {
         const cls = run.failure_class ?? 'code_error';
         if (cls === 'run_budget_exceeded') {
           // Plafond atteint : celui de l'enquête (budget restant, échéance) l'arrête ; celui d'un run (`max_cost_usd`)
-          // écarte seulement ce couple, trop cher pour un run.
+          // écarte seulement ce couple, trop cher pour un run. Sans plafond par run (D-123), seul le budget restant coupe.
           if (run.detail === 'investigation_timeout_s') budgetStop = 'investigation_timeout_s';
-          else if (ceilingUsd < budget.maxCostPerRunUsd) budgetStop = 'investigation_budget_usd';
-          else perRunCap = true;
+          else if (perRunCap === null || ceilingUsd < perRunCap) budgetStop = 'investigation_budget_usd';
+          else overRunCap = true;
         }
         failure = { cls, detail: run.detail };
-        return { stop: true, run, perRunCap };
+        return { stop: true, run, perRunCap: overRunCap };
       }
-      return { stop: budgetStop !== null, run, perRunCap };
+      return { stop: budgetStop !== null, run, perRunCap: overRunCap };
     };
     /** Exécutions exigées pour ce couple : N, ou 1 si l'essai IA compilé a été vérifié sans LLM (`acceptEarly`). */
     let needed = samples;

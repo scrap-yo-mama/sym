@@ -7,7 +7,7 @@ import { buildTrialPlan } from './candidates.js';
 import { estimateCostUsd, firstCostInversion, orderTrials, pruneAfter, type TrialPair } from './plan.js';
 import { buildFromProposal, outputSchemaOf, type InvestigationProposal } from './proposal.js';
 import { analyzeCapture, discoverScriptEndpoints, findRecordArrays, hasClientSignature, recordSkeleton, type ReconCapture } from './recon.js';
-import { runTrials, type PairOutcome, type TrialExecution, type TrialPorts } from './trials.js';
+import { INVESTIGATION_DEFAULTS, runTrials, type PairOutcome, type TrialExecution, type TrialPorts } from './trials.js';
 
 const pair = (execution: TrialPair['execution'], network: TrialPair['network'], est: number | null, source = 'c1'): TrialPair => ({ execution, network, source, est_cost_usd: est });
 
@@ -169,6 +169,27 @@ describe('runTrials : du moins cher au plus cher, N = 3', () => {
     const ports = fakePorts((p) => (p.execution === 'fetch' ? failRun('run_budget_exceeded', 'max_cost_usd') : okRun()));
     const out = await runTrials(plan, ports, { ...budget, maxUsd: 10, maxCostPerRunUsd: 0.5 });
     expect(out.kind).toBe('conformant');
+  });
+
+  test('D-123 : sans plafond par run (null), chaque exécution tourne sous le seul budget d’enquête restant ; aucun couple écarté « trop cher pour un run »', async () => {
+    const ceilings: number[] = [];
+    const ports = fakePorts(() => okRun(1, 0.6));
+    const execute = ports.execute;
+    ports.execute = async (p, i, limits) => {
+      ceilings.push(limits.ceilingUsd);
+      return execute(p, i, limits);
+    };
+    // Un essai à 0,6 $ (au-delà de l'ancien défaut de 0,5 $) passe : le budget d'enquête (3 $) est la seule borne.
+    const out = await runTrials([pair('agent', 'direct', 0.5, 'page')], ports, { ...budget, maxUsd: 3, maxCostPerRunUsd: null });
+    expect(out.kind).toBe('conformant');
+    expect(ceilings).toEqual([3, 2.4, 1.8]);
+    // Coupé par la borne sans plafond par run : c'est le budget d'enquête qui l'arrête, jamais `max_cost_usd`.
+    const cut = await runTrials([pair('agent', 'direct', 0.5, 'page')], fakePorts(() => failRun('run_budget_exceeded', 'max_cost_usd', 1)), { ...budget, maxUsd: 1, maxCostPerRunUsd: null });
+    expect(cut).toMatchObject({ kind: 'budget_exhausted', reason: 'investigation_budget_usd' });
+  });
+
+  test('D-123 : budget d’enquête par défaut 3 $', () => {
+    expect(INVESTIGATION_DEFAULTS.budgetUsd).toBe(3);
   });
 });
 

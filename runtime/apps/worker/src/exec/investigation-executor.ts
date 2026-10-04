@@ -454,6 +454,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     // `investigation_budget_usd` ; une tentative du mode « SYM ne lâche pas » (2.16) le borne encore au reste de son
     // plafond et du budget du jour (`budget_cap_usd`) : le plafond annoncé est strict.
     const budgetUsd = Math.min(request.budget_usd, state.budget_cap_usd ?? Number.POSITIVE_INFINITY, deps.costCaps?.userBudgetDailyUsd ?? Number.POSITIVE_INFINITY);
+    // Plafond par run de l'API pour chaque essai : `costCapUsd` s'il est fixé ; sinon aucun (D-123), le budget d'enquête restant
+    // (fini, réservé dans le budget du jour à l'admission) est la seule borne. Jamais `target.api.maxCostUsd` : pour une
+    // enquête, ce reste du budget du jour compte déjà sa propre réservation.
+    const runCapUsd = target.api.costCapUsd ?? Number.POSITIVE_INFINITY;
     // Page de la demande ; l'étape 0 peut adopter l'URL finale d'une redirection permanente vers un autre site (R09).
     let pageUrl = new URL(request.url).href;
     let host = new URL(pageUrl).hostname.toLowerCase();
@@ -681,8 +685,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           return await finishStopped('proxy_not_configured', 'proxy_credentials_unavailable', 'setup');
         }
       }
-      // Étape 0 et reconnaissance sous le plus petit de `max_cost_usd` et du budget restant de l'enquête.
-      const ceiling = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - spent));
+      // Étape 0 et reconnaissance sous le plus petit de `max_cost_usd` (s'il est fixé, D-123) et du budget restant de l'enquête.
+      const ceiling = Math.max(0, Math.min(runCapUsd, budgetUsd - spent));
       const sessionBase: SessionBase = {
         rung,
         guard: deps.guard,
@@ -1265,10 +1269,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           promotedFor.set(pair, single);
           return single;
         }
-        // Une exécution E1 de la stratégie compilée (2 pages si elle pagine), plafond = le plus petit de max_cost_usd et du
+        // Une exécution E1 de la stratégie compilée (2 pages si elle pagine), plafond = le plus petit de max_cost_usd (s'il est fixé) et du
         // budget restant ; aucun LLM.
         const checkSpec = paginates ? paginatedSpec : compiled.spec;
-        const ceilingUsd = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - liveTrialSpent()));
+        const ceilingUsd = Math.max(0, Math.min(runCapUsd, budgetUsd - liveTrialSpent()));
         const checkTarget: RunTarget = {
           api: { ...target.api, outputSchema, maxCostUsd: ceilingUsd },
           strategy: { version: 0, execution: 'fetch', network: entry.network, spec: checkSpec, scriptRef: null, estCostUsd: compiled.estCostUsd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
@@ -1418,7 +1422,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           return false;
         }
         const spec = strategy.spec as unknown as Record<string, unknown>;
-        const ceilingUsd = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - liveTrialSpent()));
+        const ceilingUsd = Math.max(0, Math.min(runCapUsd, budgetUsd - liveTrialSpent()));
         const checkTarget: RunTarget = {
           api: { ...target.api, outputSchema, maxCostUsd: ceilingUsd },
           strategy: { version: 0, execution: entry.execution, network: entry.network, spec, scriptRef: null, estCostUsd: entry.est_cost_usd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
@@ -1534,8 +1538,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               if (trial.outcome.needsUser === true && !r.ok) return execution(false, 'auth_required', 'site_not_connected', r.pages, cost, trial.ms, null);
               if (cost === null) return execution(false, 'run_budget_exceeded', 'llm_price_missing', r.pages, null, trial.ms, null);
               // Plafond de l'essai : `max_cost_usd` de l'API, ou le RESTE du budget d'enquête s'il est plus petit. Le motif dit lequel
-              // a coupé (constat Janssens : agent arrêté à 0,72 $ « max_cost_usd » alors que max_cost_usd valait 3 $).
-              const capDetail = limits.ceilingUsd < target.api.maxCostUsd ? 'investigation_budget_usd' : 'max_cost_usd';
+              // a coupé (constat Janssens : agent arrêté à 0,72 $ « max_cost_usd » alors que max_cost_usd valait 3 $). Sans plafond
+              // par run (D-123), seul le budget d'enquête coupe : jamais « max_cost_usd ».
+              const capDetail = limits.ceilingUsd < runCapUsd ? 'investigation_budget_usd' : 'max_cost_usd';
               if (cost > limits.ceilingUsd) return execution(false, 'run_budget_exceeded', capDetail, r.pages, cost, trial.ms, null);
               if (!r.ok) {
                 const f = trial.guardedFailure ?? r.failure;
@@ -1612,7 +1617,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               });
             },
           },
-          { maxUsd: budgetUsd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.maxCostUsd },
+          { maxUsd: budgetUsd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.costCapUsd },
           { ...(deps.samples === undefined ? {} : { samples: deps.samples }), paginated: (p) => entries.get(p)?.paginated === true, catchUp: true },
         );
       } catch (error) {
@@ -1757,8 +1762,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           if (geo !== undefined) return await finishFailed({ failure_class: 'network', retryable: false, detail: geo.detail! }, 'testing');
           const last = outcome.tried.at(-1);
           const lastClass = last?.result;
-          // Un essai coupé par le plafond par run de l'API (`max_cost_usd`) : cause propre, distincte du budget d'enquête et
-          // de l'absence de stratégie conforme (UX-32) ; la suite proposée est de monter `max_cost_usd`.
+          // Un essai coupé par le plafond par run de l'API (`max_cost_usd`, seulement s'il est fixé : D-123) : cause propre, distincte
+          // du budget d'enquête et de l'absence de stratégie conforme (UX-32) ; la suite proposée est de relever ou de retirer ce plafond.
           const detail = last?.detail === 'not_compilable' ? 'not_compilable' : outcome.tried.some((t) => t.detail === 'max_cost_usd') ? 'trial_cost_over_cap' : 'no_conformant_strategy';
           return await finishFailed({ failure_class: lastClass === undefined || lastClass === 'ok' ? 'extraction' : lastClass, retryable: false, detail }, 'testing');
         }
