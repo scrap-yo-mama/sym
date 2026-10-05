@@ -213,7 +213,9 @@ import {
   readCatalogMemory,
   readProxySettings,
   recordAccessReport,
+  consentedSessionForRun,
   recordSessionUse,
+  requestSessionRefresh,
   siteCookiesForRun,
   RunSessionNotFoundError,
   recordMemoryRefs,
@@ -595,7 +597,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
      * Arrêt sans classe d'échec (04 §6, transition 3) : proxy requis non configuré, extension hors ligne. Phase close, récit
      * fermé ; le worker applique `run_stopped` (→ `action_requise`).
      */
-    const finishStopped = async (reason: 'proxy_not_configured' | 'tunnel_offline' | 'instance_contact_missing' | 'llm_price_missing', detail: string, at: string, model?: string): Promise<RunResult> => {
+    const finishStopped = async (reason: 'proxy_not_configured' | 'tunnel_offline' | 'instance_contact_missing' | 'llm_price_missing' | 'cookie_expired', detail: string, at: string, model?: string): Promise<RunResult> => {
       await save('done');
       await event(EV.actionRequired, { cause: reason, domain: host, ...(model === undefined ? {} : { model }) });
       await event(EV.finished, { outcome: 'stopped', stop_reason: reason, detail, at, budget: budgetView() });
@@ -688,8 +690,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     const first = rungs[0];
     // Session serveur (A2, INV5 évolué) : API à session dont le propriétaire a consenti l'usage serveur pour le domaine, cookies
     // lus par `siteCookiesForRun` pour ce run. Sinon (pas de consentement, session absente ou morte, aucun réseau serveur
-    // dans la politique) : tunnel seul, comme avant (B1 traitera l'état « à rafraîchir »).
+    // dans la politique) : tunnel seul, comme avant. Exception (B1) : session CONSENTIE mais morte, voir `sessionToRefresh`.
     let serverSession: SessionCookies | null = null;
+    // Session consentie mais absente, expirée ou illisible (B1) : l'enquête s'arrête avant tout réseau, l'extension doit la rafraîchir.
+    let sessionToRefresh: string | null = null;
     if (target.api.requiresSession && deps.siteSessions !== undefined && first !== undefined) {
       const declaredDomain = target.api.requires.session_domain;
       const sessionVerdict = checkSiteDomain(typeof declaredDomain === 'string' && declaredDomain !== '' ? declaredDomain : host);
@@ -700,8 +704,15 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           throw error;
         });
         if (found?.ok === true) serverSession = createSessionCookies(sessionVerdict.domain, found.cookies);
+        else if (found !== null && !found.ok && (found.reason === 'cookie_expired' || found.reason === 'auth_required')) {
+          if ((await consentedSessionForRun(deps.pool, { runId: ctx.runId, domain: sessionVerdict.domain })) !== null) {
+            await requestSessionRefresh(deps.pool, { runId: ctx.runId, domain: sessionVerdict.domain, outcome: found.reason });
+            sessionToRefresh = sessionVerdict.domain;
+          }
+        }
       }
     }
+    if (sessionToRefresh !== null) return await finishStopped('cookie_expired', `session_to_refresh:${sessionToRefresh}`, 'setup');
     const tunnelOnly = sessionRequired && serverSession === null;
     const tunnelMode = tunnelOnly || (rungs.length === 0 && tunnelChosen);
     const recordSessionUsage = async (outcome: string): Promise<void> => {

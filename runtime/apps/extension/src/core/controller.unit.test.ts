@@ -2,7 +2,8 @@
 // Noyau de l'extension (07 § 1-2) avec des API Chrome simulées : consentement avant toute lecture de cookie
 // (assert_consent_before_capture), mode tunnel sans cookie transmis (assert_no_cookie_in_tunnel_mode), appairage,
 // révocation. Le parcours dans Chromium réel est dans e2e/extension.e2e.ts.
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
+import { SessionRefresher } from './session-refresh.ts';
 import { ExtensionController, ExtensionError, type BrowserCookie, type Deps } from './controller.ts';
 
 const ORIGIN = 'https://runtime.zz-test.example';
@@ -28,6 +29,8 @@ function harness(
     fetchError?: (c: Call) => boolean;
     /** Version de l'extension (manifeste). */
     version?: string;
+    /** Appelé à chaque lecture de cookies (simule un événement pendant une poussée). */
+    onGetAll?: () => Promise<void>;
   } = {},
 ) {
   const store = new Map<string, unknown>();
@@ -60,6 +63,7 @@ function harness(
       getAll: async (details) => {
         reads.push('url' in details ? details.url : `domain:${details.domain}`);
         events.push('cookies.getAll');
+        await opts.onGetAll?.();
         if ('url' in details) {
           // Chrome : cookies de l'hôte et de ses domaines parents dont le chemin couvre l'URL (ici « / »).
           const host = new URL(details.url).hostname;
@@ -429,5 +433,173 @@ describe('capture : tous les cookies de session du domaine', () => {
     const put = h.calls.find((c) => c.url.endsWith('/cookies'))!;
     const names = (put.body as { cookies: { name: string }[] }).cookies.map((c) => c.name).sort();
     expect(names).toEqual(['app_sid', 'parent', 'sid']);
+  });
+});
+
+describe('B2 : poussée idempotente, empreinte seule dans le stockage (assert_extension_refresh_idempotent)', () => {
+  const CANARY = 'zz_test_canary_cookie_value_b2';
+  const jarOf = (value: string): BrowserCookie[] => [{ name: 'sid', value, domain: SHOP, path: '/', secure: true, httpOnly: true, sameSite: 'lax', expirationDate: 1_900_000_000 }];
+  const puts = (h: { calls: Call[] }) => h.calls.filter((c) => c.method === 'PUT' && c.url.endsWith('/cookies'));
+
+  test('session identique à la dernière poussée réussie : pas de repoussée ; session changée : une poussée', async () => {
+    const jar = jarOf(CANARY);
+    const h = await paired({ granted: patterns(SHOP), jar });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    expect(puts(h)).toHaveLength(1);
+    expect(await h.controller.capture(SHOP, { skipIfUnchanged: true })).toBe(false);
+    expect(puts(h)).toHaveLength(1);
+    jar[0] = { ...jar[0]!, value: `${CANARY}_rotated` };
+    expect(await h.controller.capture(SHOP, { skipIfUnchanged: true })).toBe(true);
+    expect(puts(h)).toHaveLength(2);
+    expect(await h.controller.capture(SHOP, { skipIfUnchanged: true })).toBe(false);
+  });
+
+  test('liste vide : rien n’est poussé (la session de l’instance n’est jamais écrasée par du vide)', async () => {
+    const jar = jarOf(CANARY);
+    const h = await paired({ granted: patterns(SHOP), jar });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    jar.length = 0;
+    expect(await h.controller.capture(SHOP, { skipIfUnchanged: true })).toBe(false);
+    expect(puts(h)).toHaveLength(1);
+  });
+
+  test('canari : le stockage ne contient que l’empreinte (hash), jamais la valeur du cookie', async () => {
+    const h = await paired({ granted: patterns(SHOP), jar: jarOf(CANARY) });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    const stored = JSON.stringify([...h.store.entries()]);
+    expect(stored).not.toContain(CANARY);
+    expect((h.store.get('pushed_fingerprints') as Record<string, string>)[SHOP]).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('refreshRequests lit le signal ; refreshableDomains : usage serveur + permission accordée seulement', async () => {
+    const h = await paired({
+      granted: patterns(SHOP),
+      jar: jarOf(CANARY),
+      statusFor: (c) => defaultStatus(c),
+    });
+    expect(await h.controller.refreshableDomains()).toEqual([]);
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    expect(await h.controller.refreshableDomains()).toEqual([SHOP]);
+    h.granted.clear();
+    expect(await h.controller.refreshableDomains()).toEqual([]);
+    expect(await h.controller.refreshRequests()).toEqual([]);
+    expect(h.calls.at(-1)).toMatchObject({ method: 'GET', url: `${ORIGIN}/api/extension/refresh-requests` });
+  });
+
+  test('déconnexion du site : l’empreinte est oubliée, la prochaine connexion repousse', async () => {
+    const h = await paired({ granted: patterns(SHOP), jar: jarOf(CANARY) });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    await h.controller.disconnectSite(SHOP);
+    expect(h.store.get('pushed_fingerprints')).toEqual({});
+  });
+
+  test('appairage figé pendant une poussée : ré-appairage à B après la lecture, aucun PUT ne part (ni vers A, ni vers B)', async () => {
+    const jar = jarOf(CANARY);
+    let hook: () => Promise<void> = async () => {};
+    const h = await paired({ granted: [...patterns(SHOP), instance(ORIGIN), instance(ORIGIN_B)], jar, onGetAll: () => hook() });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    jar[0] = { ...jar[0]!, value: `${CANARY}_rotated` };
+    const before = puts(h).length;
+    let repaired = false;
+    hook = async () => {
+      if (repaired) return;
+      repaired = true;
+      await h.controller.pair({ instanceUrl: ORIGIN_B, code: 'ABCDE-FGHJK', deviceLabel: null });
+    };
+    await expect(h.controller.capture(SHOP, { skipIfUnchanged: true })).rejects.toMatchObject({ code: 'not_paired' });
+    expect(repaired).toBe(true);
+    expect(puts(h)).toHaveLength(before);
+    expect(JSON.stringify(h.calls.filter((c) => c.url.startsWith(ORIGIN_B)))).not.toContain(CANARY);
+  });
+
+  test('409 server_use_not_allowed : refus définitif (code dédié), aucune retentative du rafraîchissement', async () => {
+    const jar = jarOf(CANARY);
+    const h = await paired({
+      granted: patterns(SHOP),
+      jar,
+      statusFor: (c) => (c.method === 'PUT' && c.url.endsWith('/cookies') && jar[0]!.value !== CANARY ? 409 : defaultStatus(c)),
+    });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    jar[0] = { ...jar[0]!, value: `${CANARY}_rotated` };
+    const before = puts(h).length;
+    await expect(h.controller.capture(SHOP, { skipIfUnchanged: true })).rejects.toMatchObject({ code: 'server_use_not_allowed' });
+    const sleeps: number[] = [];
+    const refresher = new SessionRefresher({
+      refreshRequests: () => h.controller.refreshRequests(),
+      refreshableDomains: () => h.controller.refreshableDomains(),
+      push: (d) => h.controller.capture(d, { skipIfUnchanged: true }),
+      sleep: async (ms) => void sleeps.push(ms),
+      setTimer: () => 0,
+      clearTimer: () => {},
+    });
+    expect(await refresher.refresh(SHOP)).toBe(false);
+    expect(sleeps).toEqual([]);
+    expect(puts(h)).toHaveLength(before + 2); // un PUT par appel direct, jamais de retentative
+  });
+
+  test('de bout en bout : onChanged, signal et alarme quasi simultanés pour une session inchangée : un seul PUT au total', async () => {
+    const jar = jarOf(CANARY);
+    const h = await paired({ granted: patterns(SHOP), jar, onGetAll: () => new Promise((r) => setTimeout(r, 0)) });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    jar[0] = { ...jar[0]!, value: `${CANARY}_rotated` };
+    const before = puts(h).length;
+    const timers: (() => void)[] = [];
+    const refresher = new SessionRefresher({
+      refreshRequests: async () => [SHOP],
+      refreshableDomains: () => h.controller.refreshableDomains(),
+      push: (d) => h.controller.capture(d, { skipIfUnchanged: true }),
+      sleep: async () => {},
+      setTimer: (fn) => (timers.push(fn), timers.length),
+      clearTimer: () => {},
+    });
+    await refresher.onCookieChanged({ removed: false, cookie: { domain: SHOP } });
+    await Promise.all([refresher.pollRequests(), refresher.pollRequests(), (async () => timers.forEach((fn) => fn()))()]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(puts(h).length - before).toBe(1);
+  });
+
+  test('canari réel : un push qui rejette une erreur contenant le canari ne fuit ni dans les journaux, ni dans le stockage, ni vers l’interface', async () => {
+    const h = await paired({ granted: patterns(SHOP), jar: jarOf(CANARY) });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    const seen: string[] = [];
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation((...a: unknown[]) => void seen.push(JSON.stringify(a))),
+    );
+    const sendMessage = vi.fn();
+    const storageSet = vi.fn();
+    vi.stubGlobal('chrome', { runtime: { sendMessage }, storage: { local: { set: storageSet }, session: { set: storageSet } } });
+    try {
+      const logs: string[] = [];
+      const refresher = new SessionRefresher({
+        refreshRequests: async () => [SHOP],
+        refreshableDomains: async () => [SHOP],
+        push: async () => {
+          throw new TypeError(`Failed to fetch cookie=${CANARY}`);
+        },
+        sleep: async () => {},
+        setTimer: (fn) => fn,
+        clearTimer: () => {},
+        log: (m) => logs.push(m),
+      });
+      await refresher.pollRequests();
+      await refresher.onCookieChanged({ removed: false, cookie: { domain: SHOP } });
+      expect(logs.length).toBeGreaterThan(0);
+      expect(logs.join('\n')).not.toContain(CANARY);
+      expect(seen.join('\n')).not.toContain(CANARY);
+      expect(JSON.stringify(storageSet.mock.calls)).not.toContain(CANARY);
+      expect(JSON.stringify(sendMessage.mock.calls)).not.toContain(CANARY);
+      expect(JSON.stringify([...h.store.entries()])).not.toContain(CANARY);
+    } finally {
+      spies.forEach((s) => s.mockRestore());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test('unpair efface aussi pushed_fingerprints', async () => {
+    const h = await paired({ granted: patterns(SHOP), jar: jarOf(CANARY) });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    expect(Object.keys(h.store.get('pushed_fingerprints') as object)).toEqual([SHOP]);
+    await h.controller.unpair();
+    expect(h.store.get('pushed_fingerprints')).toBeUndefined();
   });
 });

@@ -51,6 +51,11 @@ const LOGIN_PATH = /(?:^|\/)(?:log-?in|sign-?in|sign_in|signin|connexion|se-conn
 /** Pages de géo-restriction usuelles (redirection de pays, 04 §7). */
 const GEO_PATH = /(?:unavailable|not[-_]?available|restricted|blocked)[-_](?:in[-_])?(?:your[-_])?(?:country|region|location)|geo[-_]?(?:block|restrict)|country[-_]?(?:block|restrict)/i;
 
+/** Vrai si le chemin est une page de connexion usuelle (`/login`, `/connexion`, `/auth/login`...). */
+export function isLoginPath(path: string): boolean {
+  return LOGIN_PATH.test(path);
+}
+
 function pathOf(url: string, base?: string): string | undefined {
   try {
     return new URL(url, base).pathname;

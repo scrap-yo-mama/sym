@@ -50,6 +50,8 @@ import {
   heartbeatRun,
   holdSecretsLock,
   JUDGE_QUEUE,
+  SITE_SESSION_CHECK_QUEUE,
+  siteSessionCheckQueueDefinition,
   judgeQueueDefinition,
   keyCheck,
   loadSubjectExclusions,
@@ -68,6 +70,7 @@ import {
   withActor,
   type KeyCheckResult,
   type RunJudgeJob,
+  type SiteSessionCheckJob,
   type SweepResult,
 } from '@runtime/db';
 import { SsrfGuard } from '@runtime/core/net';
@@ -110,6 +113,8 @@ type ExecutorHandle = {
   close?: () => Promise<void>;
   /** Jugement sur anomalie d'un rejeu (2.12, 19 §3) : file pg-boss `quality-judge`, consommée par ce worker. */
   judge?: (job: RunJudgeJob) => Promise<void>;
+  /** Test de validité d'une session de site (B1) : file pg-boss `site-session-check`, consommée par ce worker. */
+  sessionCheck?: (job: SiteSessionCheckJob) => Promise<unknown>;
 };
 
 export type ExecutorFactory = (deps: {
@@ -204,6 +209,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     await queue.start();
     await queue.createQueue(runQueueDefinition(config.runBudgetSeconds));
     if (handle.judge !== undefined) await queue.createQueue(judgeQueueDefinition());
+    if (handle.sessionCheck !== undefined) await queue.createQueue(siteSessionCheckQueueDefinition());
     await beatWorker(pool, { workerId, version: config.version });
     scheduling = await startScheduling({
       pool,
@@ -428,6 +434,18 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
     });
   }
 
+  // Test de validité d'une session de site (B1) : un job par session, à la demande de son propriétaire.
+  const sessionCheck = handle.sessionCheck;
+  if (sessionCheck !== undefined) {
+    await q.work<SiteSessionCheckJob>(SITE_SESSION_CHECK_QUEUE, { concurrency: 2, pollingIntervalSeconds: config.queuePollingSeconds }, async (job) => {
+      if (typeof job.data?.owner_id !== 'string' || typeof job.data.site_session_id !== 'string' || typeof job.data.domain !== 'string') {
+        log.error({ jobId: job.id }, 'job de test de session sans propriétaire ou session : ignoré');
+        return;
+      }
+      await sessionCheck(job.data);
+    });
+  }
+
   let stopping: Promise<void> | undefined;
   const stop = () =>
     (stopping ??= (async () => {
@@ -438,6 +456,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       clearInterval(retentionTimer);
       await q.offWork(RUN_QUEUE).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : offWork'));
       if (judge !== undefined) await q.offWork(JUDGE_QUEUE).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : offWork'));
+      if (sessionCheck !== undefined) await q.offWork(SITE_SESSION_CHECK_QUEUE).catch((error: unknown) => log.warn({ err: errorDetail(error) }, 'arrêt : offWork'));
       await beat();
       const all = () => Promise.all([...running.values()].map((r) => r.done));
       let timer: NodeJS.Timeout | undefined;

@@ -54,7 +54,13 @@ export const REPAIR_ACTION_CLASSES = ['auth_required', 'payment_required', 'acco
  * Reprise par étape (tâche 2.13, 19 §4) : une étape `side_effect: write` cassée (`write_step_broken`), ou une étape
  * cassée d'un run avec session ou en tunnel dont le niveau 1 échoue (`session_step_broken`) : transition 14, sans agent.
  */
-export const INVESTIGATION_ACTION_REASONS = ['proxy_not_configured', 'tunnel_offline', 'instance_contact_missing', 'llm_price_missing'] as const;
+/*
+ * Session de site à rafraîchir (CDC V1 sym-sessions, B1) : `cookie_expired`, comme `tunnel_offline`, n'est une transition
+ * que pendant l'enquête (3). Un rejeu (sain ou warning) qui s'arrête pour cette raison laisse le statut de l'API
+ * inchangé : la session est à renouveler par l'extension, l'API n'est pas cassée et repart seule une fois la session
+ * repoussée, sans ré-enquête.
+ */
+export const INVESTIGATION_ACTION_REASONS = ['proxy_not_configured', 'tunnel_offline', 'instance_contact_missing', 'llm_price_missing', 'cookie_expired'] as const;
 export const REPAIR_ACTION_REASONS = ['challenge_in_tunnel', 'write_step_broken', 'session_step_broken'] as const;
 export const ACTION_REASONS = [...INVESTIGATION_ACTION_REASONS, ...REPAIR_ACTION_REASONS] as const;
 export type ActionReason = (typeof ACTION_REASONS)[number];

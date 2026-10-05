@@ -12,3 +12,4 @@ export * from './modes/index.js';
 export * from './smtp.js';
 export * from './site-domain.js';
 export * from './session-cookies.js';
+export * from './session-probe.js';

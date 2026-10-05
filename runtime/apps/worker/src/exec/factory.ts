@@ -304,6 +304,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       judge: async (job) => {
         await judgeJob({ runId: job.run_id, ownerId: job.owner_id, trigger: 'anomaly' });
       },
+      // Job `site-session-check` : test de validité d'une session de site (B1), requête gardée comme un rejeu.
+      ...(strategy.sessionCheck === undefined ? {} : { sessionCheck: strategy.sessionCheck }),
       browserContexts: () => pool_?.active() ?? 0,
       close: async () => {
         await tunnel.close();

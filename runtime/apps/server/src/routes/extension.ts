@@ -12,14 +12,20 @@ import {
   adminRevokeDevice,
   connectSite,
   CookieDomainMismatchError,
+  ACCOUNT_LABEL_MAX,
   createPairingCode,
   disconnectSite,
   disconnectSiteById,
+  enqueueSiteSessionCheck,
   exchangePairingCode,
   listAllDevices,
   listDevices,
+  listRefreshRequests,
   listSites,
+  readSite,
+  recordSessionCheck,
   revokeDevice,
+  setAccountLabel,
   storeSiteCookies,
   withActor,
   type AdminDeviceView,
@@ -92,7 +98,22 @@ const cookiesSchema = {
   },
 } as const;
 
+const labelSchema = {
+  type: 'object',
+  required: ['accountLabel'],
+  additionalProperties: false,
+  // `null` ou chaîne vide : étiquette effacée. Texte libre borné, sans caractère de contrôle (revalidé en base).
+  properties: { accountLabel: { type: ['string', 'null'], maxLength: ACCOUNT_LABEL_MAX } },
+} as const;
+
+/** Attente maximale d'un test de validité à la demande (le worker l'exécute) : au-delà, 202 et l'écran relit la session. */
+const CHECK_WAIT_MAX_SECONDS = 10;
+
 const iso = (d: Date | null) => d?.toISOString() ?? null;
+/**
+ * Session de site vue de l'écran et de l'extension : métadonnées et état en mots, jamais une valeur de secret. `state` vaut
+ * `active`, `a_renouveler`, `expiree` ou `a_verifier` (`null` en mode tunnel : les cookies restent dans le navigateur).
+ */
 const siteJson = (s: SiteView) => ({
   id: s.id,
   domain: s.domain,
@@ -101,6 +122,13 @@ const siteJson = (s: SiteView) => ({
   consentedAt: s.consentedAt.toISOString(),
   capturedAt: iso(s.capturedAt),
   expiresAt: iso(s.expiresAt),
+  state: s.state,
+  stateLabel: s.stateLabel,
+  lastUsedAt: iso(s.lastUsedAt),
+  lastCheckedAt: iso(s.lastCheckedAt),
+  lastCheckOutcome: s.lastCheckOutcome,
+  refreshRequested: s.refreshRequested,
+  accountLabel: s.accountLabel,
 });
 const deviceJson = (d: DeviceView) => ({
   id: d.id,
@@ -269,6 +297,14 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
 
   // --- Console : appareils et domaines -------------------------------------------------------------------------------
 
+  // B1 (F3) : domaines dont le serveur attend une session neuve (un `refresh_requested` sans `refreshed`). L'extension du
+  // propriétaire (jeton d'appareil) les lit à son réveil et repousse la session ; rien d'autre que le domaine n'est dit.
+  app.get('/api/extension/refresh-requests', async (request) => {
+    const actor = request.actor!;
+    const requests = await withActor(ctx.pool, actor, (db) => listRefreshRequests(db, actor.userId));
+    return { items: requests.map((r) => ({ domain: r.domain, requestedAt: r.requestedAt.toISOString() })) };
+  });
+
   app.get('/api/extension/devices', async (request) => {
     const actor = request.actor!;
     const devices = await withActor(ctx.pool, actor, (db) => listDevices(db, actor.userId));
@@ -293,6 +329,58 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
     const actor = request.actor!;
     const sites = await withActor(ctx.pool, actor, (db) => listSites(db, actor.userId));
     return { items: sites.map(siteJson) };
+  });
+
+  // B1 (F4) : étiquette du compte, choisie par le propriétaire de la session (jamais celle d'un autre : RLS + propriétaire).
+  app.patch<{ Params: { id: string }; Body: { accountLabel: string | null } }>('/api/sites/:id', { schema: { body: labelSchema } }, async (request, reply) => {
+    const actor = request.actor!;
+    const id = request.params.id;
+    if (!UUID.test(id)) return notFound(reply);
+    const outcome = await withActor(ctx.pool, actor, (db) => setAccountLabel(db, actor.userId, id, request.body.accountLabel));
+    if (outcome === 'invalid') return sendError(reply, 400, 'invalid_account_label', `étiquette refusée : ${ACCOUNT_LABEL_MAX} caractères au plus, sans caractère de contrôle`);
+    if (outcome === 'not_found') {
+      const { rowCount } = await ctx.pool.query('SELECT 1 FROM site_sessions WHERE id = $1', [id]);
+      if (rowCount === 1) await audit(ctx, request, actor, { action: 'access.denied', targetType: 'site_session', targetId: id, outcome: 'denied' });
+      return notFound(reply);
+    }
+    await audit(ctx, request, actor, { action: 'site.label_changed', targetType: 'site_session', targetId: id, outcome: 'success' });
+    return siteJson((await withActor(ctx.pool, actor, (db) => readSite(db, actor.userId, id)))!);
+  });
+
+  // B1 (F4) : test de validité à la demande. Le serveur web n'envoie rien vers le site : le test passe par la file
+  // `site-session-check`, exécuté par le worker avec le chemin gardé du rejeu (SSRF, cadence, Cookie limité au domaine).
+  app.post<{ Params: { id: string } }>('/api/sites/:id/check', async (request, reply) => {
+    const actor = request.actor!;
+    const id = request.params.id;
+    if (!UUID.test(id)) return notFound(reply);
+    const site = await withActor(ctx.pool, actor, (db) => readSite(db, actor.userId, id));
+    if (site === null) {
+      const { rowCount } = await ctx.pool.query('SELECT 1 FROM site_sessions WHERE id = $1', [id]);
+      if (rowCount === 1) await audit(ctx, request, actor, { action: 'access.denied', targetType: 'site_session', targetId: id, outcome: 'denied' });
+      return notFound(reply);
+    }
+    if (!site.serverUseAllowed) return sendError(reply, 409, 'server_use_not_allowed', 'ce domaine est en mode tunnel : aucune session côté serveur à tester');
+    const reread = async () => siteJson((await withActor(ctx.pool, actor, (db) => readSite(db, actor.userId, id)))!);
+    // Aucun cookie stocké : la session est morte sans requête (rien à envoyer au site).
+    if (!site.hasServerCookies) {
+      await recordSessionCheck(ctx.pool, { ownerId: actor.userId, siteSessionId: id, domain: site.domain, outcome: 'dead_no_session' });
+      await audit(ctx, request, actor, { action: 'site.checked', targetType: 'site_session', targetId: id, outcome: 'success', meta: { domain: site.domain, result: 'dead_no_session' } });
+      return { site: await reread(), check: { outcome: 'dead_no_session' } };
+    }
+    const requestedAt = (await ctx.pool.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now;
+    await enqueueSiteSessionCheck(await ctx.jobs(), { owner_id: actor.userId, site_session_id: id, domain: site.domain });
+    const deadline = Date.now() + Math.min(ctx.rest.maxWaitSeconds, CHECK_WAIT_MAX_SECONDS) * 1000;
+    let outcome: string | null = null;
+    while (outcome === null && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, ctx.rest.pollMs));
+      const { rows } = await ctx.pool.query<{ outcome: string | null }>(
+        `SELECT outcome FROM site_session_events WHERE owner_id = $1 AND site_session_id = $2 AND event = 'checked' AND created_at > $3 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [actor.userId, id, requestedAt],
+      );
+      outcome = rows[0]?.outcome ?? null;
+    }
+    await audit(ctx, request, actor, { action: 'site.checked', targetType: 'site_session', targetId: id, outcome: 'success', meta: { domain: site.domain, result: outcome ?? 'pending' } });
+    return reply.code(outcome === null ? 202 : 200).send({ site: await reread(), check: outcome === null ? null : { outcome } });
   });
 
   app.delete<{ Params: { id: string } }>('/api/sites/:id', async (request, reply) => {
