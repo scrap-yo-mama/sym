@@ -437,6 +437,16 @@ async function waitRun(ctx: ServerContext, caller: McpCaller, call: Call, runId:
     }
     const finished = row === null || isTerminalRunState(row.state) || row.paused_at !== null;
     if (row !== null && row.state === 'succeeded' && row.kind === 'investigation' && !call.signal.aborted) {
+      // Le worker clôt le run PUIS pose le statut de l'API (transaction suivante) : sous charge, le premier run complet ne doit pas être
+      // jugé non dû sur un statut encore à `enquete`. Attente bornée (2 s) ; une enquête qui attend une décision garde ce statut, sans attente.
+      if (launchFirstRun) {
+        const until = Date.now() + 2_000;
+        for (;;) {
+          const api = await withActor(ctx.pool, caller.actor, (db) => readApiById(db, row.api_id));
+          if (api === null || api.status !== 'enquete' || api.investigation_phase === 'awaiting_schema_validation' || Date.now() >= until || call.signal.aborted) break;
+          await sleep(Math.min(ctx.rest.pollMs, Math.max(1, until - Date.now())));
+        }
+      }
       // Premier run complet : lancé ici, puis attendu tant qu'il reste de l'attente.
       const first = (await ensureFirstRun(ctx, caller, row, launchFirstRun ? 'launch' : 'read')).run;
       if (first !== null && ACTIVE_RUN.has(first.state) && first.paused_at === null && Date.now() < deadline) {
