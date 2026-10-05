@@ -25,13 +25,37 @@ function hiddenByAttributes(attrs: Record<string, string>): boolean {
 
 export type PageText = { readonly text: string; readonly truncated: boolean };
 
+export type PageTextOptions = {
+  /**
+   * URL de la page (U1.11, UX-22) : chaque lien `<a href>` http(s) est donné APRÈS son texte, « texte (URL absolue) », résolu
+   * contre cette base, SANS requête ni fragment (jamais de jeton d'URL, 08 §4 mesure 5) ; `javascript:`, `mailto:`, ancres : rien.
+   * Absent : aucun lien (comportement d'origine, texte seulement).
+   */
+  readonly linksBase?: string;
+};
+
+/** URL absolue d'un href, ramenée à l'origine et au chemin ; `null` si ce n'est pas un lien http(s). */
+function linkTarget(href: string | undefined, base: string): string | null {
+  if (href === undefined || href.trim() === '' || href.trim().startsWith('#')) return null;
+  try {
+    const u = new URL(href.trim(), base);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
 /** Texte visible d'un document HTML, lignes normalisées, borné à `maxChars` caractères. */
-export function htmlToVisibleText(html: string, maxChars: number): PageText {
+export function htmlToVisibleText(html: string, maxChars: number, options: PageTextOptions = {}): PageText {
   const out: string[] = [];
   let size = 0;
   let truncated = false;
   /** Profondeur d'un élément ignoré en cours (0 : rien d'ignoré). */
   let skipDepth = 0;
+  /** Lien ouvert dont l'URL est donnée à la fermeture (profondeur d'imbrication des `<a>`, la plus externe l'emporte). */
+  let openLink: { url: string; depth: number } | null = null;
+  let anchorDepth = 0;
   const push = (s: string) => {
     if (truncated) return;
     if (size + s.length > maxChars) {
@@ -54,6 +78,11 @@ export function htmlToVisibleText(html: string, maxChars: number): PageText {
           if (!VOID.has(name)) skipDepth = 1;
           return;
         }
+        if (name === 'a') {
+          anchorDepth += 1;
+          const url = options.linksBase === undefined || openLink !== null ? null : linkTarget(attrs['href'], options.linksBase);
+          if (url !== null) openLink = { url, depth: anchorDepth };
+        }
         if (BLOCK.has(name)) push('\n');
         else if (CELL.has(name)) push(' | ');
       },
@@ -64,6 +93,13 @@ export function htmlToVisibleText(html: string, maxChars: number): PageText {
         if (skipDepth > 0) {
           if (!VOID.has(name)) skipDepth -= 1;
           return;
+        }
+        if (name === 'a') {
+          if (openLink !== null && openLink.depth === anchorDepth) {
+            push(` (${openLink.url})`);
+            openLink = null;
+          }
+          anchorDepth = Math.max(0, anchorDepth - 1);
         }
         if (BLOCK.has(name) && !(implied && VOID.has(name))) push('\n');
       },

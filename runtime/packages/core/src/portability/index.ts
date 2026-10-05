@@ -15,6 +15,7 @@
 // et l'IP de l'utilisateur (INV5). La suite (enquête : `access_check` puis `testing`) est l'affaire de la base et du worker.
 import { createHash } from 'node:crypto';
 import { Ajv2020 } from 'ajv/dist/2020.js';
+import { validateAgentFetchSpec } from '../agent/specs.js';
 import { validateDeclarativeSpec } from '../dsl/spec.js';
 import { siteScope, withinSiteScope } from '../investigation/recon.js';
 import { assertInputSchema } from '../schema/input-schema.js';
@@ -28,8 +29,11 @@ export const API_EXPORT_FORMAT_VERSION = '1.0';
 /** Plus petite version du runtime qui sait relire ce format : à monter quand le format change de façon incompatible. */
 export const API_EXPORT_MIN_RUNTIME_VERSION = '0.0.0';
 
-/** Niveaux d'exécution déclaratifs exportables (04 § 3.1) : ni E4-E6 (LLM, agent), ni un script. */
-export const PORTABLE_EXECUTIONS = ['fetch', 'fetch_in_page', 'playwright'] as const;
+/**
+ * Niveaux d'exécution exportables (04 § 3.1) : déclaratifs (E1-E3) et E4 `agent_fetch` (UX-28 : page lue, éléments mis en forme
+ * par le rôle `extract`, sans session ni script). Ni E5 ni E6 (agent dans un navigateur), ni un script.
+ */
+export const PORTABLE_EXECUTIONS = ['fetch', 'fetch_in_page', 'playwright', 'agent_fetch'] as const;
 /** Réseaux exportables : jamais le tunnel, qui porte l'identité et la session de l'utilisateur (INV5). */
 export const PORTABLE_NETWORKS = ['direct', 'dc_proxy', 'res_proxy'] as const;
 
@@ -270,12 +274,19 @@ function sessionFree(spec: Record<string, unknown>): boolean {
 export function exportableStrategy(version: { execution: string; network: string; spec: unknown; script_ref: string | null; est_cost_usd: string | number | null }): ApiExportStrategy | null {
   if (version.script_ref !== null || !isRecord(version.spec)) return null;
   if (!(PORTABLE_EXECUTIONS as readonly string[]).includes(version.execution) || !(PORTABLE_NETWORKS as readonly string[]).includes(version.network)) return null;
-  if (version.spec['kind'] !== 'declarative' || !sessionFree(version.spec) || !validateDeclarativeSpec(version.spec).ok) return null;
+  let spec: Record<string, unknown> = version.spec;
+  if (version.execution === 'agent_fetch') {
+    // E4 : spécification propre, sans les références de règles du propriétaire (relues sous son identité seulement : INV12).
+    const checked = version.spec['kind'] === 'agent_fetch' ? validateAgentFetchSpec(version.spec) : null;
+    if (checked === null || !checked.ok) return null;
+    const { rules: _rules, ...portable } = checked.spec;
+    spec = portable as Record<string, unknown>;
+  } else if (version.spec['kind'] !== 'declarative' || !sessionFree(version.spec) || !validateDeclarativeSpec(version.spec).ok) return null;
   const cost = version.est_cost_usd === null ? null : Number(version.est_cost_usd);
   return {
     execution: version.execution as ApiExportStrategy['execution'],
     network: version.network as ApiExportStrategy['network'],
-    spec: version.spec,
+    spec,
     est_cost_usd: cost === null || !Number.isFinite(cost) ? null : cost,
   };
 }
@@ -428,12 +439,20 @@ export function parseApiExport(input: unknown, options: { readonly runtimeVersio
 
   if (doc.strategy !== null) {
     const spec = doc.strategy.spec;
-    if (spec['kind'] !== 'declarative' || !sessionFree(spec)) return fail('invalid_strategy', 'stratégie déclarative sans session attendue');
-    const checked = validateDeclarativeSpec(spec, { outputSchema: api.output_schema });
-    if (!checked.ok) return fail('invalid_strategy', `stratégie refusée : ${checked.errors[0]?.code ?? 'invalide'} (${checked.errors[0]?.path ?? ''})`);
     // Domaines de l'API (04b § 2, INV10) : la page de la demande et ses sous-domaines, jamais un voisin.
     const scope = siteScope(source.hostname.toLowerCase());
-    if (!checked.spec.request.allowed_hosts.every((h) => withinSiteScope(h, scope))) return fail('invalid_strategy', 'stratégie refusée : hôte hors du site de la demande');
+    if (doc.strategy.execution === 'agent_fetch') {
+      // E4 : spécification d'agent_fetch, sans règles (références du propriétaire d'origine) ni champ de session.
+      if (spec['kind'] !== 'agent_fetch' || spec['rules'] !== undefined) return fail('invalid_strategy', 'stratégie agent_fetch sans références de règles attendue');
+      const agent = validateAgentFetchSpec(spec);
+      if (!agent.ok) return fail('invalid_strategy', `stratégie refusée : ${agent.errors[0] ?? 'invalide'}`);
+      if (!agent.spec.request.allowed_hosts.every((h) => withinSiteScope(h, scope))) return fail('invalid_strategy', 'stratégie refusée : hôte hors du site de la demande');
+    } else {
+      if (spec['kind'] !== 'declarative' || !sessionFree(spec)) return fail('invalid_strategy', 'stratégie déclarative sans session attendue');
+      const checked = validateDeclarativeSpec(spec, { outputSchema: api.output_schema });
+      if (!checked.ok) return fail('invalid_strategy', `stratégie refusée : ${checked.errors[0]?.code ?? 'invalide'} (${checked.errors[0]?.path ?? ''})`);
+      if (!checked.spec.request.allowed_hosts.every((h) => withinSiteScope(h, scope))) return fail('invalid_strategy', 'stratégie refusée : hôte hors du site de la demande');
+    }
   }
 
   for (const [i, item] of (doc.fixtures?.items ?? []).entries()) {

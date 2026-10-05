@@ -6,7 +6,7 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { describe, expect, test } from 'vitest';
 import { loadWorkerConfig } from '../config.js';
-import { INVESTIGATION_LLM_ROLES, productionExecutorFactory } from './factory.js';
+import { confirmAboveUsdFromEnv, INVESTIGATION_LLM_ROLES, productionExecutorFactory } from './factory.js';
 
 const logger = pino({ level: 'silent' });
 const checked = { status: 'ok' as const, version: 1, fingerprint: 'zz_test' };
@@ -153,18 +153,21 @@ describe('productionExecutorFactory', () => {
       const lines: Record<string, unknown>[] = [];
       const log = pino({ level: 'info' }, { write: (l: string) => void lines.push(JSON.parse(l) as Record<string, unknown>) });
       let checks = 0;
+      let probes = 0;
       const handle = await productionExecutorFactory(
-        { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500' },
+        { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500', AGENT_BROWSER_PROBE: 'true' },
         {
           sandboxEngine: () => ({ id: 'isolated-vm' as const, probeIsolation: () => Promise.resolve(sane), run: () => Promise.reject(new Error('jamais appelé')) }),
           chromiumSandbox: () => {
             checks += 1;
             return Promise.resolve(available ? { available: true } : { available: false, detail: 'unshare: unshare failed: Operation not permitted' });
           },
+          agentBrowser: () => ((probes += 1), Promise.resolve(available ? { ok: true as const, ms: 5 } : { ok: false as const, class: 'chromium_launch_signal', ms: 7 })),
         },
       )({ pool, config: loadWorkerConfig(env()), checked, logger: log });
       await handle.close?.();
       expect(checks).toBe(1);
+      expect(probes).toBe(1);
       return lines;
     };
     const down = await start(false);
@@ -173,14 +176,27 @@ describe('productionExecutorFactory', () => {
     expect(alert!['msg']).toMatch(/Chromium : bac à sable indisponible.*runs navigateur échoueront.*seccomp-chromium\.json/);
     expect(alert).toHaveProperty('seccomp');
     expect(down.find((l) => l['msg'] === 'bac à sable : isolation éprouvée')).toHaveProperty('seccomp');
+    // Test « Navigateur » (UX-23) : un Chromium agentique qui ne démarre pas est dit au démarrage, avec sa classe en code fermé.
+    const browserAlert = down.find((l) => l['alert'] === 'agent_browser_unavailable');
+    expect(browserAlert, JSON.stringify(down)).toMatchObject({ level: 50, class: 'chromium_launch_signal' });
     const up = await start(true);
+    expect(up.find((l) => l['alert'] === 'agent_browser_unavailable')).toBeUndefined();
+    expect(up.find((l) => l['msg'] === 'Chromium agentique : démarre')).toMatchObject({ ms: 5 });
     expect(up.find((l) => l['alert'] === 'chromium_sandbox_unavailable')).toBeUndefined();
     expect(up.find((l) => l['msg'] === 'Chromium : bac à sable disponible'), JSON.stringify(up)).toHaveProperty('seccomp');
+    // Sans AGENT_BROWSER_PROBE (défaut) : aucun lancement de Chromium au démarrage (plusieurs secondes, jamais imposées).
+    let offProbes = 0;
+    const off = await productionExecutorFactory(
+      { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500' },
+      { sandboxEngine: () => ({ id: 'isolated-vm' as const, probeIsolation: () => Promise.resolve(sane), run: () => Promise.reject(new Error('jamais appelé')) }), chromiumSandbox: () => Promise.resolve({ available: true }), agentBrowser: () => ((offProbes += 1), Promise.resolve({ ok: true as const, ms: 1 })) },
+    )({ pool, config: loadWorkerConfig(env()), checked, logger });
+    await off.close?.();
+    expect(offProbes).toBe(0);
     // DISABLE_BROWSER : aucune vérification.
     let checks = 0;
     const handle = await productionExecutorFactory(
-      { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500' },
-      { sandboxEngine: () => ({ id: 'isolated-vm' as const, probeIsolation: () => Promise.resolve(sane), run: () => Promise.reject(new Error('jamais appelé')) }), chromiumSandbox: () => ((checks += 1), Promise.resolve({ available: true })) },
+      { NODE_ENV: 'production', SANDBOX_UID: '1500', SANDBOX_GID: '1500', AGENT_BROWSER_PROBE: 'true' },
+      { sandboxEngine: () => ({ id: 'isolated-vm' as const, probeIsolation: () => Promise.resolve(sane), run: () => Promise.reject(new Error('jamais appelé')) }), chromiumSandbox: () => ((checks += 1), Promise.resolve({ available: true })), agentBrowser: () => ((checks += 1), Promise.resolve({ ok: true as const, ms: 1 })) },
     )({ pool, config: loadWorkerConfig(env({ DISABLE_BROWSER: 'true' })), checked, logger });
     await handle.close?.();
     expect(checks).toBe(0);
@@ -193,5 +209,14 @@ describe('productionExecutorFactory', () => {
 
   test('rôles de l’enquête : sans `judge` (résolu à part, erreurs ignorées) — un rôle judge illisible ne fait jamais échouer l’enquête', () => {
     expect([...INVESTIGATION_LLM_ROLES]).toEqual(['investigate', 'extract', 'agent']);
+  });
+});
+
+describe('CONFIRM_ABOVE_USD (lot A du CDC UX, 09 § 9)', () => {
+  test('défaut 0,10 $ ; valeur lue ; valeur invalide ou hors bornes : le défaut', () => {
+    expect(confirmAboveUsdFromEnv({})).toBe(0.1);
+    expect(confirmAboveUsdFromEnv({ CONFIRM_ABOVE_USD: ' 0.25 ' })).toBe(0.25);
+    expect(confirmAboveUsdFromEnv({ CONFIRM_ABOVE_USD: '0' })).toBe(0);
+    for (const bad of ['', 'abc', '-1', '101', 'NaN']) expect(confirmAboveUsdFromEnv({ CONFIRM_ABOVE_USD: bad }), bad).toBe(0.1);
   });
 });

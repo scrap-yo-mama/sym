@@ -787,6 +787,15 @@ const contracts: Record<string, Contract> = {
     expect(body).toContain('workplaceTypes">Hybrid — </span>');
   },
 
+  async two_lists() {
+    const host = H('two_lists');
+    const body = (await fx.get(host, '/biens/')).body;
+    const data = JSON.parse(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s.exec(body)![1]!) as { props: { pageProps: { forSale: unknown[]; sold: unknown[] } } };
+    expect(data.props.pageProps.forSale).toHaveLength(12);
+    expect(data.props.pageProps.sold).toHaveLength(10);
+    expect((await fx.get(host, '/autre')).status).toBe(404);
+  },
+
   async search_guarded() {
     const host = H('search_guarded');
     expect((await fx.get(host, '/recherche?q=lampe')).body).toContain('/api/search?q=lampe&page=1');

@@ -3,7 +3,7 @@
 // écriture seule : la console ne les relit jamais (le serveur ne les renvoie pas, INV8) et vide le champ dès l'envoi. Les droits
 // sont ceux du serveur : un 403 devient un message, jamais une décision locale (06 § 4.1).
 import type { components } from '@runtime/client';
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
 import { call, type CallResult } from '@/lib/api-call';
 import { getApi } from '@/lib/api';
 import { useResource, useTester } from '@/composables/useResource';
@@ -392,12 +392,55 @@ const PASSWORD_REQUIRED = 'settings.extension.passwordRequired';
 /** Messages qui portent sur le champ « mot de passe actuel » : le champ est alors marqué invalide (WCAG 3.3.1). */
 const PASSWORD_FAILURES = new Set([PASSWORD_REQUIRED, 'errors.reauth_failed', 'errors.invalid_request']);
 
+/** Code d'appairage affiché (U3.1) : le code en un collage, le code seul (saisie à la main), et l'appareil qui l'a utilisé dès qu'il apparaît. */
+export type PairingState = {
+  code: string;
+  /** `sym-pair:v1:…` : adresse de l'instance et code à usage unique en un seul texte ; absent d'un serveur plus ancien. */
+  pairingCode: string | null;
+  expiresAt: string;
+  /** Appareils actifs connus au moment de la création : un autre, apparu ensuite, est l'extension qui vient de s'appairer. */
+  knownDeviceIds: string[];
+  connected: Schemas['ExtensionDeviceList']['items'][number] | null;
+};
+
+/** Période du relevé des appareils pendant que le code est affiché : « Extension connectée » en moins de 5 s (05 § 2). */
+const PAIRING_WATCH_MS = 2000;
+
 /** Extension et sessions : code d'appairage (mot de passe exigé), appareils, domaines connectés, révocation. */
 export function useExtensionSettings() {
   const devices = useResource<Schemas['ExtensionDeviceList']>(() => call(() => getApi().GET('/api/extension/devices')));
   const sites = useResource<Schemas['ConnectedSiteList']>(() => call(() => getApi().GET('/api/sites')));
   const failure = ref<string | null>(null);
-  const pairing = ref<{ code: string; expiresAt: string } | null>(null);
+  const pairing = ref<PairingState | null>(null);
+  let watcher: ReturnType<typeof setInterval> | null = null;
+  const activeDeviceIds = (): string[] => (devices.data.value?.items ?? []).filter((d) => d.revokedAt === null).map((d) => d.id);
+  const stopWatching = () => {
+    if (watcher !== null) clearInterval(watcher);
+    watcher = null;
+  };
+
+  /**
+   * Relève les appareils tant que le code est affiché : le premier appareil actif inconnu est l'extension qui vient de s'appairer ;
+   * l'écran passe à « Extension connectée » sans recharger la page. S'arrête dès la connexion, au masquage ou à la fin du composant.
+   * `periodMs` : période du relevé (tests). Rend la fonction d'arrêt.
+   */
+  function watchPairing(periodMs = PAIRING_WATCH_MS): () => void {
+    stopWatching();
+    const tick = async (): Promise<void> => {
+      const current = pairing.value;
+      if (current === null || current.connected !== null) return stopWatching();
+      await devices.reload();
+      const known = new Set(current.knownDeviceIds);
+      const fresh = (devices.data.value?.items ?? []).find((d) => d.revokedAt === null && !known.has(d.id));
+      if (fresh !== undefined && pairing.value === current) {
+        current.connected = fresh;
+        stopWatching();
+      }
+    };
+    watcher = setInterval(() => void tick(), periodMs);
+    return stopWatching;
+  }
+  onScopeDispose(stopWatching);
   const pairingBusy = ref(false);
 
   const passwordInvalid = computed(() => failure.value !== null && PASSWORD_FAILURES.has(failure.value));
@@ -424,7 +467,7 @@ export function useExtensionSettings() {
       failure.value = result.messageKey;
       return false;
     }
-    pairing.value = { code: result.data.code, expiresAt: result.data.expiresAt };
+    pairing.value = { code: result.data.code, pairingCode: result.data.pairingCode ?? null, expiresAt: result.data.expiresAt, knownDeviceIds: activeDeviceIds(), connected: null };
     return true;
   }
 
@@ -450,5 +493,20 @@ export function useExtensionSettings() {
     return true;
   }
 
-  return { devices, sites, failure, passwordInvalid, pairing, pairingBusy, createPairingCode, revokeDevice, disconnectSite, dismissPairing: () => (pairing.value = null) };
+  return {
+    devices,
+    sites,
+    failure,
+    passwordInvalid,
+    pairing,
+    pairingBusy,
+    createPairingCode,
+    watchPairing,
+    revokeDevice,
+    disconnectSite,
+    dismissPairing: () => {
+      stopWatching();
+      pairing.value = null;
+    },
+  };
 }

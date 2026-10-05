@@ -44,7 +44,8 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `TRUST_PROXY` | `false` | server | nombre de sauts de proxy, ou liste d'adresses ou de plages CIDR. Jamais `true` sans proxy devant | lue |
 | `INSTANCE_CONTACT` | aucun | worker | contact de l'opérateur, annoncé dans le jeton du User-Agent du robot et dans `From` quand `IDENTIFY_INSTANCE` est activé ; le réglage saisi à l'assistant de premier démarrage l'emporte | lue |
 | `IDENTIFY_INSTANCE` | `false` | worker | `true` : jeton `compatible; Scrapyomama/<version>; +<contact>` dans le User-Agent et en-tête `From` (adresse électronique) ; sinon le User-Agent est celui, réel, du Chromium embarqué. Le réglage admin `identify_instance` l'emporte | lue |
-| `MAX_WAIT_SECONDS` | 25 | server | plafond, en secondes, de l’attente synchrone d’un appel REST ou MCP (paramètre `wait`, 1 à 25) ; au-delà, un run à suivre (202) | lue |
+| `MAX_WAIT_SECONDS` | 50 | server | plafond, en secondes, de l’attente synchrone d’un appel MCP (`wait_seconds`, 1 à 50 ; REST : `wait`, 25 au plus) ; au-delà, un run à suivre (202) | lue |
+| `CONFIRM_ABOVE_USD` | 0.10 | worker | dépense estimée des essais d’une enquête (essai retenu et compilation) au-delà de laquelle la validation automatique du schéma attend une confirmation avant tout appel facturé (valeur à valider) | lue |
 | `MAX_CONCURRENT_RUNS` | 50 | server | runs actifs de l’instance au-delà desquels une création de run ou d’API répond 429 `queue_full` avec `Retry-After` (valeur à valider) | lue |
 | `MAX_ACTIVE_RUNS_PER_USER` | 20 | server | runs actifs (hors pause) d’un même utilisateur au-delà desquels sa création de run ou d’API répond 429 `user_queue_full` avec `Retry-After` (valeur à valider) | lue |
 | `MAX_RUNS_PER_KEY_PER_MINUTE` | 60 | server | créations de run ou d’API par clé d’API et par minute au-delà desquelles l’appel répond 429 `key_rate_limited` avec `Retry-After` (compteur du processus, valeur à valider) | lue |
@@ -62,7 +63,9 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | Variable | Défaut | Lue par | Rôle | État |
 |---|---|---|---|---|
 | `RUNTIME_MODE` | `all` | image (entrypoint) | `server`, `worker`, `all` ou `migrate` | lue |
-| `RUNTIME_VERSION` | `0.0.0` | server, worker | version publiée par `/api/health` et `/api/version` ; posée à la construction de l'image par la chaîne de release | lue |
+| `RUNTIME_VERSION` | version du paquet | server, worker | version publiée par `/api/health` et `/api/version` ; posée à la construction de l'image par la chaîne de release (absente ou `0.0.0` : la version du paquet) | lue |
+| `RUNTIME_COMMIT` | aucun | server | commit Git de l'image, publié par `/api/version` ; posée à la construction (`--build-arg RUNTIME_COMMIT=<sha>`) | lue |
+| `RENDER_GIT_COMMIT` | aucun | server | posée par Render à chaque déploiement : repli de `RUNTIME_COMMIT` | lue |
 | `WORKER_CONCURRENCY` | 5 | worker | jobs en parallèle ; au plus `DB_POOL_MAX` | lue |
 | `BROWSER_CONCURRENCY` | déduit de la mémoire du conteneur | worker | exécutions navigateur simultanées : `max(1, floor((limite − 0,5 Go) / 1,5 Go))`, soit 1 pour 2 Go et 2 pour 4 Go | lue |
 | `DISABLE_BROWSER` | `false` | worker | aucun Chromium : les exécutions navigateur sont refusées | lue |
@@ -73,6 +76,7 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `BROWSER_CDP_PROJECT_ID` | aucune | worker | identifiant de projet de l'adaptateur `browserbase` ; accepte `BROWSER_CDP_PROJECT_ID_FILE` | lue |
 | `BROWSER_CDP_SESSION_TIMEOUT_SECONDS` | 900 | worker | durée maximale d'une session chez le fournisseur CDP, de 60 à 21600 | lue |
 | `BROWSER_CDP_ACCOUNT_PROXY` | `false` | worker | `true` demande au fournisseur CDP le proxy de son compte | lue |
+| `AGENT_BROWSER_PROBE` | `false` | worker | `true` : au démarrage, vérifie que le Chromium dédié de l'agent démarre et le dit dans les journaux ; n'empêche aucun run | lue |
 | `SHUTDOWN_TIMEOUT_SECONDS` | 30 | worker | délai d'arrêt propre | lue |
 | `RUN_BUDGET_SECONDS` | 900 | worker | durée maximale d'un run | lue |
 | `RUN_HEARTBEAT_SECONDS` | 10 | worker | battement d'un run actif | lue |
@@ -155,6 +159,7 @@ Ce que l'IA de l'utilisateur a déjà trouvé (`brief` de `create_api`) oriente 
 | Variable | Défaut | Lue par | Rôle | État |
 |---|---|---|---|---|
 | `MCP_TOOL_EXPOSURE` | `pinned` | server | outils exposés par API : `generic` (aucun), `pinned` (les API épinglées pour le MCP, 20 au plus) ou `all` (20 au plus) ; voir [Serveur MCP](./mcp.md) | lue |
+| `MCP_DEFAULT_TOOLSETS` | `build,run,catalog,iterate` | server | toolsets du serveur MCP actifs quand le client ne demande rien (`?toolsets=`) : `build`, `run`, `catalog` et `iterate` (affiner, tester, promouvoir, revenir en arrière), séparés par des virgules ; `iterate` est actif par défaut | lue |
 | `MCP_ALLOWED_HOSTS` | l'hôte de `PUBLIC_URL` | server | noms d'hôte supplémentaires (sans port) admis dans l'en-tête `Host` d'une requête MCP ; tout autre hôte reçoit 403 | lue |
 | `MCP_ALLOWED_ORIGINS` | l'origine de `PUBLIC_URL` | server | origines supplémentaires admises dans l'en-tête `Origin` : origine complète (`https://hote:port`, comparée en entier comme celle de `PUBLIC_URL`) ou nom d'hôte seul (tout schéma et tout port de cet hôte) ; une origine présente et non admise reçoit 403, une requête sans `Origin` est acceptée | lue |
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Les 21 transitions de 04 §6 : table unique, source des noms de tests `transition_NN_*`.
+// Les 22 transitions de 04 §6 (la 22e : 3.14) : table unique, source des noms de tests `transition_NN_*`.
 import {
   BLOCKING_CLASSES as BLOCKING,
   INVESTIGATION_ACTION_CLASSES,
@@ -64,9 +64,11 @@ export const TRANSITIONS: readonly TransitionDef[] = [
   { id: 20, from: 'warning', to: 'enquete', slug: 'warning_to_enquete', reasons: REINVESTIGATION },
   // 21 : `to` est le statut précédent (sain ou warning, ou erreur après une tentative de persistance), porté par `previous_status`.
   { id: 21, from: 'enquete', to: 'sain', slug: 'enquete_to_previous_status', reasons: ['reinvestigation_failed', 'not_compilable'] },
+  // 22 (3.14) : promotion d'un brouillon ou retour de version depuis `erreur` ; sur `sain` ou `warning`, pas de transition.
+  { id: 22, from: 'erreur', to: 'warning', slug: 'erreur_to_warning_promoted', reasons: ['promoted', 'reverted'] },
 ];
 
-export const TRANSITION_COUNT = 21;
+export const TRANSITION_COUNT = 22;
 
 export function transitionDef(id: TransitionId): TransitionDef {
   const def = TRANSITIONS.find((t) => t.id === id);

@@ -91,7 +91,7 @@ Quelques règles ne se négocient pas, et chacune est un test nommé :
 
 - **La sortie est toujours conforme au schéma validé.** Un résultat hors schéma n'est jamais un succès.
 - **Le moins cher d'abord**, chaque essai journalisé avec son coût.
-- **Le statut suit une machine à états fermée** (21 transitions).
+- **Le statut suit une machine à états fermée** (22 transitions).
 - **Chaque run est tracé** : stratégie, mode d'exécution, réseau, coût, classe d'échec.
 - **Une session appartient à son propriétaire**, sans impersonation.
 - **Aucun contournement intégré** ([Hors périmètre](./hors-perimetre.md)).

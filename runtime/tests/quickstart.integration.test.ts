@@ -216,7 +216,7 @@ async function composeUp(step: QuickstartStep): Promise<void> {
   const migrate = spawnSync('node', entrypointCommand(composeEnv.get('migrate')?.['RUNTIME_MODE'] ?? ''), { cwd: runtimeDir, env: { PATH: process.env['PATH'] ?? '', ...withTestDatabase('migrate') }, encoding: 'utf8', timeout: 90_000 });
   expect(migrate.status, `${migrate.stdout}${migrate.stderr}`).toBe(0);
   // Compose publie le port de l'image sur le port de l'hôte ; sans Docker, le serveur écoute directement sur le port de l'hôte.
-  startProcess('server', entrypointCommand(composeEnv.get('server')?.['RUNTIME_MODE'] ?? ''), { ...withTestDatabase('server'), PORT: String(port) });
+  startProcess('server', entrypointCommand(composeEnv.get('server')?.['RUNTIME_MODE'] ?? ''), { ...withTestDatabase('server'), PORT: String(port), NODE_ENV: 'test', RUNTIME_TEST_ALLOW_PRIVATE: '1' });
   startProcess('worker', entrypointCommand(composeEnv.get('worker')?.['RUNTIME_MODE'] ?? ''), withTestDatabase('worker'));
   await waitHealthy();
 }

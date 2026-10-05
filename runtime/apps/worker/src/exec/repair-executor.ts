@@ -252,6 +252,8 @@ export function createRepairPort(deps: RepairEngineDeps): RepairPort {
           rows,
           // Dossier d'enquête (2.14, 19c § 4) : vN+1 garde la version consultée par vN (`source.brief.ref`).
           ...(base?.brief === undefined || base.brief === null ? {} : { brief: base.brief }),
+          // Retours d'utilisateur (3.14, 19 §6) : vN+1 les garde dans sa source ; ils ne sont jamais une règle de confiance.
+          ...(base?.feedback === undefined ? {} : { feedback: base.feedback }),
         }),
         rules: rows,
       };

@@ -128,7 +128,7 @@ async function identityView(ctx: ServerContext): Promise<IdentityView> {
  * Tant qu'aucun worker n'a publié, son environnement est inconnu : le serveur ne devine pas (null) plutôt que de refuser un
  * contact que le worker lirait dans sa variable.
  */
-async function instanceContactProblem(ctx: ServerContext): Promise<'missing' | 'invalid' | null> {
+export async function instanceContactProblem(ctx: ServerContext): Promise<'missing' | 'invalid' | null> {
   const [setting, engine] = await Promise.all([readInstanceContactSetting(ctx.pool), readRobotEngine(ctx.pool)]);
   if (engine === null) return null;
   const env: Record<string, string> = {};

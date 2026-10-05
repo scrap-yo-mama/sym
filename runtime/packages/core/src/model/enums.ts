@@ -19,7 +19,7 @@ export const NETWORKS = ['direct', 'dc_proxy', 'res_proxy', 'tunnel'] as const;
 export type Network = (typeof NETWORKS)[number];
 
 /** `recompile` : recompilation à la demande après la modification d'une règle (18 §4.8, tâche 2.10). */
-export const STRATEGY_CREATORS = ['investigation', 'repair', 'user', 'revert', 'import', 'recompile'] as const;
+export const STRATEGY_CREATORS = ['investigation', 'repair', 'user', 'revert', 'import', 'recompile', 'refine'] as const;
 export type StrategyCreator = (typeof STRATEGY_CREATORS)[number];
 
 /** Une trace E6 est-elle compilable en E5 (tâche 2.13, 19b §1) ? `no` : seul l'agent instruit (opt-in) la rejoue. */
@@ -27,15 +27,23 @@ export const STRATEGY_COMPILABLE = ['yes', 'unknown', 'no'] as const;
 export type StrategyCompilable = (typeof STRATEGY_COMPILABLE)[number];
 
 /** Raison d'archivage d'une version non courante (2.13 : vN+1 conforme mais non validée sans agent ; le reste avec 3.14). */
-export const STRATEGY_ARCHIVE_REASONS = ['repair_not_validated'] as const;
+export const STRATEGY_ARCHIVE_REASONS = ['repair_not_validated', 'superseded', 'expired', 'discarded'] as const;
 export type StrategyArchiveReason = (typeof STRATEGY_ARCHIVE_REASONS)[number];
+
+/** État d'une version de stratégie (19b §1) : un brouillon est une version non courante, un seul par API. */
+export const STRATEGY_STATES = ['draft', 'current', 'archived'] as const;
+export type StrategyState = (typeof STRATEGY_STATES)[number];
 
 /** Issue d'une étape dans le journal de reprise (`run_attempts.step_outcome`, 19 §4). */
 export const STEP_OUTCOMES = ['replayed', 'alternate', 'agent_repaired', 'failed'] as const;
 export type StepOutcome = (typeof STEP_OUTCOMES)[number];
 
-export const RUN_TRIGGERS = ['mcp', 'rest', 'schedule', 'ui', 'canary'] as const;
+/** `draft_test` et `draft_refine` (3.14) : aucune transition de statut, aucune mesure de qualité, coûts comptés dans les plafonds. */
+export const RUN_TRIGGERS = ['mcp', 'rest', 'schedule', 'ui', 'canary', 'draft_test', 'draft_refine'] as const;
 export type RunTrigger = (typeof RUN_TRIGGERS)[number];
+
+/** Essais de brouillon : un run `draft_test` ou `draft_refine` ne change jamais le statut de l'API (assert_draft_run_no_status_change). */
+export const isDraftTrigger = (trigger: RunTrigger | undefined): boolean => trigger === 'draft_test' || trigger === 'draft_refine';
 
 export const RUN_STATES = [
   'queued',

@@ -84,8 +84,8 @@ describe('REST : message localisé, code stable', () => {
     const fr = await srv.app.inject({ method: 'GET', url: '/api/me', headers: { 'accept-language': 'fr-CA,fr;q=0.9' } });
     const en = await srv.app.inject({ method: 'GET', url: '/api/me', headers: { 'accept-language': 'en-US,en;q=0.9' } });
     expect(fr.statusCode).toBe(401);
-    expect(fr.json()).toEqual({ error: { code: 'unauthorized', message: 'Identifiant absent, expiré ou révoqué.' } });
-    expect(en.json()).toEqual({ error: { code: 'unauthorized', message: 'Missing, expired or revoked credentials.' } });
+    expect(fr.json()).toMatchObject({ error: { code: 'unauthorized', message: 'Identifiant absent, expiré ou révoqué.' } });
+    expect(en.json()).toMatchObject({ error: { code: 'unauthorized', message: 'Missing, expired or revoked credentials.' } });
     expect(fr.headers['content-language']).toBe('fr');
     expect(en.headers['content-language']).toBe('en');
     expect(String(fr.headers['vary'])).toContain('Accept-Language');

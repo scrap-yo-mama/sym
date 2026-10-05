@@ -31,6 +31,7 @@ export const INVESTIGATE_SYSTEM_PROMPT = [
   'Return the "fields" of one output record (lower snake_case names, scalar types or "array" for a list of strings such as tags, required only when every record has the value, personal=true for data about a person such as a name, an e-mail, a phone number or a person identifier, a short description in plain English for each, read by the API client), then for every candidate that can serve these fields, the relative JSONPath of each field in one record ("$.key" or "$.a.b") and optional operators.',
   'For pagination, use "page_param" with param "url.query.<name>" when the request has a page number parameter, "offset" for an offset parameter, "cursor" with next_path when a record set carries the next cursor, "next_link" with next_path for a next URL, otherwise "none". Set has_more_path when the response has a boolean telling whether more pages exist.',
   'When no candidate can serve the fields, return the fields with an empty sources list.',
+  'Return "unmatched_fields" (lower snake_case) only for a field the REQUEST names that no candidate carries, and "other_lists" (candidate ids) only for another candidate that is also a real answer to the REQUEST with different fields; otherwise null for both. Never guess: the code checks both and asks the owner only on a real doubt.',
   'Use null for every absent optional value. Never invent a source, a key or a path that is not in the skeletons.',
   'Return "plan" and "excluded" only when a rule in <trusted_rules> asks to reorder or exclude couples of the ALLOWED COUPLES list: "plan" lists the couples (execution, network) to try first, in order, "excluded" the couples not to try, each with the rule_refs (name@version) of the rules that ask for it. Otherwise use null for both. Couples outside the allowed list are ignored by the code.',
   'When a FIDELITY CHECK follows a PREVIOUS MAPPING, each line names a field and what the code found wrong in the records it gave (empty, duplicate, wrong shape, values outside the plausible range of the field, outliers, inconsistent with another field, swapped with another field, a marketing badge, a technical prefix): map that field to another slot or key whose kind, shape and prefix=/suffix= labels fit its name and description (a count of bedrooms reads the slot labelled bedrooms, a living area is never the land or outdoor area, a reference is the bare code); for two swapped fields exchange their paths.',
@@ -82,18 +83,24 @@ export type InvestigateArgs = {
    * Proposition précédente refusée par le contrôle de fidélité du code (banc réel) : chemins proposés et différentiel en CODES
    * (champ, motif, part des éléments, autre champ ; `fidelityDiff`), jamais une valeur du site. Le modèle refait la carte.
    */
+  /**
+   * Schéma de sortie précédent de l'API (ré-enquête, UX-25) : ancre de la proposition, pour que les colonnes de ses
+   * consommateurs (CSV, intégrations, planifications) ne changent pas de nom sans raison. Noms, types et descriptions de
+   * champs seulement : aucune valeur du site.
+   */
+  readonly previousSchema?: unknown;
   readonly previousMapping?: { readonly paths: readonly { readonly candidate: string; readonly field: string; readonly path: string }[]; readonly diff: string };
 };
 
 /**
- * Rappel placé APRÈS le bloc `Language:` : ce rôle n'écrit aucune phrase pour l'humain. Noms, types et descriptions de champs
- * sont des sorties machine, et la description est lue par le modèle client (21 § 4.5) : anglais, quelle que soit `runs.locale`.
- * Seul un `title` de champ (absent de la proposition V1) suivrait la langue du run. Le schéma de sortie ne dépend donc pas de la
- * langue du demandeur. La consigne est la seule garde de la description : aucun motif de caractères ne la refuse (« Price (€) »,
- * « Person’s name » sont de l'anglais), une description mal rédigée ne fait jamais échouer l'enquête.
+ * Rappel placé APRÈS le bloc `Language:` (UX-35, 03-specs-mcp § 6) : noms de champs, types et valeurs d'énumération sont des sorties
+ * machine, en anglais quelle que soit `runs.locale` ; la `description` de chaque champ est une phrase pour la personne et suit la
+ * langue du bloc. Le schéma de sortie (noms, types) ne dépend donc pas de la langue du demandeur. La consigne est la seule garde
+ * de la description : aucun motif de caractères ne la refuse, une description dans une autre langue ne fait jamais échouer
+ * l'enquête.
  */
 const INVESTIGATE_MACHINE_FIELDS_NOTE =
-  'This role writes no sentence for the user: field names, types and every description stay in plain English whatever the Language line says (descriptions are read by the API client and are never translated).';
+  'Field names, types and enum values stay in plain English whatever the Language line says (they are machine outputs). The description of each field is a short sentence for the user: write it in the language of the Language line.';
 
 /**
  * Prompt système : un seul jeu en anglais ; le bloc `Language:` (nom de langue du registre, jamais une saisie libre) est ajouté
@@ -141,6 +148,7 @@ export function investigateMessages(args: InvestigateArgs, token = randomBytes(1
     args.ownerCorrections === undefined || args.ownerCorrections.trim() === ''
       ? ''
       : `OWNER CORRECTIONS (from the API owner, given when validating the schema; follow them to choose the source and map the fields): ${maskTextForLlm(args.ownerCorrections.replace(/\s+/g, ' ')).replace(/untrusted_candidates/gi, 'untrusted-candidates').slice(0, MAX_REQUEST_CHARS)}`,
+    args.previousSchema === undefined ? '' : `PREVIOUS OUTPUT SCHEMA of this API (its consumers read these columns): keep the same field names and types for every field the page still gives; rename, retype or drop a field only when the page no longer has that value, and say nothing else about it: ${JSON.stringify(args.previousSchema).slice(0, 8_000)}`,
     args.accessFacts === undefined ? '' : `ACCESS FACTS: ${JSON.stringify(args.accessFacts)}`,
     args.allowedCouples === undefined ? '' : `ALLOWED COUPLES (computed by the code; est_cost_usd per run): ${JSON.stringify(args.allowedCouples.slice(0, 40))}`,
     args.previousMapping === undefined

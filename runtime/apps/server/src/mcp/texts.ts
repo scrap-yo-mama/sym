@@ -39,11 +39,42 @@ export function fmtUsd(value: number | null, locale: McpLocale): string {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Récit (narrative.*)
+// Récit (narrative.*) : mots simples, quatre jalons, aucun code interne (U1.8, 03-specs-mcp § 5, guide de voix)
 // ---------------------------------------------------------------------------------------------------------------
 
-/** E1 à E6 (04 § 1) : le code d'exécution du récit. */
-export const EXECUTION_CODE: Readonly<Record<string, string>> = Object.freeze({ fetch: 'E1', fetch_in_page: 'E2', playwright: 'E3', agent_fetch: 'E4', hybrid: 'E5', agent: 'E6' });
+/** Une méthode d'extraction dite avec les mots de la personne (« essai rapide sans navigateur », jamais `fetch/direct`). */
+const EXECUTION_WORDS: Record<McpLocale, Readonly<Record<string, string>>> = {
+  en: {
+    fetch: 'quick request without a browser',
+    fetch_in_page: 'request from inside the page',
+    playwright: 'scripted browser',
+    agent_fetch: 'requests guided by the agent',
+    hybrid: 'browser and requests together',
+    agent: 'agent in a browser',
+  },
+  fr: {
+    fetch: 'essai rapide sans navigateur',
+    fetch_in_page: 'requête depuis la page',
+    playwright: 'navigateur piloté par un script',
+    agent_fetch: 'requêtes guidées par l’agent',
+    hybrid: 'navigateur et requêtes ensemble',
+    agent: 'agent dans un navigateur',
+  },
+};
+const NETWORK_WORDS: Record<McpLocale, Readonly<Record<string, string>>> = {
+  en: { direct: '', dc_proxy: 'through a server proxy', res_proxy: 'through a home-network proxy', tunnel: 'through your browser' },
+  fr: { direct: '', dc_proxy: 'par un proxy de serveur', res_proxy: 'par un proxy résidentiel', tunnel: 'par ton navigateur' },
+};
+
+/** Méthode (exécution et réseau) en mots simples ; un code inconnu devient « une méthode » (jamais le code recopié). */
+export function methodWords(execution: string, network: string, locale: McpLocale): string {
+  const base = EXECUTION_WORDS[locale][execution] ?? (locale === 'fr' ? 'une méthode' : 'a method');
+  const via = NETWORK_WORDS[locale][network] ?? '';
+  return via === '' ? base : `${base} ${via}`;
+}
+
+/** Signature de SYM qui parle (guide de voix) : « SYM 👻 : » en fr, « SYM 👻: » en en. */
+export const symSignature = (locale: McpLocale): string => (locale === 'fr' ? 'SYM 👻 :' : 'SYM 👻:');
 
 /** Motifs de la garde des requêtes de l'agent (19 §7, codes de `agentRequestPolicy`) : phrases fermées, sans URL ni valeur. */
 const REQUEST_REASON_EN: Readonly<Record<string, string>> = Object.freeze({
@@ -68,34 +99,57 @@ const REQUEST_REASON_FR: Readonly<Record<string, string>> = Object.freeze({
 });
 
 type NarrativeCatalog = {
-  title: (slug: string, domain: string | null, phase: string) => string;
-  /** Pastille du rapport d'accès (D-91 : plus de section robots.txt, `allowed` ou `review`). */
+  /** Première phrase après la signature (prise en charge). */
+  takeOver: string;
+  title: (slug: string, domain: string | null) => string;
+  /** Libellés des quatre jalons, dans l'ordre : 1/4 à 4/4. */
+  milestones: readonly [string, string, string, string];
+  /** Rapport d'accès (D-91 : plus de section robots.txt, `allowed` ou `review`). */
   access: { allowed: string; review: string; unknown: string };
-  recon: (sources: number, mode: string | null) => string;
-  reconFailed: (failureClass: string) => string;
-  trial: (label: string, ok: boolean, result: string, records: number | null, pages: number | null) => string;
-  /** Motif d'un essai en échec (UX-33) : phrase fermée pour les codes connus, sinon le code ; `reason` : motif de la garde. */
-  why: (code: string, reason: string | null) => string;
+  recon: (sources: number) => string;
+  reconFailed: (cause: string | null) => string;
   schema: (ok: boolean, fields: number | null) => string;
   /** Validation du schéma par l'utilisateur (`validate_schema`, constat Barnes) : ce qui a changé et ce qui n'est pas appliqué. */
   validated: (v: ValidatedView) => string;
   /** Titre du schéma retenu dans la réponse de `validate_schema`. */
   retained: string;
-  pruned: (label: string | null, reason: string | null, count: number) => string;
-  strategy: (label: string, code: string, perRun: string) => string;
-  stopped: (cause: string | null) => string;
-  /** Arrêt pour une cause d'action requise (contact du robot, prix du modèle…) : une tâche, pas un refus du site. */
-  stoppedAction: (cause: string) => string;
-  failed: (failureClass: string | null) => string;
+  /** Jalon 3 d'un run dont le schéma était déjà validé (les essais seuls sont rejoués). */
+  schemaValidated: string;
+  /** Ligne du jalon 4 : nombre d'essais et méthode retenue. */
+  extract: (tried: number, kept: string | null) => string;
+  /** Un essai : méthode en mots, conforme ou non (`result` en mots), éléments et pages. */
+  trial: (method: string, ok: boolean, result: string | null, records: number | null, pages: number | null) => string;
+  /** Motif d'un essai en échec (UX-33) : phrase fermée pour les codes connus ; `reason` : motif de la garde. */
+  why: (code: string, reason: string | null) => string | null;
+  pruned: (method: string | null, count: number) => string;
+  kept: (method: string, perRun: string) => string;
+  /** Fin sur un succès : « C'est fait. 519 éléments, 0 $ par rejeu. » (la signature précède). */
+  done: (items: number | null, perRun: string) => string;
+  /** Arrêt par la décision du site, ou par une cause connue. */
+  stopped: string;
+  stoppedAction: string;
+  failed: (cause: string | null) => string;
   budget: string;
   running: string;
   cancelled: string;
-  action: (cause: string) => string;
+  action: string;
   /** `ids` : arguments de `next_action` déjà rendus (« api_id <uuid> »), ou null (le texte dit alors « cet api_id »). */
-  next: { validate: (ids: string | null) => string; run: (tool: string) => string; poll: (seconds: number | null, ids: string | null) => string; items: (ids: string | null) => string; none: string; schemaRemark: (ids: string | null) => string };
+  next: {
+    validate: (ids: string | null) => string;
+    run: (tool: string) => string;
+    poll: (seconds: number | null, ids: string | null) => string;
+    items: (ids: string | null) => string;
+    schemaRemark: (ids: string | null) => string;
+    /** Après un échec : dire ce qui s'est passé, puis la suite proposée par SYM. */
+    failed: string;
+    blocked: string;
+    action: string;
+    none: string;
+  };
   console: string;
-  stepWord: string;
   costWord: string;
+  /** Aperçu des éléments (`items_preview`) : plus d'éléments que l'aperçu. */
+  previewMore: (rest: number) => string;
   brief: BriefCatalog;
   header: { restart: string };
 };
@@ -160,30 +214,39 @@ type BriefCatalog = {
   /** Accusé : première ligne du récit quand un dossier est présent (« SYM 👻 : J'ai lu ton dossier… »). */
   read: (hints: number, tried: number) => string;
   title: string;
-  line: (id: string, kind: string, state: string, reason: string) => string;
+  line: (id: string, kind: string, state: string) => string;
+  kinds: Record<string, string>;
   states: Record<string, string>;
   more: (n: number) => string;
   breaker: string;
   questions: (n: number) => string;
 };
 
+const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many);
+/** Pluriel français : 0 et 1 au singulier (« 0 élément », « 1 page »). */
+const pluralFr = (n: number, one: string, many: string): string => (n <= 1 ? one : many);
+
 const EN: NarrativeCatalog = {
-  title: (slug, domain, phase) => `Investigation ${slug}${domain === null ? '' : ` · ${domain}`} · ${phase}`,
+  takeOver: 'Got it, I’m on it.',
+  title: (slug, domain) => `Investigation ${slug}${domain === null ? '' : ` · ${domain}`}`,
+  milestones: ['Describe', 'Recognize', 'Validate the schema', 'Extract'],
   access: {
-    allowed: 'no signal to review',
-    review: 'usage signals to review',
-    unknown: 'access report recorded',
+    allowed: 'site access checked, no signal to review',
+    review: 'site access checked, usage signals to review',
+    unknown: 'site access checked',
   },
-  recon: (n, mode) => (n === 0 ? `no data source found${mode === null ? '' : ` (${mode})`}` : `${n} candidate data source${n === 1 ? '' : 's'}${mode === null ? '' : ` (${mode})`}`),
-  reconFailed: (c) => `failed (${c})`,
-  trial: (label, ok, result, records, pages) =>
-    `Trial ${label}: ${ok ? 'conformant' : result}${records === null ? '' : `, ${records} item${records === 1 ? '' : 's'}`}${pages === null ? '' : `, ${pages} page${pages === 1 ? '' : 's'}`}`,
+  recon: (n) => (n === 0 ? 'no data source found' : `${n} candidate data ${plural(n, 'source', 'sources')} found`),
+  reconFailed: (cause) => (cause === null ? 'the recognition failed' : `the recognition failed: ${cause}`),
+  schema: (ok, fields) => (ok ? `${fields === null ? 'output schema proposed' : `${fields} ${plural(fields, 'field', 'fields')} proposed`}` : 'no usable output schema could be proposed'),
+  schemaValidated: 'schema already validated',
+  extract: (tried, kept) => `${tried} ${plural(tried, 'trial', 'trials')}${kept === null ? '' : `, kept: ${kept}`}`,
+  trial: (method, ok, result, records, pages) =>
+    `${method.charAt(0).toUpperCase()}${method.slice(1)}: ${ok ? 'conformant' : (result ?? 'refused')}${records === null ? '' : `, ${records} ${plural(records, 'item', 'items')}`}${pages === null ? '' : `, ${pages} ${plural(pages, 'page', 'pages')}`}`,
   why: (code, reason) => {
-    if (code === 'agent_request_blocked') return `agent request refused by the request guard${reason === null ? '' : `: ${REQUEST_REASON_EN[reason] ?? reason}${reason in REQUEST_REASON_EN ? ` (${reason})` : ''}`}`;
-    if (code === 'max_cost_usd') return 'the trial reached the per-run cost cap set on the API (max_cost_usd)';
-    return `(${code})`;
+    if (code === 'agent_request_blocked') return `a request of the agent was refused by the request guard${reason === null ? '' : `: ${REQUEST_REASON_EN[reason] ?? 'reason not listed'}`}`;
+    if (code === 'max_cost_usd') return 'the trial reached its cost cap';
+    return null;
   },
-  schema: (ok, fields) => (ok ? `Output schema proposed${fields === null ? '' : `: ${fields} fields`}` : 'No usable output schema could be proposed'),
   validated: (v) =>
     validatedSentence(v, {
       asProposed: 'Schema validated as proposed.',
@@ -204,31 +267,36 @@ const EN: NarrativeCatalog = {
       colon: ': ',
     }),
   retained: 'Retained schema',
-  pruned: (label, reason, count) => `Skipped ${count} more expensive trial${count === 1 ? '' : 's'}${label === null ? '' : ` after ${label}`}${reason === null ? '' : ` (${reason})`}`,
-  strategy: (label, code, perRun) => `Strategy kept: ${label} (${code}, ${perRun} per run)`,
-  stopped: (cause) => `The investigation stopped${cause === null ? '' : ` (${cause})`}: SYM does not try other ways to reach the site.`,
-  stoppedAction: (cause) => `The investigation stopped (${cause}): an action is needed before it can resume.`,
-  failed: (c) => `The investigation failed${c === null ? '' : ` (${c})`}.`,
+  pruned: (method, count) => `Skipped ${count} more expensive ${plural(count, 'method', 'methods')}${method === null ? '' : ` after the ${method}`}`,
+  kept: (method, perRun) => `Method kept: ${method}, ${perRun} per run`,
+  done: (items, perRun) => (items === null ? `Done. ${perRun} per replay.` : `Done. ${items} ${plural(items, 'item', 'items')}, ${perRun} per replay.`),
+  stopped: 'The investigation stopped. SYM does not try other ways to reach the site.',
+  stoppedAction: 'The investigation stopped: an action is needed before it can resume.',
+  failed: (cause) => (cause === null ? 'The investigation failed.' : `The investigation failed: ${cause}.`),
   budget: 'The investigation budget ran out before a conformant strategy was found.',
   running: 'The investigation is running.',
   cancelled: 'The investigation was cancelled; costs already incurred remain charged.',
-  action: (cause) => `Action needed (${cause}).`,
+  action: 'Action needed.',
   next: {
     validate: (ids) => `Next step: show the proposed schema to the user, then call validate_schema with ${ids ?? 'this api_id'} (add output_schema only to correct it).`,
     run: (tool) => `Next step: call ${tool} with its input, or run_api.`,
     poll: (s, ids) => `Next step: call get_run with ${ids ?? 'this run_id'}${s === null ? '' : ` in about ${s} seconds`}.`,
     items: (ids) => `Next step: call get_items with ${ids ?? 'next_cursor'} for the rest.`,
-    none: 'Next step: none.',
     schemaRemark: (ids) => `Next step: adjust the schema to the remark, show it to the user again, then call validate_schema with ${ids === null ? '' : `${ids} and `}output_schema (put what a schema cannot say in instructions).`,
+    failed: 'Next step: tell the user what happened, then offer to adjust the request or to investigate again (run_api with force_investigate).',
+    blocked: 'Next step: offer the user an official API or another source; do not retry.',
+    action: 'Next step: ask the user to do the action above (My stack or the console), then send the same request again.',
+    none: 'Next step: none.',
   },
   console: 'Console',
-  stepWord: 'Step',
   costWord: 'Cost',
+  previewMore: (rest) => `… and ${rest} more, in the console`,
   header: { restart: 'If the tool does not appear, reconnect the server.' },
   brief: {
     read: (h, t) => `SYM 👻: Read your brief: ${h} hint${h === 1 ? '' : 's'}, ${t} thing${t === 1 ? '' : 's'} already tried. I check each hint before I rely on it.`,
     title: 'Brief',
-    line: (id, kind, state, reason) => `${id} ${kind}: ${state}${reason === '' ? '' : ` (${reason})`}`,
+    line: (id, kind, state) => `${id} ${kind}: ${state}`,
+    kinds: { endpoint: 'endpoint', embedded_data: 'embedded data', selector: 'selector', pagination: 'pagination', example_url: 'example URL', pitfall: 'pitfall' },
     states: { used: 'used', verified_unused: 'verified, not kept', probe_failed: 'check failed', ignored: 'ignored' },
     more: (n) => `… and ${n} more, in the console`,
     breaker: 'SYM 👻: Two hints failed: I continue without your brief.',
@@ -237,22 +305,26 @@ const EN: NarrativeCatalog = {
 };
 
 const FR: NarrativeCatalog = {
-  title: (slug, domain, phase) => `Enquête ${slug}${domain === null ? '' : ` · ${domain}`} · ${phase}`,
+  takeOver: 'OK, je m’en occupe.',
+  title: (slug, domain) => `Enquête ${slug}${domain === null ? '' : ` · ${domain}`}`,
+  milestones: ['Décrire', 'Reconnaître', 'Valider le schéma', 'Extraire'],
   access: {
-    allowed: 'aucun signal à examiner',
-    review: 'signaux d’usage à examiner',
-    unknown: 'rapport d’accès enregistré',
+    allowed: 'accès au site vérifié, aucun signal à examiner',
+    review: 'accès au site vérifié, signaux d’usage à examiner',
+    unknown: 'accès au site vérifié',
   },
-  recon: (n, mode) => (n === 0 ? `aucune source de données trouvée${mode === null ? '' : ` (${mode})`}` : `${n} source${n === 1 ? '' : 's'} de données candidate${n === 1 ? '' : 's'}${mode === null ? '' : ` (${mode})`}`),
-  reconFailed: (c) => `échec (${c})`,
-  trial: (label, ok, result, records, pages) =>
-    `Essai ${label} : ${ok ? 'conforme' : result}${records === null ? '' : `, ${records} item${records === 1 ? '' : 's'}`}${pages === null ? '' : `, ${pages} page${pages === 1 ? '' : 's'}`}`,
+  recon: (n) => (n === 0 ? 'aucune source de données trouvée' : `${n} ${pluralFr(n, 'source de données candidate trouvée', 'sources de données candidates trouvées')}`),
+  reconFailed: (cause) => (cause === null ? 'la reconnaissance a échoué' : `la reconnaissance a échoué : ${cause}`),
+  schema: (ok, fields) => (ok ? (fields === null ? 'schéma de sortie proposé' : `${fields} ${pluralFr(fields, 'champ proposé', 'champs proposés')}`) : 'aucun schéma de sortie exploitable n’a pu être proposé'),
+  schemaValidated: 'schéma déjà validé',
+  extract: (tried, kept) => `${tried} ${pluralFr(tried, 'essai', 'essais')}${kept === null ? '' : `, retenu : ${kept}`}`,
+  trial: (method, ok, result, records, pages) =>
+    `${method.charAt(0).toUpperCase()}${method.slice(1)} : ${ok ? 'conforme' : (result ?? 'refusé')}${records === null ? '' : `, ${records} ${pluralFr(records, 'élément', 'éléments')}`}${pages === null ? '' : `, ${pages} ${pluralFr(pages, 'page', 'pages')}`}`,
   why: (code, reason) => {
-    if (code === 'agent_request_blocked') return `requête de l’agent refusée par la garde${reason === null ? '' : ` : ${REQUEST_REASON_FR[reason] ?? reason}${reason in REQUEST_REASON_FR ? ` (${reason})` : ''}`}`;
-    if (code === 'max_cost_usd') return 'l’essai a atteint le plafond par run fixé sur l’API (max_cost_usd)';
-    return `(${code})`;
+    if (code === 'agent_request_blocked') return `une requête de l’agent a été refusée par la garde des requêtes${reason === null ? '' : ` : ${REQUEST_REASON_FR[reason] ?? 'motif hors liste'}`}`;
+    if (code === 'max_cost_usd') return 'l’essai a atteint son plafond de coût';
+    return null;
   },
-  schema: (ok, fields) => (ok ? `Schéma de sortie proposé${fields === null ? '' : ` : ${fields} champs`}` : 'Aucun schéma de sortie exploitable n’a pu être proposé'),
   validated: (v) =>
     validatedSentence(v, {
       asProposed: 'Schéma validé tel que proposé.',
@@ -273,31 +345,36 @@ const FR: NarrativeCatalog = {
       colon: ' : ',
     }),
   retained: 'Schéma retenu',
-  pruned: (label, reason, count) => `${count} essai${count === 1 ? '' : 's'} plus coûteux écarté${count === 1 ? '' : 's'}${label === null ? '' : ` après ${label}`}${reason === null ? '' : ` (${reason})`}`,
-  strategy: (label, code, perRun) => `Stratégie retenue : ${label} (${code}, ${perRun} par run)`,
-  stopped: (cause) => `L’enquête s’est arrêtée${cause === null ? '' : ` (${cause})`} : SYM n’essaie pas d’autre voie pour atteindre le site.`,
-  stoppedAction: (cause) => `L’enquête s’est arrêtée (${cause}) : une action est attendue avant de reprendre.`,
-  failed: (c) => `L’enquête a échoué${c === null ? '' : ` (${c})`}.`,
+  pruned: (method, count) => `${count} ${pluralFr(count, 'méthode plus coûteuse écartée', 'méthodes plus coûteuses écartées')}${method === null ? '' : ` après ${method}`}`,
+  kept: (method, perRun) => `Méthode retenue : ${method}, ${perRun} par run`,
+  done: (items, perRun) => (items === null ? `C’est fait. ${perRun} par rejeu.` : `C’est fait. ${items} ${pluralFr(items, 'élément', 'éléments')}, ${perRun} par rejeu.`),
+  stopped: 'L’enquête s’est arrêtée. SYM n’essaie pas d’autre voie pour atteindre le site.',
+  stoppedAction: 'L’enquête s’est arrêtée : une action est attendue avant de reprendre.',
+  failed: (cause) => (cause === null ? 'L’enquête a échoué.' : `L’enquête a échoué : ${cause}.`),
   budget: 'Le budget d’enquête est épuisé avant qu’une stratégie conforme soit trouvée.',
   running: 'L’enquête est en cours.',
   cancelled: 'L’enquête est annulée ; les coûts déjà engagés restent imputés.',
-  action: (cause) => `Action attendue (${cause}).`,
+  action: 'Une action est attendue.',
   next: {
     validate: (ids) => `Prochaine étape : montre le schéma proposé à l’utilisateur, puis appelle validate_schema avec ${ids ?? 'cet api_id'} (output_schema seulement pour le corriger).`,
     run: (tool) => `Prochaine étape : appelle ${tool} avec son entrée, ou run_api.`,
     poll: (s, ids) => `Prochaine étape : appelle get_run avec ${ids ?? 'ce run_id'}${s === null ? '' : ` dans environ ${s} secondes`}.`,
     items: (ids) => `Prochaine étape : appelle get_items avec ${ids ?? 'next_cursor'} pour la suite.`,
-    none: 'Prochaine étape : aucune.',
     schemaRemark: (ids) => `Prochaine étape : ajuste le schéma à la remarque, montre-le de nouveau à l’utilisateur, puis appelle validate_schema avec ${ids === null ? '' : `${ids} et `}output_schema (ce qu’un schéma ne peut pas dire va dans instructions).`,
+    failed: 'Prochaine étape : dis à l’utilisateur ce qui s’est passé, puis propose d’ajuster la demande ou de relancer l’enquête (run_api avec force_investigate).',
+    blocked: 'Prochaine étape : propose à l’utilisateur une API officielle ou une autre source ; ne réessaie pas.',
+    action: 'Prochaine étape : demande à l’utilisateur de faire l’action indiquée (Ma stack ou la console), puis renvoie la même demande.',
+    none: 'Prochaine étape : aucune.',
   },
   console: 'Console',
-  stepWord: 'Étape',
   costWord: 'Coût',
+  previewMore: (rest) => `… et ${rest} autres, dans la console`,
   header: { restart: 'Si l’outil n’apparaît pas, reconnecte le serveur.' },
   brief: {
     read: (h, t) => `SYM 👻 : J’ai lu ton dossier : ${h} indice${h === 1 ? '' : 's'}, ${t} essai${t === 1 ? '' : 's'} déjà fait${t === 1 ? '' : 's'}. Je vérifie chaque indice avant de m’y fier.`,
     title: 'Dossier',
-    line: (id, kind, state, reason) => `${id} ${kind} : ${state}${reason === '' ? '' : ` (${reason})`}`,
+    line: (id, kind, state) => `${id} ${kind} : ${state}`,
+    kinds: { endpoint: 'point d’accès', embedded_data: 'données intégrées', selector: 'sélecteur', pagination: 'pagination', example_url: 'URL d’exemple', pitfall: 'piège' },
     states: { used: 'utilisé', verified_unused: 'vérifié, non retenu', probe_failed: 'vérification échouée', ignored: 'ignoré' },
     more: (n) => `… et ${n} autres, dans la console`,
     breaker: 'SYM 👻 : Deux indices ont échoué : je continue sans ton dossier.',
@@ -350,7 +427,7 @@ export const elicitationCatalog = (locale: McpLocale): ElicitationCatalog => (lo
 // Prompts : titres et descriptions (personne, menu du client) ; les corps sont en anglais (modèle, prompts.ts)
 // ---------------------------------------------------------------------------------------------------------------
 
-export const PROMPT_NAMES = ['new_api', 'fix_api', 'first_steps', 'review_catalog'] as const;
+export const PROMPT_NAMES = ['new_api', 'fix_api', 'first_steps', 'review_catalog', 'resume_api'] as const;
 export type PromptName = (typeof PROMPT_NAMES)[number];
 
 export const PROMPT_MENU: Record<McpLocale, Record<PromptName, { title: string; description: string }>> = {
@@ -359,12 +436,14 @@ export const PROMPT_MENU: Record<McpLocale, Record<PromptName, { title: string; 
     fix_api: { title: 'sym:fix-api', description: 'Understand why an API is not healthy and what to do about it.' },
     first_steps: { title: 'sym:first-steps', description: 'A guided first run: see SYM investigate a page and return clean data.' },
     review_catalog: { title: 'sym:review-catalog', description: 'Review the API catalog: statuses, costs, what needs attention.' },
+    resume_api: { title: 'sym:resume-api', description: 'Pick up the refinement of an API where a previous conversation left it.' },
   },
   fr: {
     new_api: { title: 'sym:new-api', description: 'Transformer une demande de données sur un site en API réutilisable.' },
     fix_api: { title: 'sym:fix-api', description: 'Comprendre pourquoi une API n’est pas saine et quoi faire.' },
     first_steps: { title: 'sym:first-steps', description: 'Un premier essai guidé : voir SYM enquêter sur une page et rendre des données propres.' },
     review_catalog: { title: 'sym:review-catalog', description: 'Passer le catalogue en revue : statuts, coûts, ce qui demande de l’attention.' },
+    resume_api: { title: 'sym:resume-api', description: 'Reprendre l’affinage d’une API là où une conversation précédente l’a laissé.' },
   },
 };
 

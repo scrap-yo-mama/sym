@@ -1,0 +1,8 @@
+SYM 👻: Got it, I’m on it.
+Investigation zz-books · zz-books.example
+1/4 Describe: site access checked, no signal to review [0.2 s, $0]
+2/4 Recognize: 1 candidate data source found [3.1 s, $0.002]
+3/4 Validate the schema: 3 fields proposed [$0.002]
+Cost: $0.006
+Next step: show the proposed schema to the user, then call validate_schema with api_id 11111111-2222-4333-8444-555555555555 (add output_schema only to correct it).
+Console: https://sym.example/apis/zz-books

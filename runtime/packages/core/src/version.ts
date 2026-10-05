@@ -8,6 +8,27 @@ export const MIN_EXTENSION_VERSION = '0.0.0';
 /** Version de la spécification MCP servie (05, spec sans état, Streamable HTTP). */
 export const MCP_SPEC_VERSION = '2026-07-28';
 
+/** Version affichée par une image construite sans `--build-arg RUNTIME_VERSION` : un placeholder, jamais une version réelle. */
+export const PLACEHOLDER_VERSION = '0.0.0';
+
+/** Un commit Git lisible : 7 à 64 caractères hexadécimaux (aucune branche, aucun chemin, aucune valeur libre). */
+const COMMIT = /^[0-9a-f]{7,64}$/i;
+
+export type BuildInfo = { version: string; commit?: string };
+
+/**
+ * Identité publiée par `/api/version`, `/api/health` et `serverInfo` (U4.1, UX-10). Version : `RUNTIME_VERSION` posée par la
+ * release, sinon la version du paquet (`packageVersion`) quand l'image est construite sans argument (staging Render, build
+ * depuis le dépôt) ; le placeholder `0.0.0` ne reste que si rien d'autre n'est lisible. Commit : `RUNTIME_COMMIT`, sinon
+ * `RENDER_GIT_COMMIT` (posée par Render) ; une valeur qui n'est pas un commit hexadécimal est ignorée.
+ */
+export function resolveBuildInfo(env: Record<string, string | undefined>, packageVersion: string | undefined): BuildInfo {
+  const fromEnv = env['RUNTIME_VERSION'];
+  const version = fromEnv && fromEnv !== PLACEHOLDER_VERSION ? fromEnv : (packageVersion ?? PLACEHOLDER_VERSION);
+  const commit = [env['RUNTIME_COMMIT'], env['RENDER_GIT_COMMIT']].find((c) => c !== undefined && COMMIT.test(c));
+  return commit === undefined ? { version } : { version, commit };
+}
+
 export type Semver = { major: number; minor: number; patch: number; pre: string[] };
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;

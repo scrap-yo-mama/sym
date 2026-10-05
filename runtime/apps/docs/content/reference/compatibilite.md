@@ -7,15 +7,16 @@ description: "GET /api/version, versions d'extension acceptées, PostgreSQL, Nod
 
 ## `GET /api/version`
 
-Route publique, servie **localement** : l'instance n'interroge aucun serveur distant pour répondre (voir [Télémétrie](../explications/telemetrie.md)). Elle renvoie exactement quatre champs, aucune version de dépendance, aucun nom d'hôte. Exemple de réponse (les valeurs dépendent de l'instance) :
+Route publique, servie **localement** : l'instance n'interroge aucun serveur distant pour répondre (voir [Télémétrie](../explications/telemetrie.md)). Elle renvoie quatre champs, plus le commit de l'image quand il est connu ; aucune version de dépendance, aucun nom d'hôte. Exemple de réponse (les valeurs dépendent de l'instance) :
 
 ```json
-{ "server": "0.0.0", "schema": 11, "min_extension": "0.0.0", "mcp_spec": "2026-07-28" }
+{ "server": "1.0.0", "commit": "2b5c91c9e0c8d4f7a1b2c3d4e5f60718293a4b5c", "schema": 11, "min_extension": "0.0.0", "mcp_spec": "2026-07-28" }
 ```
 
 | Champ | Sens |
 |---|---|
-| `server` | version de l'instance (SemVer), posée à la construction de l'image par la chaîne de release (`RUNTIME_VERSION`). Une image construite à la main sans cette valeur annonce `0.0.0` |
+| `server` | version de l'instance (SemVer), posée à la construction de l'image par la chaîne de release (`RUNTIME_VERSION`). Une image construite à la main sans cette valeur annonce la version du paquet |
+| `commit` | commit Git de l'image (`RUNTIME_COMMIT`, sinon `RENDER_GIT_COMMIT` que Render pose lui-même) ; absent quand l'image n'en porte pas. Le MCP le reprend dans `serverInfo.version` (`1.0.0+2b5c91c`) |
 | `schema` | version du schéma de base que ce code attend |
 | `min_extension` | version minimale de l'extension Chrome acceptée à l'appairage |
 | `mcp_spec` | version de la spécification MCP servie |

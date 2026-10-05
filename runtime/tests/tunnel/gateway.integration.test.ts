@@ -282,6 +282,28 @@ describe('commandes', () => {
     await s2.close();
   });
 
+  test('U3.4 — resume après reconnexion : run reconnu journalisé, commande en attente rattrapée ; run d’un autre utilisateur refusé sans fermer la connexion ; trame mal formée → 4400', async () => {
+    const devA = await device(a.id);
+    const runA = await runOf(a.id);
+    const runB = await runOf(b.id);
+    // Commande en attente avant toute connexion : elle part dès la reconnexion.
+    const pending = send(job(runA, a.id));
+    await new Promise((r) => setTimeout(r, 200));
+    const s1 = sim(devA.token, { handler: () => okFetch('{"resumed":true}') });
+    expect(await s1.welcome).toBe(true);
+    s1.send(JSON.stringify({ type: 'resume', run_id: runA, last_command_seq: 3 }));
+    expect(await pending).toMatchObject({ kind: 'result', result: { body: { body: '{"resumed":true}' } } });
+    await vi.waitFor(async () => expect((await auditActions('tunnel.resumed')).some((e) => e.meta['run_id'] === runA && e.meta['last_command_seq'] === 3)).toBe(true), { timeout: 10_000 });
+    // Run d'un autre utilisateur : refusé (INV5), journalisé, la connexion reste ouverte.
+    s1.send(JSON.stringify({ type: 'resume', run_id: runB, last_command_seq: 1 }));
+    await vi.waitFor(async () => expect((await auditActions('tunnel.resume_denied')).some((e) => e.meta['run_id'] === runB && e.outcome === 'denied')).toBe(true), { timeout: 10_000 });
+    expect((await auditActions('tunnel.resumed')).some((e) => e.meta['run_id'] === runB)).toBe(false);
+    expect(s1.socket.readyState).toBe(1);
+    // Trame hors contrat : violation de protocole.
+    s1.send(JSON.stringify({ type: 'resume', run_id: 'pas-un-uuid', last_command_seq: 1 }));
+    expect(await s1.closed).toBe(4400);
+  });
+
   test('extension hors ligne : le run attend (waiting_tunnel), puis tunnel_offline ; rattrapage dès la connexion', async () => {
     const runA = await runOf(a.id);
     const waits: boolean[] = [];

@@ -201,15 +201,17 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
       url: 'https://zz-test-books.example/catalogue',
       network_policy: { allow: ['direct'] },
       example_output: [{ title: 'x', price: 1 }],
+      auto_validate: false,
     });
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({ investigation_phase: 'access_check', proposed_output_schema: null, sample: [], access_report: null });
-    expect(created.body['slug']).toMatch(/^les-livres-catalogue-test/);
+    // UX-08 : slug court « objet-domaine » (les deux premiers mots utiles de la demande, puis le domaine), suffixé d'un aléa.
+    expect(created.body['slug']).toMatch(/^livres-catalogue-zz-test-books-[0-9a-f]{6}$/);
     const runId = created.body['run_id'] as string;
     expect(await count("SELECT count(*) FROM runs WHERE id = $1 AND kind = 'investigation' AND state = 'queued' AND job_id IS NOT NULL", [runId])).toBe(1);
     // L'exemple de sortie va dans l'entrée du run, jamais dans l'état de l'API (17 § 6).
     expect(await count("SELECT count(*) FROM runs WHERE id = $1 AND input -> 'example_output' IS NOT NULL", [runId])).toBe(1);
-    const second = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'Les livres du catalogue zz test, avec titre et prix', url: 'https://zz-test-books.example/' });
+    const second = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'Les livres du catalogue zz test, avec titre et prix', url: 'https://zz-test-books.example/', auto_validate: false });
     expect(second.body['slug']).not.toBe(created.body['slug']);
 
     const detail = await api(a, 'GET', `/api/apis/${created.body['slug']}`, '/api/apis/{slug}');
@@ -240,6 +242,7 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
       description: 'Les romans du catalogue zz domaine, avec titre',
       url: 'https://Romans.ZZ-Test-Domaine.example/liste?page=1',
       network_policy: { allow: ['direct'] },
+      auto_validate: false,
     });
     expect(created.status).toBe(201);
     const seeded = await seedApi(srv.db.url, a.user.id);
@@ -257,9 +260,9 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
   });
 
   test('POST /api/apis refuse : URL à jeton, politique réseau inconnue, corps hors schéma (400) ; validation automatique sans « j’ai lu » (403)', async () => {
-    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/?token=abc' })).body).toMatchObject({ error: { code: 'invalid_request' } });
-    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', network_policy: { allow: ['dc_proxy'], proxy_ids: { dc_proxy: 'zz-unknown' } } })).body).toMatchObject({ error: { code: 'invalid_network_policy' } });
-    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', zz_unknown: true })).status).toBe(400);
+    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/?token=abc', auto_validate: false })).body).toMatchObject({ error: { code: 'invalid_request' } });
+    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', auto_validate: false, network_policy: { allow: ['dc_proxy'], proxy_ids: { dc_proxy: 'zz-unknown' } } })).body).toMatchObject({ error: { code: 'invalid_network_policy' } });
+    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', auto_validate: false, zz_unknown: true })).status).toBe(400);
     expect((await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', auto_validate: true })).body).toMatchObject({ error: { code: 'responsible_use_ack_required' } });
   });
 
@@ -356,15 +359,15 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
 
   test('assert_slug_no_existence_hint : slug : jamais d’indice qu’une API invisible porte un slug (13 § 3) ; URL illisible → 400 invalid_request, jamais 500', async () => {
     // Une API PRIVÉE de B porte le slug que la description de A donnerait.
-    await seedApi(srv.db.url, b.user.id, { slug: 'oracle-probe-target' });
-    const taken = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle probe target', url: 'https://zz-test-slug.example/' });
-    const free = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle probe unused', url: 'https://zz-test-slug.example/' });
+    await seedApi(srv.db.url, b.user.id, { slug: 'oracle-target-zz-test-slug' });
+    const taken = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle target', url: 'https://zz-test-slug.example/', auto_validate: false });
+    const free = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle unused', url: 'https://zz-test-slug.example/', auto_validate: false });
     expect(taken.status).toBe(201);
     expect(free.status).toBe(201);
     // Même forme, que la base soit prise par une API invisible ou libre : rien ne distingue les deux cas.
-    expect(taken.body['slug']).toMatch(/^oracle-probe-target-[0-9a-f]{6}$/);
-    expect(free.body['slug']).toMatch(/^oracle-probe-unused-[0-9a-f]{6}$/);
-    const bad = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'zz-pas-une-url' });
+    expect(taken.body['slug']).toMatch(/^oracle-target-zz-test-slug-[0-9a-f]{6}$/);
+    expect(free.body['slug']).toMatch(/^oracle-unused-zz-test-slug-[0-9a-f]{6}$/);
+    const bad = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'zz-pas-une-url', auto_validate: false });
     expect(bad.status).toBe(400);
     expect(bad.body).toMatchObject({ error: { code: 'invalid_request' } });
   });
@@ -398,12 +401,12 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
   });
 
   test('assert_brief_optional (REST) : `POST /api/apis` accepte `brief` (05 § 4.2, 19c) ; sans dossier, aucune clé de dossier dans la réponse', async () => {
-    const without = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test sans dossier', url: 'https://zz-test-nobrief.example/' });
+    const without = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test sans dossier', url: 'https://zz-test-nobrief.example/', auto_validate: false });
     expect(without.status).toBe(201);
     expect(without.body).not.toHaveProperty('brief_report');
     expect(await count('SELECT count(*) FROM api_briefs WHERE api_id = $1', [without.body.api_id])).toBe(0);
     const brief = { v: 1, hints: [{ id: 'h1', kind: 'endpoint', value: 'GET https://zz-test-brief-rest.example/api/items', confidence: 'high' }], tried: [{ approach: 'fetch_html', outcome: 'empty' }] };
-    const withBrief = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test avec dossier', url: 'https://zz-test-brief-rest.example/', brief });
+    const withBrief = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test avec dossier', url: 'https://zz-test-brief-rest.example/', auto_validate: false, brief });
     expect(withBrief.status).toBe(201);
     expect(withBrief.body).toMatchObject({ brief_version: 1, brief_report: [{ id: 'h1', kind: 'endpoint', state: 'unverified', template: 'zz-test-brief-rest.example/api/items' }] });
     // Session console : `via = console` (une clé d'API : `rest`, MCP : `mcp`).
@@ -411,7 +414,7 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
   });
 
   test('assert_authz_matrix (dossier d’enquête) : GET /api/apis/{slug}/brief au propriétaire ; 404 uniforme pour un membre, même sur une API partagée d’instance', async () => {
-    const created = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test dossier partagé', url: 'https://zz-test-brief-shared.example/', visibility: 'instance', brief: { v: 1, notes: 'zz_test_brief_note_of_a', hints: [{ id: 'h1', kind: 'pitfall', value: 'zz_test_brief_value_of_a' }] } });
+    const created = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test dossier partagé', url: 'https://zz-test-brief-shared.example/', auto_validate: false, visibility: 'instance', brief: { v: 1, notes: 'zz_test_brief_note_of_a', hints: [{ id: 'h1', kind: 'pitfall', value: 'zz_test_brief_value_of_a' }] } });
     expect(created.status).toBe(201);
     const slug = created.body.slug as string;
     const mine = await api(a, 'GET', `/api/apis/${slug}/brief`, '/api/apis/{slug}/brief');
@@ -421,9 +424,9 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     for (const party of [b, admin]) {
       const other = await api(party, 'GET', `/api/apis/${slug}/brief`, '/api/apis/{slug}/brief');
       expect(other.status).toBe(404);
-      expect(other.body).toEqual({ error: { code: 'not_found', message: 'Resource not found.' } });
+      expect(other.body).toMatchObject({ error: { code: 'not_found', message: 'Resource not found.' } });
     }
-    expect((await api(b, 'GET', '/api/apis/zz-test-does-not-exist/brief', '/api/apis/{slug}/brief')).body).toEqual({ error: { code: 'not_found', message: 'Resource not found.' } });
+    expect((await api(b, 'GET', '/api/apis/zz-test-does-not-exist/brief', '/api/apis/{slug}/brief')).body).toMatchObject({ error: { code: 'not_found', message: 'Resource not found.' } });
   });
 
   test('admin et owner : métadonnées seules d’une API à session d’autrui ; un membre reçoit 404', async () => {
@@ -497,7 +500,7 @@ describe('assert_persistence_opt_in_only : PATCH /api/apis/{slug} (D-49, mode «
 
 describe('assert_responsible_use_ack : 17 § 11, case « j’ai lu » et API à données personnelles', () => {
   test('sans la case, la validation d’un schéma `x-personal` est refusée ; cochée, elle passe', async () => {
-    const created = await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annuaire', url: 'https://zz-test-people.example/' });
+    const created = await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annuaire', url: 'https://zz-test-people.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const personal = { type: 'object', additionalProperties: false, properties: { name: { type: 'string', 'x-personal': true } } };
     // Worker simulé : schéma proposé, phase d'attente de validation, run d'enquête terminé.
@@ -528,7 +531,7 @@ describe('assert_responsible_use_ack : 17 § 11, case « j’ai lu » et API à 
 describe('validation du schéma : case « j’ai lu » non contournable, ordre déclaré des colonnes', () => {
   /** API créée par `party`, worker simulé : schéma proposé, phase d'attente de validation, run d'enquête terminé. */
   const awaitingValidation = async (party: Party, proposed: Record<string, unknown>) => {
-    const created = await api(party, 'POST', '/api/apis', '/api/apis', { description: 'zz_test validation du schéma', url: 'https://zz-test-schema.example/' });
+    const created = await api(party, 'POST', '/api/apis', '/api/apis', { description: 'zz_test validation du schéma', url: 'https://zz-test-schema.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     await withClient(srv.db.url, async (c) => {
       await c.query(
@@ -859,7 +862,7 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
 
   test('cancel d’une enquête sans worker (en file ou en pause) : l’API quitte `enquete` par la machine (transition 2), phase close', async () => {
     for (const paused of [false, true]) {
-      const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: `zz_test enquête annulée ${paused ? 'en pause' : 'en file'}`, url: 'https://zz-test-cancel.example/' });
+      const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: `zz_test enquête annulée ${paused ? 'en pause' : 'en file'}`, url: 'https://zz-test-cancel.example/', auto_validate: false });
       const runId = created.body['run_id'] as string;
       if (paused) expect((await api(a, 'POST', `/api/runs/${runId}/pause`, '/api/runs/{id}/pause')).status).toBe(202);
       const res = await api(a, 'POST', `/api/runs/${runId}/cancel`, '/api/runs/{id}/cancel');
@@ -874,7 +877,7 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
   });
 
   test('assert_cancel_reinvestigation_restores_status : cancel d’une RÉ-enquête d’une API saine : retour au statut d’avant (transition 21), stratégie gardée, run accepté ensuite (INV3)', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete annulee', url: 'https://zz-test-recancel.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete annulee', url: 'https://zz-test-recancel.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const slug = created.body['slug'] as string;
     // Worker simulé : première enquête conforme (stratégie v1), API saine.
@@ -897,7 +900,7 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
   });
 
   test('cancel d’une enquête : annulation et transition au MÊME COMMIT ; si la transition échoue, rien n’est écrit (jamais `enquete` sans run)', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annulation atomique', url: 'https://zz-test-atomic-cancel.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annulation atomique', url: 'https://zz-test-atomic-cancel.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const runId = created.body['run_id'] as string;
     expect(apiId).toMatch(/^[0-9a-f-]{36}$/);
@@ -996,7 +999,7 @@ describe('aperçu des règles résolues (19 § 2, 19b § 2, tâche 2.10)', () =>
 
 describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () => {
   test('investigate : 19/20 depuis sain, 18 depuis bloquee, 17 depuis action_requise ; 409 si une enquête tourne ; demande inconnue → 409', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete', url: 'https://zz-test-re.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete', url: 'https://zz-test-re.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const slug = created.body['slug'] as string;
     expect((await api(a, 'POST', `/api/apis/${slug}/investigate`, '/api/apis/{slug}/investigate', {})).body).toMatchObject({ error: { code: 'investigation_in_progress' } });
@@ -1019,7 +1022,7 @@ describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () 
   });
 
   test('investigate : transition et enquête au MÊME COMMIT ; l’enquête refusée ne laisse jamais l’API en `enquete` sans run', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete atomique', url: 'https://zz-test-re-atomic.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete atomique', url: 'https://zz-test-re-atomic.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const slug = created.body['slug'] as string;
     // Première enquête terminée, API saine ; la demande gardée devient illisible (refusée par startInvestigation).
@@ -1042,7 +1045,7 @@ describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () 
   });
 
   test('assert_blocked_reinvestigation_human_only : clé d’API sur une API `bloquee` → 403 human_confirmation_required, aucune transition, aucun run (04 § 6, transition 18)', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test bloquee par cle', url: 'https://zz-test-blocked-key.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test bloquee par cle', url: 'https://zz-test-blocked-key.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const slug = created.body['slug'] as string;
     await withClient(srv.db.url, async (c) => {
@@ -1915,6 +1918,166 @@ describe('agent instruit (2.13, 19 § 4) : confirmation humaine des étapes inst
     const refused = await api(a, 'PUT', `/api/apis/${compilable.slug}/instructed-mode`, '/api/apis/{slug}/instructed-mode', { enabled: true });
     expect(refused.status).toBe(409);
     expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND instructed_mode', [compilable.id])).toBe(0);
+  });
+});
+
+describe('itération (3.14, 19 § 6) : brouillon, test, promotion (acte humain), retour de version, reprise', () => {
+  const SCHEMA_SURFACE = { type: 'object', additionalProperties: false, required: ['title'], properties: { title: { type: 'string', 'x-key': true }, price: { type: 'number' }, note: { type: 'string' }, surface: { type: 'number' } } };
+  const SCHEMA_RENAMED = { type: 'object', additionalProperties: false, required: ['title'], properties: { title: { type: 'string', 'x-key': true }, prix: { type: 'number' }, note: { type: 'string' } } };
+  const REF_ITEMS = [{ title: 'a', price: 10 }, { title: 'b', price: 20 }, { title: 'c', price: 30 }];
+  const DRAFT_ITEMS = [{ title: 'a', price: 10, surface: 40 }, { title: 'b', price: 20, surface: 55 }, { title: 'c', price: 31, surface: 70 }];
+  const DRAFT_RENAMED = [{ title: 'a', prix: 10 }, { title: 'b', prix: 20 }, { title: 'c', prix: 30 }];
+
+  /** Worker simulé : termine les runs `draft_test` (brouillon et référence) dès qu'ils sont créés. */
+  async function finishTestRuns(apiId: string, draftItems: Record<string, unknown>[], refItems: Record<string, unknown>[] = REF_ITEMS): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    let done = 0;
+    while (done < 2 && Date.now() < deadline) {
+      const rows = await withClient(srv.db.url, async (c) =>
+        (await c.query<{ id: string; strategy_version: number; cur: number }>("SELECT r.id, r.strategy_version, a.current_strategy_version AS cur FROM runs r JOIN apis a ON a.id = r.api_id WHERE r.api_id = $1 AND r.trigger = 'draft_test' AND r.state = 'queued'", [apiId])).rows,
+      );
+      for (const r of rows) {
+        await completeRun(r.id, r.strategy_version === r.cur ? refItems : draftItems);
+        done += 1;
+      }
+      if (rows.length === 0) await new Promise((res) => setTimeout(res, 25));
+    }
+  }
+
+  const keyOf = async (party: Party, scopes: string[]) =>
+    (await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: { cookie: party.cookie, origin: PUBLIC_URL }, payload: { label: 'zz itération', scopes, currentPassword: party.user.password } })).json<{ key: string }>().key;
+
+  async function readyDraft(schema: Record<string, unknown>, draftItems: Record<string, unknown>[], opts: { status?: string } = {}) {
+    const seeded = await seedApi(srv.db.url, a.user.id, opts.status === undefined ? {} : { status: opts.status });
+    const refined = await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'ajoute la surface', output_schema: schema });
+    expect(refined.status).toBe(200);
+    const finishing = finishTestRuns(seeded.id, draftItems);
+    const tested = await api(a, 'POST', `/api/apis/${seeded.slug}/test?wait=5`, '/api/apis/{slug}/test', { input: { page: 1 } });
+    await finishing;
+    return { seeded, refined, tested };
+  }
+
+  test('refine : brouillon créé, version en service et statut inchangés ; estimation seule en dry_run ; un autre membre : 404', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    const dry = await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'ajoute la surface', dry_run: true });
+    expect(dry).toMatchObject({ status: 200, body: { dry_run: true, estimate: { basis: 'none', above_cap: false } } });
+    expect(await count('SELECT count(*) FROM strategy_versions WHERE api_id = $1', [seeded.id])).toBe(1);
+    const refined = await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'ajoute la surface', output_schema: SCHEMA_SURFACE });
+    expect(refined).toMatchObject({ status: 200, body: { draft_version: 2, base_version: 1, schema_level: 'minor', output_schema_version: '1.1.0-draft.1', next_action: { tool: 'test_api' } } });
+    expect(refined.body['summary']).toMatch(/Brouillon prêt|Draft ready/);
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 1 AND status = 'sain' AND draft_strategy_version = 2", [seeded.id])).toBe(1);
+    expect(await count('SELECT count(*) FROM status_events WHERE api_id = $1', [seeded.id])).toBe(0);
+    // Le schéma en service ne change que par promotion : PATCH répond toujours draft_required.
+    expect((await api(a, 'PATCH', `/api/apis/${seeded.slug}`, '/api/apis/{slug}', { output_schema: SCHEMA_SURFACE })).status).toBe(409);
+    expect((await api(b, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'x' })).status).toBe(404);
+    const empty = await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', {});
+    expect(empty).toMatchObject({ status: 400, body: { error: { code: 'nothing_to_refine' } } });
+    const blocked = await seedApi(srv.db.url, a.user.id, { status: 'bloquee' });
+    const refused = await api(a, 'POST', `/api/apis/${blocked.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'x' });
+    expect(refused).toMatchObject({ status: 409, body: { error: { code: 'api_blocked', retryable: false } } });
+    expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [blocked.id])).toBe(0);
+  });
+
+  test('test puis reprise : 202 tant que les runs ne sont pas finis, GET iteration enregistre le test (diff, empreinte) et donne la prochaine étape', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'ajoute la surface', output_schema: SCHEMA_SURFACE });
+    const dry = await api(a, 'POST', `/api/apis/${seeded.slug}/test`, '/api/apis/{slug}/test', { input: { page: 1 }, dry_run: true });
+    expect(dry).toMatchObject({ status: 200, body: { dry_run: true, needs_reference: true } });
+    // Entrée hors input_schema : refus avant tout run.
+    expect((await api(a, 'POST', `/api/apis/${seeded.slug}/test`, '/api/apis/{slug}/test', { input: { page: 0 } })).status).toBe(400);
+    expect(await count("SELECT count(*) FROM runs WHERE api_id = $1 AND trigger = 'draft_test'", [seeded.id])).toBe(0);
+    const started = await api(a, 'POST', `/api/apis/${seeded.slug}/test?wait=0`, '/api/apis/{slug}/test', { input: { page: 1 } });
+    expect(started).toMatchObject({ status: 202, body: { state: 'running', draft_version: 2 } });
+    expect(await count("SELECT count(*) FROM runs WHERE api_id = $1 AND trigger = 'draft_test'", [seeded.id])).toBe(2);
+    const before = await api(a, 'GET', `/api/apis/${seeded.slug}/iteration`, '/api/apis/{slug}/iteration');
+    expect(before.body).toMatchObject({ next_step: 'test', draft: { version: 2, tested: false } });
+    await finishTestRuns(seeded.id, DRAFT_ITEMS);
+    const after = await api(a, 'GET', `/api/apis/${seeded.slug}/iteration`, '/api/apis/{slug}/iteration');
+    expect(after.body).toMatchObject({ status: 'sain', current_version: 1, next_step: 'promote', draft: { version: 2, tested: true, last_test: { ok: true, items: 3, reference: 'run' } }, promotion: { level: 'minor', ready_error: null } });
+    expect(after.body['draft'].last_test.diff_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(after.body['draft'].last_test.diff).toMatchObject({ identity: 'key', changed: 3 });
+    expect(after.body['next_action']).toMatchObject({ tool: 'promote_api' });
+    // Reprise : propriétaire seul.
+    expect((await api(b, 'GET', `/api/apis/${seeded.slug}/iteration`, '/api/apis/{slug}/iteration')).status).toBe(404);
+    // Aucun statut n'a bougé pendant le test.
+    expect(await count('SELECT count(*) FROM status_events WHERE api_id = $1', [seeded.id])).toBe(0);
+  });
+
+  test('promotion depuis la console : diff_hash exigé (409), version en service déplacée, statut inchangé sur sain ; le test réussi dans l’attente rend 200', async () => {
+    const { seeded, tested } = await readyDraft(SCHEMA_SURFACE, DRAFT_ITEMS);
+    expect(tested).toMatchObject({ status: 200, body: { state: 'succeeded', test: { ok: true, llm_free: true }, next_action: { tool: 'promote_api' } } });
+    const hash = tested.body['test'].diff_hash as string;
+    const stale = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: 'a'.repeat(64) });
+    expect(stale).toMatchObject({ status: 409, body: { error: { code: 'diff_hash_mismatch' } } });
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 1', [seeded.id])).toBe(1);
+    const promoted = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: hash });
+    expect(promoted).toMatchObject({ status: 200, body: { current_version: 2, previous_version: 1, status: 'sain', transition: null, output_schema_version: '1.1.0' } });
+    expect(promoted.body['summary']).toMatch(/Version 2/);
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 2 AND output_schema ->> 'type' = 'object' AND output_schema -> 'properties' ? 'surface'", [seeded.id])).toBe(1);
+    // Rien d'écrit au statut : une promotion sur sain n'est pas une transition.
+    expect(await count('SELECT count(*) FROM status_events WHERE api_id = $1', [seeded.id])).toBe(0);
+    // Audit : l'acte et sa nature humaine.
+    expect(await count("SELECT count(*) FROM audit_events WHERE action = 'api.promoted' AND target_id = $1 AND meta ->> 'human' = 'console'", [seeded.id])).toBe(1);
+  });
+
+  test('assert_promotion_requires_human : un changement major par clé d’API, avec ou sans acknowledge_breaking, répond 403 human_confirmation_required et ne bouge rien ; console : accusé exigé', async () => {
+    const { seeded, tested } = await readyDraft(SCHEMA_RENAMED, DRAFT_RENAMED);
+    const hash = tested.body['test'].diff_hash as string;
+    const key = await keyOf(a, ['apis:read', 'apis:write', 'apis:run']);
+    for (const acknowledge of [false, true]) {
+      const res = await srv.app.inject({ method: 'POST', url: `/api/apis/${seeded.slug}/promote`, headers: { authorization: `Bearer ${key}` }, payload: { diff_hash: hash, acknowledge_breaking: acknowledge, elicitation: 'accepted' } });
+      expect(res.statusCode, `acknowledge=${acknowledge}`).toBe(403);
+      expect(contract.check('POST', '/api/apis/{slug}/promote', 403, res.json())).toEqual([]);
+      expect(res.json()).toMatchObject({ error: { code: 'human_confirmation_required', level: 'major', next_action: { url: expect.stringContaining(`/apis/${seeded.slug}`) } } });
+      expect(res.json().error.impacted).toBeInstanceOf(Array);
+    }
+    // L'élicitation écrite par un client REST n'est jamais honorée (seul le canal interne du serveur MCP la porte).
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 1', [seeded.id])).toBe(1);
+    // Console : sans l'accusé, 409 ; avec lui, la promotion passe.
+    const noAck = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: hash });
+    expect(noAck).toMatchObject({ status: 409, body: { error: { code: 'breaking_change_requires_ack', level: 'major' } } });
+    const ok = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: hash, acknowledge_breaking: true });
+    expect(ok).toMatchObject({ status: 200, body: { current_version: 2, output_schema_version: '2.0.0' } });
+    // Une clé peut promouvoir un changement minor par un appel explicite du propriétaire (sans élicitation) ; all_in_console le ferme.
+    const minor = await readyDraft(SCHEMA_SURFACE, DRAFT_ITEMS);
+    await withClient(srv.db.url, (c) => c.query("UPDATE users SET promotion_gate = 'all_in_console' WHERE id = $1", [a.user.id]));
+    const closed = await srv.app.inject({ method: 'POST', url: `/api/apis/${minor.seeded.slug}/promote`, headers: { authorization: `Bearer ${key}` }, payload: { diff_hash: minor.tested.body['test'].diff_hash } });
+    expect(closed.statusCode).toBe(403);
+    await withClient(srv.db.url, (c) => c.query("UPDATE users SET promotion_gate = 'major_in_console' WHERE id = $1", [a.user.id]));
+    const open = await srv.app.inject({ method: 'POST', url: `/api/apis/${minor.seeded.slug}/promote`, headers: { authorization: `Bearer ${key}` }, payload: { diff_hash: minor.tested.body['test'].diff_hash } });
+    expect(open.statusCode).toBe(200);
+    expect(contract.check('POST', '/api/apis/{slug}/promote', 200, open.json())).toEqual([]);
+    expect(await count("SELECT count(*) FROM audit_events WHERE action = 'api.promoted' AND target_id = $1 AND meta ->> 'human' = 'explicit_owner_call'", [minor.seeded.id])).toBe(1);
+  });
+
+  test('transition 22 : promotion depuis erreur → warning (promoted), journalisée', async () => {
+    const { seeded, tested } = await readyDraft(SCHEMA_SURFACE, DRAFT_ITEMS, { status: 'erreur' });
+    const promoted = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: tested.body['test'].diff_hash });
+    expect(promoted).toMatchObject({ status: 200, body: { transition: 22, status: 'warning' } });
+    expect(await count("SELECT count(*) FROM status_events WHERE api_id = $1 AND from_status = 'erreur' AND to_status = 'warning' AND reason = 'promoted'", [seeded.id])).toBe(1);
+  });
+
+  test('revert : retour vers une version qui a été en service (accusé si le schéma change), version jamais courante refusée, brouillon jeté', async () => {
+    const { seeded, tested } = await readyDraft(SCHEMA_SURFACE, DRAFT_ITEMS);
+    await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: tested.body['test'].diff_hash });
+    // Vers la v1 (schéma 1.0.0, la courante est en 1.1.0) : autre version de schéma → accusé, comme un changement major.
+    const noAck = await api(a, 'POST', `/api/apis/${seeded.slug}/revert`, '/api/apis/{slug}/revert', {});
+    expect(noAck).toMatchObject({ status: 409, body: { error: { code: 'breaking_change_requires_ack' } } });
+    const key = await keyOf(a, ['apis:read', 'apis:write']);
+    const viaKey = await srv.app.inject({ method: 'POST', url: `/api/apis/${seeded.slug}/revert`, headers: { authorization: `Bearer ${key}` }, payload: {} });
+    expect(viaKey.statusCode).toBe(403);
+    expect(contract.check('POST', '/api/apis/{slug}/revert', 403, viaKey.json())).toEqual([]);
+    const reverted = await api(a, 'POST', `/api/apis/${seeded.slug}/revert`, '/api/apis/{slug}/revert', { acknowledge_breaking: true });
+    expect(reverted).toMatchObject({ status: 200, body: { current_version: 1, previous_version: 2, reason: 'reverted', output_schema_version: '1.0.0' } });
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 1 AND NOT (output_schema -> 'properties' ? 'surface')", [seeded.id])).toBe(1);
+    // Brouillon écarté : jamais rétabli.
+    await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'autre idée' });
+    const discarded = await api(a, 'DELETE', `/api/apis/${seeded.slug}/draft`, '/api/apis/{slug}/draft');
+    expect(discarded).toMatchObject({ status: 200, body: { archived_version: 3 } });
+    expect((await api(a, 'DELETE', `/api/apis/${seeded.slug}/draft`, '/api/apis/{slug}/draft')).body).toMatchObject({ error: { code: 'no_draft' } });
+    const never = await api(a, 'POST', `/api/apis/${seeded.slug}/revert`, '/api/apis/{slug}/revert', { version: 3 });
+    expect(never).toMatchObject({ status: 400, body: { error: { code: 'version_not_revertable' } } });
+    expect((await api(b, 'DELETE', `/api/apis/${seeded.slug}/draft`, '/api/apis/{slug}/draft')).status).toBe(404);
   });
 });
 

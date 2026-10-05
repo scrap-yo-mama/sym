@@ -233,9 +233,28 @@ describe('assert_status_transitions', () => {
     expect(fromError.path[0]?.[0]).toBe(2);
   });
 
-  test('la table compte exactement 21 transitions, numérotées 1 à 21, avec des raisons en codes stables', () => {
+  test('transition_22_erreur_to_warning_promoted (3.14) : promotion d\'un brouillon ou retour de version depuis erreur', () => {
+    for (const via of ['promoted', 'reverted'] as const) {
+      const r = run(st('erreur', { cleanStreak: 2 }), { type: 'version_promoted', via });
+      expect(r.path).toEqual([[22, 'erreur', 'warning', via]]);
+      expect(r.state).toMatchObject({ status: 'warning', cleanStreak: 0, lastSignalAt: T0 });
+    }
+    // Sur sain ou warning : pas une transition (événement version.promoted, statut inchangé).
+    for (const status of ['sain', 'warning'] as const) {
+      const r = run(st(status), { type: 'version_promoted', via: 'promoted' });
+      expect(r.path).toEqual([]);
+      expect(r.state.status).toBe(status);
+    }
+    // Jamais en cours d\'enquête ou de réparation, ni depuis un refus ou une action requise.
+    for (const status of ['enquete', 'reparation', 'bloquee', 'action_requise'] as const) {
+      expect(applyStatusEvent(st(status), { type: 'version_promoted', via: 'promoted' }, ctx).ok).toBe(false);
+    }
+  });
+
+  test('la table compte exactement 22 transitions, numérotées 1 à 22, avec des raisons en codes stables', () => {
     expect(TRANSITIONS).toHaveLength(TRANSITION_COUNT);
-    expect(TRANSITIONS.map((t) => t.id)).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
+    expect(TRANSITION_COUNT).toBe(22);
+    expect(TRANSITIONS.map((t) => t.id)).toEqual(Array.from({ length: 22 }, (_, i) => i + 1));
     for (const t of TRANSITIONS) for (const reason of t.reasons) expect(reason).toMatch(/^[a-z_]+$/);
   });
 
@@ -385,9 +404,9 @@ describe('seuils', () => {
     for (const cls of ['forbidden', 'blocked_by_protection', 'auth_required', 'not_found', 'llm_refused', 'transient'] as const) {
       expect(applyStatusEvent(st('erreur'), { type: 'persistence_attempt', failureClass: cls }, ctx).ok).toBe(false);
     }
-    // 16 garde ses raisons : la tentative en est une de plus, la table reste à 21 transitions (22 avec 3.14).
+    // 16 garde ses raisons : la tentative en est une de plus, la table compte 22 transitions depuis 3.14.
     expect(TRANSITIONS.find((t) => t.id === 16)?.reasons).toContain('persistence_attempt');
-    expect(TRANSITIONS).toHaveLength(21);
+    expect(TRANSITIONS).toHaveLength(22);
   });
 
   test('backoff 1 h, 6 h, 24 h avec jitter ±20 %, puis arrêt', () => {
@@ -398,6 +417,6 @@ describe('seuils', () => {
   });
 });
 
-// Garde de typage : les ids de transition couvrent exactement 1..21.
+// Garde de typage : les ids de transition couvrent exactement 1..22.
 const _ids: TransitionId[] = TRANSITIONS.map((t) => t.id);
 void _ids;

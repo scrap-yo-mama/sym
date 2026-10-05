@@ -131,3 +131,13 @@ dt {
 dd {
   margin: 0 0 6px;
 }
+
+/* Saisie à la main (secours de l'appairage en un collage, U3.1). */
+details {
+  margin-top: 12px;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}

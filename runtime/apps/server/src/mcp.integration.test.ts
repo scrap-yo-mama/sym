@@ -18,7 +18,7 @@ type Party = { user: TestUser; cookie: string; key: string };
 type ToolResult = { content: { type: string; text?: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 
 const ALL_SCOPES = ['apis:read', 'apis:run', 'apis:write', 'runs:read', 'datasets:read', 'schedules:write', 'sites:read'];
-const GENERIC_NAMES = ['create_api', 'validate_schema', 'run_api', 'get_run', 'get_items', 'cancel_run', 'list_apis', 'get_api', 'report_problem'];
+const GENERIC_NAMES = ['create_api', 'validate_schema', 'run_api', 'get_run', 'get_items', 'cancel_run', 'list_apis', 'get_api', 'report_problem', 'refine_api', 'test_api', 'promote_api', 'revert_api', 'discard_draft'];
 
 let srv: TestServer;
 let base: string;
@@ -42,12 +42,14 @@ async function call(client: Client, name: string, args: Record<string, unknown>)
 }
 
 /** Erreur d'outil (05 § 4.3) : un bloc texte JSON, `isError: true`, sans `structuredContent`. */
-function toolError(result: ToolResult): { code: string; message: string; what_to_do: string; retryable: boolean; next_action: unknown } {
+function toolError(result: ToolResult): { code: string; message: string; message_locale: string; action_label: string; what_to_do: string; retryable: boolean; next_action: unknown } {
   expect(result.isError, JSON.stringify(result).slice(0, 400)).toBe(true);
   expect(result).not.toHaveProperty('structuredContent');
   expect(result.content).toHaveLength(1);
   const parsed = JSON.parse(result.content[0]!.text!) as ReturnType<typeof toolError>;
-  expect(Object.keys(parsed).sort()).toEqual(['code', 'message', 'next_action', 'retryable', 'what_to_do']);
+  // Enveloppe commune (03-specs-mcp § 10.3) : les champs de base, plus la langue du message et l'action (U1.5) ; `field` et d'autres facultatifs.
+  expect(Object.keys(parsed)).toEqual(expect.arrayContaining(['code', 'message', 'message_locale', 'action_label', 'next_action', 'retryable', 'what_to_do']));
+  for (const key of ['message', 'action_label', 'what_to_do']) expect(parsed[key as 'message'], key).toMatch(/\S/);
   return parsed;
 }
 
@@ -259,7 +261,7 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
   };
   afterAll(() => mode('pinned'));
 
-  test('25 API dont 5 épinglées, mode pinned : 9 outils génériques + 5 api_<slug> (inputSchema = schéma d’entrée, outputSchema = RunResult)', async () => {
+  test('25 API dont 5 épinglées, mode pinned : 14 outils génériques (iterate compris) + 5 api_<slug> (inputSchema = schéma d’entrée, outputSchema = RunResult)', async () => {
     await resetCatalog(a);
     mode('pinned');
     const apis: { id: string; slug: string }[] = [];
@@ -275,7 +277,7 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     expect(names.filter((n) => GENERIC_NAMES.includes(n)).sort()).toEqual([...GENERIC_NAMES].sort());
     const perApi = tools.filter((t) => t.name.startsWith('api_'));
     expect(perApi.map((t) => t.name).sort()).toEqual(['api_zz_test_pin_00', 'api_zz_test_pin_01', 'api_zz_test_pin_02', 'api_zz_test_pin_03', 'api_zz_test_pin_04']);
-    expect(tools).toHaveLength(14);
+    expect(tools).toHaveLength(19);
     const input = await withClient(srv.db.url, async (c) => (await c.query<{ input_schema: Record<string, unknown> }>('SELECT input_schema FROM apis WHERE id = $1', [apis[0]!.id])).rows[0]!.input_schema);
     for (const tool of perApi) {
       expect(tool.inputSchema, tool.name).toEqual(input);
@@ -304,7 +306,7 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     expect(new Set(seen).size).toBe(40);
   });
 
-  test('mode generic : aucun outil par API, les 9 outils génériques seulement', async () => {
+  test('mode generic : aucun outil par API, les 14 outils génériques seulement', async () => {
     mode('generic');
     const { tools } = await (await connect(a.key)).listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...GENERIC_NAMES].sort());
@@ -319,8 +321,10 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     expect(runOnly.tools.filter((t) => t.name.startsWith('api_')).length).toBe(20);
     const both = await (await connect(a.key, { toolsets: 'build,catalog' })).listTools();
     expect(both.tools.map((t) => t.name).sort()).toEqual(['create_api', 'get_api', 'list_apis', 'report_problem', 'validate_schema']);
-    // rules et iterate : inactifs par défaut et non livrés (3.13, 3.14) ; un nom inconnu n'ajoute rien.
-    const unknown = await (await connect(a.key, { toolsets: 'rules,iterate,zz' })).listTools();
+    // iterate (3.14) : actif par défaut, les cinq outils d'itération ; rules (3.13) n'est pas livré et un nom inconnu n'ajoute rien.
+    const iterate = await (await connect(a.key, { toolsets: 'iterate' })).listTools();
+    expect(iterate.tools.map((t) => t.name).sort()).toEqual(['discard_draft', 'promote_api', 'refine_api', 'revert_api', 'test_api']);
+    const unknown = await (await connect(a.key, { toolsets: 'rules,zz' })).listTools();
     expect(unknown.tools).toEqual([]);
   });
 
@@ -389,8 +393,8 @@ describe('exposition des outils (05 § 1.1, § 4.4) : generic, pinned, all ; too
     const names = async (scopes: string[]) => (await (await connect((await createKey(srv, a.cookie, a.user, scopes)).key)).listTools()).tools.map((t) => t.name).sort();
     expect(await names(['apis:read'])).toEqual(['get_api', 'list_apis', 'report_problem']);
     expect(await names(['apis:read', 'runs:read', 'datasets:read'])).toEqual(['get_api', 'get_items', 'get_run', 'list_apis', 'report_problem']);
-    expect(await names(['apis:run'])).toEqual(['api_zz_test_scoped', 'cancel_run', 'run_api']);
-    expect(await names(['apis:write'])).toEqual(['create_api', 'validate_schema']);
+    expect(await names(['apis:run'])).toEqual(['api_zz_test_scoped', 'cancel_run', 'run_api', 'test_api']);
+    expect(await names(['apis:write'])).toEqual(['create_api', 'discard_draft', 'promote_api', 'refine_api', 'revert_api', 'validate_schema']);
     const readOnly = await createKey(srv, a.cookie, a.user, ['apis:read']);
     const res = await rpc({ authorization: `Bearer ${readOnly.key}` }, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'api_zz_test_scoped', arguments: { page: 1 } } });
     expect(res.statusCode).toBe(403);
@@ -607,7 +611,7 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
 
   test('validate_schema : RunResult (ou running) après le schéma proposé ; hors attente, code d’état', async () => {
     const client = await connect(a.key);
-    const created = await call(client, 'create_api', { description: 'zz_test catalogue', url: 'https://zz-test-validate.example/', wait_seconds: 0 });
+    const created = await call(client, 'create_api', { description: 'zz_test catalogue', url: 'https://zz-test-validate.example/', auto_validate: false, wait_seconds: 0 });
     const view = created.structuredContent as { api_id: string; run_id: string };
     await withClient(srv.db.url, async (c) => {
       await c.query("UPDATE apis SET investigation_phase = 'awaiting_schema_validation', investigation = investigation || jsonb_build_object('proposed_schema', '{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"}}}'::jsonb) WHERE id = $1", [view.api_id]);
@@ -615,13 +619,13 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
     });
     const validated = await call(client, 'validate_schema', { api_id: view.api_id, wait_seconds: 0 });
     expect(validated.isError ?? false).toBe(false);
-    expect(validated.structuredContent).toMatchObject({ state: 'queued', next_action: { tool: 'get_run' } });
+    expect(validated.structuredContent).toMatchObject({ state: 'running', next_action: { tool: 'get_run' } });
     expect(toolError(await call(client, 'validate_schema', { api_id: view.api_id })).code).toBe('not_awaiting_validation');
   });
 
   test('validate_schema (constat Barnes) : corrections, consignes et source transmises ; schema_validation montre le schéma retenu et ce qui a changé ; source inconnue → erreur claire', async () => {
     const client = await connect(a.key);
-    const created = await call(client, 'create_api', { description: 'zz_test biens immobiliers', url: 'https://zz-test-barnes.example/', wait_seconds: 0 });
+    const created = await call(client, 'create_api', { description: 'zz_test biens immobiliers', url: 'https://zz-test-barnes.example/', auto_validate: false, wait_seconds: 0 });
     const view = created.structuredContent as { api_id: string; run_id: string };
     const proposed = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference' }, type: { type: 'string', description: 'Type' } } };
     await withClient(srv.db.url, async (c) => {
@@ -641,7 +645,7 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
     const validated = await call(client, 'validate_schema', { api_id: view.api_id, output_schema: corrected, instructions: 'Use the results list, not the carousel.', source_id: 'c2', wait_seconds: 0 });
     expect(validated.isError ?? false).toBe(false);
     expect(validated.structuredContent).toMatchObject({
-      state: 'queued',
+      state: 'running', // l'état du parcours (03 § 10.2) ; l'état brut du run reste lisible dans run_state
       schema_validation: {
         output_schema: corrected,
         corrected: true,
@@ -766,7 +770,7 @@ describe('assert_cross_user_denied (INV12) : chaque outil MCP, B contre les obje
 describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP de 2.14', () => {
   test('assert_brief_optional (MCP) : create_api sans brief crée l’API et lance l’enquête (trigger mcp), vue ApiCreated', async () => {
     const client = await connect(a.key);
-    const result = await call(client, 'create_api', { description: 'zz_test liste de livres', url: 'https://zz-test-books.example/', wait_seconds: 0 });
+    const result = await call(client, 'create_api', { description: 'zz_test liste de livres', url: 'https://zz-test-books.example/', auto_validate: false, wait_seconds: 0 });
     expect(result.isError ?? false).toBe(false);
     const view = result.structuredContent as { api_id: string; slug: string; run_id: string; investigation_phase: string | null };
     expect(view).toMatchObject({ api_id: expect.any(String), slug: expect.any(String), run_id: expect.any(String) });
@@ -777,13 +781,13 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
 
   test('05 § 1.1 : une API créée par MCP ou par REST n’est pas épinglée (mcp_exposed faux) ; son propriétaire l’épingle explicitement', async () => {
     const client = await connect(a.key);
-    const created = await call(client, 'create_api', { description: 'zz_test épinglage', url: 'https://zz-test-pin-mcp.example/', wait_seconds: 0 });
+    const created = await call(client, 'create_api', { description: 'zz_test épinglage', url: 'https://zz-test-pin-mcp.example/', auto_validate: false, wait_seconds: 0 });
     const viaMcp = (created.structuredContent as { api_id: string; slug: string });
     const viaRest = await srv.app.inject({
       method: 'POST',
       url: '/api/apis?wait=0',
       headers: { authorization: `Bearer ${a.key}`, 'content-type': 'application/json' },
-      payload: JSON.stringify({ description: 'zz_test épinglage rest', url: 'https://zz-test-pin-rest.example/' }),
+      payload: JSON.stringify({ description: 'zz_test épinglage rest', url: 'https://zz-test-pin-rest.example/', auto_validate: false }),
     });
     expect(viaRest.statusCode, viaRest.body).toBe(201);
     const restId = viaRest.json<{ api_id: string }>().api_id;
@@ -801,11 +805,11 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
   test('assert_brief_schema_closed et assert_brief_size_cap_actionable (MCP) : clé inconnue → invalid_brief nommant le champ, 16 Ko → brief_too_large, aucune API', async () => {
     const client = await connect(a.key);
     const before = await count('SELECT count(*) FROM apis WHERE owner_id = $1', [a.user.id]);
-    const unknown = toolError(await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', brief: { v: 1, allowed_hosts: 'zz_test_hostile_value_*' } }));
+    const unknown = toolError(await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', auto_validate: false, brief: { v: 1, allowed_hosts: 'zz_test_hostile_value_*' } }));
     expect(unknown).toMatchObject({ code: 'invalid_brief', retryable: true });
     expect(unknown.message).toContain('allowed_hosts');
     expect(JSON.stringify(unknown)).not.toContain('zz_test_hostile_value');
-    const large = toolError(await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', brief: { v: 1, notes: 'x'.repeat(1990), hints: Array.from({ length: 20 }, (_, i) => ({ id: `h${i}`, kind: 'pitfall', value: 'y'.repeat(299), sample: 'z'.repeat(299), seen_on: `https://zz-test-brief.example/${'p'.repeat(250)}` })) } }));
+    const large = toolError(await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', auto_validate: false, brief: { v: 1, notes: 'x'.repeat(1990), hints: Array.from({ length: 20 }, (_, i) => ({ id: `h${i}`, kind: 'pitfall', value: 'y'.repeat(299), sample: 'z'.repeat(299), seen_on: `https://zz-test-brief.example/${'p'.repeat(250)}` })) } }));
     expect(large).toMatchObject({ code: 'brief_too_large', retryable: true });
     expect(large.what_to_do).toContain(`${Math.floor(BRIEF_MAX_BYTES / 1000)} KB`);
     expect(await count('SELECT count(*) FROM apis WHERE owner_id = $1', [a.user.id])).toBe(before);
@@ -821,7 +825,7 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
       { v: 1, tried: [{ approach: 'fetch_json', outcome: 'refused', note: hostile, zz: hostile }] },
     ];
     for (const brief of briefs) {
-      const result = await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', brief });
+      const result = await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', auto_validate: false, brief });
       const err = toolError(result);
       expect(JSON.stringify(result)).not.toContain('zz_test_hostile');
       expect(err.code).toBe('invalid_brief');
@@ -844,7 +848,7 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
       tried: [{ approach: 'fetch_html', outcome: 'refused', note: hostile }],
       open_questions: [hostile],
     };
-    const result = await call(client, 'create_api', { description: 'zz_test dossier', url: 'https://zz-test-brief-ok.example/', brief, wait_seconds: 0 });
+    const result = await call(client, 'create_api', { description: 'zz_test dossier', url: 'https://zz-test-brief-ok.example/', auto_validate: false, brief, wait_seconds: 0 });
     expect(result.isError ?? false, JSON.stringify(result)).toBe(false);
     expect(JSON.stringify(result)).not.toMatch(/zz_test_hostile|IGNORE PREVIOUS|jean-dupont/);
     const view = result.structuredContent as { api_id: string; brief_version: number; brief_report: { id: string; state: string; reason: string | null; template: string | null }[] };
@@ -944,7 +948,7 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
       { v: 1, tried: [{ approach: 'fetch_json', outcome: 'ok', target: 'https://zz-test-brief.example/p;jsessionid=ZZSECRETSESSION' }] },
     ];
     for (const brief of briefs) {
-      const result = await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', brief });
+      const result = await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', auto_validate: false, brief });
       expect(toolError(result)).toMatchObject({ code: 'secret_in_brief', retryable: true });
       expect(JSON.stringify(result)).not.toMatch(/zzSecret|ZZSECRET/);
     }

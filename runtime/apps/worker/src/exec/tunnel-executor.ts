@@ -48,6 +48,10 @@ export class TunnelSession {
   /** Commandes envoyées (et commandes refusées localement après un arrêt, toujours 0 envoi). */
   sent = 0;
   refusedAfterStop = 0;
+  /** Commandes dont l'extension a répondu (résultat, même en échec de page) : le tunnel a tenu pendant ce run. */
+  answered = 0;
+  /** Connexion coupée alors qu'une commande était émise (écriture non rejouable, `tunnel_disconnected`). */
+  disconnected = false;
 
   constructor(port: TunnelPort, base: TunnelSessionBase, signal: AbortSignal, onWaiting?: (waiting: boolean) => Promise<void>) {
     this.#port = port;
@@ -58,6 +62,15 @@ export class TunnelSession {
 
   get domain(): string {
     return this.#base.domain;
+  }
+
+  /**
+   * Tunnel PERDU en cours de run (U3.4, 05 § 5) : l'extension a disparu après avoir servi ce run (une commande au moins a eu sa
+   * réponse, ou une commande émise a été coupée) et n'est pas revenue pendant la grâce. Distinct de « hors ligne » (jamais
+   * connectée pour ce run) : la suite proposée est « Relancer » (`tunnel_lost`).
+   */
+  get lost(): boolean {
+    return this.stop === 'tunnel_offline' && (this.answered > 0 || this.disconnected);
   }
 
   /** Envoie une commande ; après un défi ou une extension hors ligne, refuse localement sans rien envoyer. */
@@ -92,9 +105,16 @@ export class TunnelSession {
             }),
       },
     );
+    if (outcome.kind === 'result') this.answered += 1;
     if (outcome.kind === 'error') {
       if (outcome.error === 'challenge_in_tunnel') this.stop = 'challenge_in_tunnel';
       else if (outcome.error === 'tunnel_offline') this.stop = 'tunnel_offline';
+      else if (outcome.error === 'tunnel_disconnected') {
+        // Une commande émise a été coupée avec la connexion : rejouée par la passerelle si c'était une lecture (on ne la voit
+        // alors jamais ici) ; sinon son sort est inconnu, le run s'arrête (jamais rejouée à l'aveugle, 07 § 4).
+        this.stop = 'tunnel_offline';
+        this.disconnected = true;
+      }
       else if (outcome.error === 'permission_required') this.needsUser = true;
       if (this.stop !== null) throw new TunnelStopError(this.stop);
     }
@@ -222,11 +242,11 @@ function pageScriptTransport(session: TunnelSession, spec: DeclarativeSpec, maxB
 export type TunnelRunOptions = Omit<DeclarativeRunOptions, 'transport'> & { readonly session: TunnelSession; readonly execution: 'fetch' | 'fetch_in_page' | 'playwright' };
 
 /** Exécution déclarative par le tunnel. Un arrêt (défi, hors ligne) est rendu à part, jamais comme une classe d'échec. */
-export async function runTunnelExecutor(options: TunnelRunOptions): Promise<{ result: DeclarativeRunResult; stop: TunnelStop | null; needsUser: boolean }> {
+export async function runTunnelExecutor(options: TunnelRunOptions): Promise<{ result: DeclarativeRunResult; stop: TunnelStop | null; needsUser: boolean; lost: boolean }> {
   const maxBytes = options.spec.limits?.max_response_bytes ?? FETCH_DEFAULT_MAX_BYTES;
   const transport = options.execution === 'playwright' ? pageScriptTransport(options.session, options.spec, maxBytes, options.signal) : pageFetchTransport(options.session, maxBytes);
   // Limite connue (tests/invariants.json, assert_infinite_scroll_paginated) : pas de `scroll` en tunnel, l'extension n'exposant
   // aucune commande de défilement ; `infinite_scroll` s'arrête à la page 1 (`unsupported`, sortie tronquée). Tâches de l'extension.
   const result = await runDeclarative({ ...options, transport });
-  return { result, stop: options.session.stop, needsUser: options.session.needsUser };
+  return { result, stop: options.session.stop, needsUser: options.session.needsUser, lost: options.session.lost };
 }

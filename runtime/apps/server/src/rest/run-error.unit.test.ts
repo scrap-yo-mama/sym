@@ -108,3 +108,35 @@ describe('D-123 : budget du jour, plafond par run facultatif', () => {
     expect(error.what_to_do).not.toMatch(/raise max_cost_usd in/);
   });
 });
+
+describe('UX-15 (U1.12) — réglages IA illisibles par le worker', () => {
+  test('llm_settings_unreadable:<raison> : cause propre, raison nommée, ni « prix manquant » ni « non configuré »', () => {
+    const error = runErrorOf({ state: 'failed', error_detail: 'llm_settings_unreadable:key_unreadable' });
+    expect(error).toMatchObject({ code: 'llm_settings_unreadable', retryable: true });
+    expect(error?.message).toContain('key_unreadable');
+    expect(error?.message).toContain('Ma stack');
+    expect(error?.what_to_do).toContain('MASTER_KEY');
+    expect(error?.what_to_do).toContain('no model call was made');
+    expect(runNotStarted({ state: 'failed', error_detail: 'llm_settings_unreadable:key_unreadable' })).toBe(true);
+  });
+  test('une raison qui n’a pas la forme d’un code n’est jamais recopiée (INV8)', () => {
+    const error = runErrorOf({ state: 'failed', error_detail: 'llm_settings_unreadable:fournisseur zz-secret : clé illisible' });
+    expect(error?.message).not.toContain('zz-secret');
+    expect(error?.message).toContain('unknown');
+  });
+});
+
+describe('U3.4 — tunnel perdu en cours de run (tunnel_lost)', () => {
+  test('run ignoré `skipped_tunnel_offline` avec la cause tunnel_lost : cause lisible, action « Relancer », retryable', () => {
+    const error = runErrorOf({ state: 'skipped_tunnel_offline', error_detail: 'tunnel_lost' });
+    expect(error).toMatchObject({ code: 'tunnel_lost', retryable: true });
+    expect(error?.message).toMatch(/relance/i);
+    expect(error?.what_to_do).toContain('run_api');
+  });
+  test('extension jamais connectée (tunnel_offline) : inchangé, pas de cause nommée ici', () => {
+    expect(runErrorOf({ state: 'skipped_tunnel_offline', error_detail: 'tunnel_offline' })).toBeNull();
+  });
+  test('tunnel_lost sur un run en échec : même cause', () => {
+    expect(runErrorOf({ state: 'failed', error_detail: 'tunnel_lost' })).toMatchObject({ code: 'tunnel_lost' });
+  });
+});

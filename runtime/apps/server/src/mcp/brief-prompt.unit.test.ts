@@ -18,9 +18,11 @@ describe('dossier d’enquête dans les textes MCP (19c § 8)', () => {
     expect(MCP_INSTRUCTIONS.length).toBeLessThanOrEqual(1000);
   });
 
-  test('prompt new_api (partie dossier) : environ 900 caractères, en anglais, sans cookie ni donnée personnelle demandés', () => {
-    expect(NEW_API_BRIEF_PROMPT.length).toBeGreaterThan(600);
+  test('prompt new_api (partie dossier, D-115) : environ 800 caractères, en anglais, de ce que la personne a déjà dit, sans navigation ni cookie ni donnée personnelle demandés', () => {
+    expect(NEW_API_BRIEF_PROMPT.length).toBeGreaterThan(500);
     expect(NEW_API_BRIEF_PROMPT.length).toBeLessThan(1100);
-    for (const part of ['hints:', 'tried:', 'open_questions:', 'SYM checks every hint itself', 'No cookies, tokens, passwords or personal data', 'If you found nothing, omit brief.']) expect(NEW_API_BRIEF_PROMPT).toContain(part);
+    for (const part of ['hints:', 'tried:', 'open_questions:', 'SYM checks every hint itself', 'No cookies, tokens, passwords or personal data', 'omit brief']) expect(NEW_API_BRIEF_PROMPT).toContain(part);
+    expect(NEW_API_BRIEF_PROMPT).not.toMatch(/__NEXT_DATA__|JSON-LD|spend a few tool calls/);
+    expect(NEW_API_BRIEF_PROMPT).toMatch(/Do not open the page/);
   });
 });

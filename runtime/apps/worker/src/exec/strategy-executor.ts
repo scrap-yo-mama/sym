@@ -54,6 +54,7 @@ import {
   quarantineSummary,
   rejectionVerdict,
   volumeAnomaly,
+  isDraftTrigger,
   type DegradedSignal,
   type Execution,
   type ItemPartition,
@@ -291,6 +292,8 @@ type Outcome = {
   agent?: Omit<AgentOutcome, 'result'>;
   /** Mode tunnel : arrêt sans classe d'échec (défi, extension hors ligne). */
   stop?: TunnelStop;
+  /** Mode tunnel : l'extension servait ce run puis a disparu (cause `tunnel_lost`, U3.4), plutôt que jamais connectée. */
+  tunnelLost?: boolean;
   /** Mode tunnel : le site n'est pas connecté dans le navigateur de l'utilisateur. */
   needsUser?: boolean;
   /** Stratégie `steps` (2.13) : étape en échec, effet observé, arrêt avant une étape. */
@@ -580,7 +583,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       ...(deps.classify === undefined ? {} : { classify: deps.classify }),
     });
     if (session.refusedAfterStop > 0) await ctx.log('info', 'tunnel_commands_withheld', { count: session.refusedAfterStop, reason: session.stop });
-    return { result: out.result, usage: null, ...(out.stop === null ? {} : { stop: out.stop }), ...(out.needsUser ? { needsUser: true } : {}) };
+    return { result: out.result, usage: null, ...(out.stop === null ? {} : { stop: out.stop }), ...(out.lost ? { tunnelLost: true } : {}), ...(out.needsUser ? { needsUser: true } : {}) };
   };
 
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy, extras?: StepsTrialExtras): Promise<Outcome> => {
@@ -1260,6 +1263,39 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     }
   };
 
+  /**
+   * Run `draft_test` (3.14, 19 §6) : rejoue la stratégie d'un brouillon (ou la version en service, run de référence du diff) avec
+   * TOUTES les gardes d'un run (SSRF, cadence, plafond de coût, classification des refus, bac à sable, traçage), contre le schéma
+   * de sortie du brouillon. Rien n'est promu, réparé ni compilé ; aucun événement de statut (INV3) ; le profil de qualité et
+   * le volume ne sont pas mesurés (la baseline ne vient jamais d'un essai). Une sortie non conforme échoue le run : un brouillon
+   * ne livre pas d'items écartés.
+   */
+  const executeDraftTest = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, started: number): Promise<RunResult> => {
+    const trial = await runTrial(ctx, target, strategy, started, 'quarantine');
+    const version = strategy.version;
+    if (trial.outcome.stop === 'tunnel_offline') return { state: 'skipped_tunnel_offline', stop_reason: 'tunnel_offline', error_detail: 'tunnel_offline', strategy_version: version };
+    if (trial.llm !== null && trial.llm.usd === null) await ctx.log('warn', 'llm_price_missing', { model: trial.llm.modelId });
+    const sorted = sortItems(target, trial);
+    await recordTrial(ctx, strategy, trial, sorted?.verdict ?? null, null);
+    if (trial.outcome.stop !== undefined) return { state: 'failed', failure_class: 'blocked_by_protection', retryable: false, error_detail: trial.outcome.stop, strategy_version: version };
+    if (trial.llmUsd === null) return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'llm_price_missing', strategy_version: version };
+    if (trial.proxyUsd + trial.llmUsd > target.api.maxCostUsd) return { state: 'failed', failure_class: 'run_budget_exceeded', retryable: false, error_detail: 'max_cost_usd', strategy_version: version };
+    if (!trial.result.ok) {
+      const failure = trial.guardedFailure ?? trial.result.failure;
+      return { state: 'failed', failure_class: failure.failure_class, retryable: failure.retryable, error_detail: failure.detail, strategy_version: version };
+    }
+    if (sorted === null) return { state: 'failed', failure_class: 'extraction', retryable: false, error_detail: 'schema_mismatch', strategy_version: version };
+    const { partition } = sorted;
+    if (sorted.verdict === 'break') {
+      await quarantine(ctx, target, partition, sorted.verdict);
+      await ctx.log('warn', 'schema_mismatch', { conform: partition.conform.length, rejected: partition.rejected.length, draft: true });
+      return { state: 'failed', failure_class: 'extraction', retryable: false, error_detail: partition.conform.length === 0 ? 'schema_mismatch' : 'items_rejected', items_rejected: partition.rejected.length, strategy_version: version };
+    }
+    await quarantine(ctx, target, partition, sorted.verdict);
+    const saved = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: partition.conform });
+    return { state: 'succeeded', outcome: partition.rejected.length > 0 ? 'degraded' : 'clean', degraded_reasons: partition.rejected.length > 0 ? ['items_rejected'] : [], items: partition.conform.length, items_rejected: partition.rejected.length, dataset_id: saved.datasetId, strategy_version: version };
+  };
+
   const executeRun = async (ctx: RunCtx): Promise<RunResult> => {
     const started = now();
     // Borne de coût du run lue à son ouverture (D-123) : plafond de l'API s'il est fixé, sinon budget du jour restant.
@@ -1271,6 +1307,8 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
   const executeLoaded = async (ctx: RunCtx, started: number, target: RunTarget): Promise<RunResult> => {
     const strategy = target.strategy;
     if (strategy === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'no_strategy_version' };
+    // Test d'un brouillon (3.14) : mêmes gardes que tout run, mais ni statut, ni réparation, ni compilation, ni mesure de qualité.
+    if (isDraftTrigger(ctx.trigger)) return executeDraftTest(ctx, target, strategy, started);
 
     // Runs : politique `quarantine` (D-49) — chaque item est trié contre `output_schema`, les non conformes ne sont jamais livrés.
     const trial = await runTrial(ctx, target, strategy, started, 'quarantine');
@@ -1280,8 +1318,11 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     // essai (aucune commande n'a abouti, ce n'est pas un échec réseau), aucune classe d'échec, statut de l'API inchangé.
     const stop = outcome.stop;
     if (stop === 'tunnel_offline') {
-      await ctx.log('warn', 'tunnel_offline', { network: 'tunnel' });
-      return { state: 'skipped_tunnel_offline', stop_reason: 'tunnel_offline', error_detail: 'tunnel_offline', strategy_version: strategy.version };
+      // U3.4 : l'extension servait ce run puis a disparu (au-delà de la grâce) : cause lisible `tunnel_lost`, action « Relancer ».
+      // Même état et même raison d'arrêt qu'hors ligne (04 §6) : seule la cause (error_detail) dit « perdu ».
+      const lost = outcome.tunnelLost === true;
+      await ctx.log('warn', lost ? 'tunnel_lost' : 'tunnel_offline', { network: 'tunnel' });
+      return { state: 'skipped_tunnel_offline', stop_reason: 'tunnel_offline', error_detail: lost ? 'tunnel_lost' : 'tunnel_offline', strategy_version: strategy.version };
     }
     // Défi en tunnel : l'essai est journalisé avec sa cause de fait (protection), le run s'arrête SANS classe d'échec
     // (04 §6) : `challenge_in_tunnel` → action_requise, la main revient à l'humain.

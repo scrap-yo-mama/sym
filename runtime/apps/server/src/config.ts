@@ -8,6 +8,7 @@ import {
   parseMfaEnforced,
   normalizePublicUrl,
   persistencePolicyFromEnv,
+  resolveBuildInfo,
   scrubOtelEnvironment,
   unknownReservedVariablesWarning,
   Secret,
@@ -19,10 +20,11 @@ import {
   type PersistencePolicy,
 } from '@runtime/core';
 import { briefConfigFromEnv, type BriefConfig } from '@runtime/core';
+import { confirmAboveUsdFromEnv } from '@runtime/core/investigation';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { supportedLocales } from './i18n.js';
 import type { McpConfig } from './mcp/runtime.js';
-import { TOOL_EXPOSURES, type ToolExposure } from './mcp/tools.js';
+import { TOOL_EXPOSURES, TOOLSETS, type ToolExposure, type Toolset } from './mcp/tools.js';
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -42,6 +44,8 @@ export type ServerConfig = {
   observability: ObservabilityConfig;
   /** `RUNTIME_VERSION` (défaut 0.0.0) : version de l'application, publiée par `/api/health` (aucune autre version). */
   appVersion: string;
+  /** Commit publié par `/api/version` (`RUNTIME_COMMIT`, sinon `RENDER_GIT_COMMIT`) ; absent quand l'image n'en porte pas. */
+  appCommit?: string | undefined;
   port: number;
   host: string;
   /**
@@ -64,6 +68,8 @@ export type ServerConfig = {
   /** Serveur MCP (tâche 3.2, 05 § 1 et § 3). */
   mcp: McpConfig;
   /** Dossier d'enquête (tâche 2.14, 19c § 9.2) : variables `BRIEF_*` bornées. */
+  /** `CONFIRM_ABOVE_USD` : seuil de dépense estimée au-delà duquel une confirmation précède tout run facturé lancé par SYM. */
+  confirmAboveUsd: number;
   brief?: BriefConfig;
   /**
    * Mode « SYM ne lâche pas » (2.16, D-49) : `PERSISTENCE_*` (14 § 2), mêmes valeurs que le worker. Le serveur s'en sert
@@ -120,11 +126,16 @@ function loadMcpConfig(env: NodeJS.ProcessEnv, publicUrl: string): McpConfig {
   if (!['', 'true', 'false'].includes(disabledRaw)) throw new ConfigError('DISABLE_MCP invalide : true ou false.');
   const exposure = (env['MCP_TOOL_EXPOSURE'] ?? '').trim() || 'pinned';
   if (!(TOOL_EXPOSURES as readonly string[]).includes(exposure)) throw new ConfigError(`MCP_TOOL_EXPOSURE invalide : ${TOOL_EXPOSURES.join(', ')}.`);
+  const toolsetsRaw = (env['MCP_DEFAULT_TOOLSETS'] ?? '').trim();
+  const defaultToolsets = toolsetsRaw === '' ? [...TOOLSETS] : toolsetsRaw.split(',').map((t) => t.trim()).filter((t) => t !== '');
+  const unknown = defaultToolsets.filter((t) => !(TOOLSETS as readonly string[]).includes(t));
+  if (unknown.length > 0 || defaultToolsets.length === 0) throw new ConfigError(`MCP_DEFAULT_TOOLSETS invalide : liste de ${TOOLSETS.join(', ')} séparés par des virgules.`);
   const own = new URL(publicUrl).hostname.toLowerCase();
   const origins = originList(env);
   return {
     disabled: disabledRaw === 'true',
     exposure: exposure as ToolExposure,
+    defaultToolsets: defaultToolsets as Toolset[],
     allowedHosts: [...new Set([own, ...hostnameList(env, 'MCP_ALLOWED_HOSTS')])],
     allowedOrigins: [...new Set([new URL(publicUrl).origin, ...origins.origins])],
     allowedOriginHosts: [...new Set(origins.hosts)],
@@ -133,7 +144,7 @@ function loadMcpConfig(env: NodeJS.ProcessEnv, publicUrl: string): McpConfig {
 
 /** Bornes de l'API REST (05 § 2, 14 § 2). */
 type RestConfig = {
-  /** `MAX_WAIT_SECONDS` (défaut 25) : plafond du paramètre `wait` (REST, MCP). */
+  /** `MAX_WAIT_SECONDS` (défaut 50) : plafond du paramètre `wait` (REST, MCP). */
   maxWaitSeconds: number;
   /** `MAX_CONCURRENT_RUNS` (défaut 50, à valider) : runs actifs de l'instance au-delà desquels la création répond 429 `queue_full`. */
   maxConcurrentRuns: number;
@@ -195,6 +206,16 @@ function loadTunnelConfig(env: NodeJS.ProcessEnv, databaseUrl: string): TunnelCo
 }
 
 /** Version d'application publiable : SemVer ou étiquette courte (aucun espace, aucun chemin, aucun nom d'hôte). */
+/** Version du paquet `apps/server` (même chemin relatif depuis `src/` et `dist/`) : repli quand l'image n'a pas reçu `RUNTIME_VERSION`. */
+function readPackageVersion(): string | undefined {
+  try {
+    const version = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: unknown }).version;
+    return typeof version === 'string' ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const APP_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 
 /** Longueur minimale du jeton d'amorçage (généré par la plateforme ou `install.sh`). */
@@ -278,7 +299,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     throw new ConfigError(`METRICS_TOKEN trop court (${BOOTSTRAP_TOKEN_MIN_LENGTH} caractères minimum) : générez-le avec \`openssl rand -base64 32\`.`);
   }
   if (metricsToken !== undefined) secretValues.add(metricsToken);
-  const appVersion = env['RUNTIME_VERSION'] || '0.0.0';
+  const { version: appVersion, commit: appCommit } = resolveBuildInfo(env, readPackageVersion());
   if (!APP_VERSION.test(appVersion)) throw new ConfigError('RUNTIME_VERSION invalide : version SemVer (ex. 1.4.2), 64 caractères au plus, sans espace ni « / ».');
   const observability = loadObservabilityConfig(env);
   scrubOtelEnvironment(env);
@@ -314,6 +335,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     metricsToken: metricsToken === undefined ? null : new Secret(metricsToken),
     observability,
     appVersion,
+    appCommit,
     port: Number(env['PORT'] ?? 3000),
     host: env['HOST'] ?? '0.0.0.0',
     trustProxy: parseTrustProxy(env['TRUST_PROXY']),
@@ -323,7 +345,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     tunnel: loadTunnelConfig(env, databaseUrl),
     persistence,
     rest: {
-      maxWaitSeconds: positiveInteger(env, 'MAX_WAIT_SECONDS', 25, 25),
+      maxWaitSeconds: positiveInteger(env, 'MAX_WAIT_SECONDS', 50, 50),
       maxConcurrentRuns: positiveInteger(env, 'MAX_CONCURRENT_RUNS', 50, 100_000),
       maxActiveRunsPerUser: positiveInteger(env, 'MAX_ACTIVE_RUNS_PER_USER', 20, 100_000),
       maxRunsPerKeyPerMinute: positiveInteger(env, 'MAX_RUNS_PER_KEY_PER_MINUTE', 60, 100_000),
@@ -331,5 +353,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     },
     mcp: loadMcpConfig(env, publicUrl),
     brief: briefConfigFromEnv(env),
+    confirmAboveUsd: confirmAboveUsdFromEnv(env),
   };
 }

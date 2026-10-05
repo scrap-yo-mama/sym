@@ -187,6 +187,11 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'PATCH /api/apis/:slug': () => ({ description: 'zz_test authz' }),
   'POST /api/apis/:slug/runs': () => ({ input: {} }),
   'POST /api/apis/:slug/investigate': () => ({}),
+  // Itération (3.14).
+  'POST /api/apis/:slug/refine': () => ({ feedback: 'zz_test authz' }),
+  'POST /api/apis/:slug/test': () => ({ input: {} }),
+  'POST /api/apis/:slug/promote': () => ({ diff_hash: '0'.repeat(64) }),
+  'POST /api/apis/:slug/revert': () => ({}),
   // Portabilité (3.12) : un modèle de templates/ (aperçu, sans `confirm`).
   'POST /api/apis/import': () => JSON.parse(readFileSync(new URL('../../../templates/livres-demo.api.json', import.meta.url), 'utf8')) as Record<string, unknown>,
   'POST /api/apis/:slug/versions/:version/revert': () => ({}),
@@ -390,7 +395,8 @@ describe('assert_authz_matrix (squelette, 08b § 4) : paramétré sur le registr
       const { key } = await createKey(srv, a.cookie, a.user, GRANTABLE_SCOPES.filter((s) => s !== route.scope));
       const res = await call(route, { authorization: `Bearer ${key}` }, ZERO_UUID, VALID_BODIES[keyOf(route)]?.(a));
       expect(res.statusCode).toBe(403);
-      expect(res.json()).toMatchObject({ error: { code: 'insufficient_scope' } });
+      // UX-09 : le droit manquant est nommé, avec l'action et la marche à suivre.
+      expect(res.json()).toMatchObject({ error: { code: 'insufficient_scope', scope_required: route.scope, action_label: expect.stringContaining(route.scope!), what_to_do: expect.stringContaining(route.scope!), retryable: false } });
     },
   );
 

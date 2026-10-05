@@ -188,6 +188,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/prerequisites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ce qu'il reste à régler avant qu'une enquête parte (UX-09, UX-19), lisible par toute clé d'API */
+        get: operations["getPrerequisites"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/me": {
         parameters: {
             query?: never;
@@ -601,6 +618,120 @@ export interface paths {
          * @description L'activation exige une API non compilable dont les étapes instruites EXACTES sont confirmées ; sinon `409` et `instructed_mode` reste faux : `instructed_steps_unconfirmed`, `compilable` (une stratégie rejouable sans agent existe) ou `no_instructed_steps`. La désactivation est toujours acceptée.
          */
         put: operations["setInstructedMode"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apis/{slug}/refine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Affine l'API par un brouillon (retour, nouveau schéma de sortie) ; la version en service ne change pas (19 § 6, tâche 3.14)
+         * @description Crée le brouillon (ou remplace l'ancien, archivé `superseded`) à côté de la version en service. Propriétaire seul. Aucun changement de statut ; un run `draft_refine` est tracé. API `bloquee` ou `action_requise` : `409 api_blocked`, aucune requête. Un seul affinage à la fois par API : `409 refine_in_progress`. `dry_run` : l'estimation seule, rien n'est créé.
+         */
+        post: operations["refineApi"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apis/{slug}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Teste le brouillon sur une entrée : run `draft_test`, diff contre la version en service (19 § 6, tâche 3.14)
+         * @description Rejoue la stratégie du brouillon contre SON schéma de sortie, avec les gardes d'un run, sans toucher au statut. Sans run récent de la version en service pour cette entrée, un second run `draft_test` la rejoue pour comparer des sorties du même moment. `202` tant que les runs ne sont pas finis (le test est enregistré dès qu'ils le sont, lisible par `GET iteration`). Au-delà du plafond de l'API : `409 cost_above_cap` ; au-delà de 0,10 $ : `409 cost_confirmation_required` sauf `accept_cost`.
+         */
+        post: operations["testDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apis/{slug}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Met le brouillon en service : acte humain (19 § 6, tâche 3.14)
+         * @description Porte « promotion ». Console : un changement `major` exige `acknowledge_breaking` (`409 breaking_change_requires_ack`). Clé d'API : élicitation acceptée (canal MCP) ; sans élicitation, `minor` et `patch` par un appel explicite du propriétaire, `major` : `403 human_confirmation_required`, `acknowledge_breaking` n'y change rien. `diff_hash` : celui du dernier test, sinon `409 diff_hash_mismatch`. Pointeur déplacé et, depuis `erreur`, transition 22 (`promoted`) au même COMMIT.
+         */
+        post: operations["promoteDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apis/{slug}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rétablit une version qui a été en service, par déplacement de pointeur (19 § 6, tâche 3.14)
+         * @description Sans `version` : la plus récente qui a été en service avant la courante. Une version jamais courante (brouillon écarté, vN+1 de réparation non validée) : `400 version_not_revertable`. Une autre version de schéma : accusé `major` et porte de promotion. Le brouillon reste, marqué périmé. Depuis `erreur` : transition 22 (`reverted`).
+         */
+        post: operations["revertApi"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apis/{slug}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Jette le brouillon (archivé `discarded`) ; la version en service ne bouge pas (tâche 3.14) */
+        delete: operations["discardDraft"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apis/{slug}/iteration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reprise d'une itération : brouillon, retours, dernier test, prochaine étape ; propriétaire seul (19 § 6, tâche 3.14) */
+        get: operations["getIteration"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1841,6 +1972,23 @@ export interface webhooks {
 }
 export interface components {
     schemas: {
+        Prerequisites: {
+            ready: boolean;
+            /** @description Nombre d'éléments bloquants à régler. */
+            missing: number;
+            items: {
+                /** @enum {string} */
+                id: "instance_contact" | "llm_model:investigate" | "llm_price:investigate" | "llm_key_readable" | "responsible_use";
+                /** @description `null` quand l'état est inconnu (aucun worker n'a encore publié son environnement). */
+                ok: boolean | null;
+                blocking: boolean;
+                /** @description Code du catalogue d'erreurs quand l'élément est à régler. */
+                code: string | null;
+                message: string;
+                action_label: string | null;
+                console_path: string | null;
+            }[];
+        };
         ApiError: {
             error: {
                 code: string;
@@ -1851,6 +1999,30 @@ export interface components {
                 what_to_do?: string;
                 /** @description L'appel peut être refait tel quel une fois la marche à suivre faite (ex. `instance_contact_missing` : le contact du robot posé, UX-04). */
                 retryable?: boolean;
+                /** @description Langue de `message` (`fr`, `en`) ; `fr` quand le message porte le détail écrit par la route. */
+                message_locale?: string;
+                /** @description Ce que la personne fait ensuite, verbe d'abord, dans la langue de la requête (UX-09). */
+                action_label?: string;
+                /** @description Champ nommé par l'erreur (ex. `minimal_content`). */
+                field?: string;
+                /** @description Droit manquant à la clé (`insufficient_scope`, UX-09). */
+                scope_required?: string;
+                /** @description Détails publiables et sans secret (compte, motif). */
+                details?: {
+                    [key: string]: unknown;
+                };
+                /** @description Prochaine étape d'un refus d'itération (tâche 3.14) : un outil à appeler (`tool`, `args`) ou, pour un acte humain, le lien de la console (`url`). */
+                next_action?: Record<string, never> | null;
+                /** @description Niveau du changement de schéma d'un brouillon (`none`, `patch`, `minor`, `major`). */
+                level?: string;
+                /** @description Usages touchés par un changement cassant (colonnes de la vue, clé de déduplication d'une planification). */
+                impacted?: Record<string, never>[];
+                /** @description Phrase localisée des usages touchés (07 § 4), seulement pour un changement major. */
+                breaking?: string | null;
+                /** @description Page de l'API dans la console, où l'acte humain se fait. */
+                console_url?: string;
+                /** @description Estimation de coût d'un affinage ou d'un test refusé (`cost_above_cap`, `cost_confirmation_required`). */
+                estimate?: Record<string, never>;
             };
         };
         /** @description Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`). */
@@ -2235,6 +2407,129 @@ export interface components {
             version: number;
             sha256: string;
         };
+        IterationRefineRequest: {
+            /** @description Retour de l'utilisateur (texte non fiable, 2 000 caractères au plus) ; il n'entre que dans la source de sa propre API. */
+            feedback?: string;
+            /** @enum {string} */
+            kind?: "wrong_value" | "missing_field" | "extra_items" | "schema" | "step";
+            field?: string | null;
+            /** @description Nouveau schéma de sortie complet ; il vit dans le brouillon jusqu'à la promotion (jamais modifié en place). */
+            output_schema?: Record<string, never>;
+            /** @description `api` ou `step:<id>`. */
+            scope?: string;
+            dry_run?: boolean;
+            accept_cost?: boolean;
+        };
+        IterationEstimate: {
+            low_usd: number;
+            high_usd: number;
+            /** @enum {string} */
+            basis: "history" | "strategy" | "none";
+            /** @enum {string} */
+            confidence: "low" | "medium" | "high";
+            replay_cost_delta_usd: number;
+            cap_usd: number;
+            needs_confirmation: boolean;
+            above_cap: boolean;
+        };
+        IterationRefineResult: {
+            dry_run?: boolean;
+            draft_version?: number;
+            base_version?: number;
+            replaced_version?: number | null;
+            output_schema_version?: string;
+            /** @enum {string} */
+            schema_level?: "none" | "patch" | "minor" | "major";
+            schema_changes?: Record<string, never>[];
+            widening_warnings?: Record<string, never>[];
+            estimate: components["schemas"]["IterationEstimate"];
+            diff_ref?: null;
+            diff_hash?: null;
+            /** Format: uuid */
+            run_id?: string;
+            /** Format: date-time */
+            expires_at?: string;
+            ttl_days?: number;
+            /** @description Phrase localisée (langue du compte, ou `lang`). */
+            summary: string;
+            next_action: Record<string, never> | null;
+            console_url?: string;
+            message_locale?: string;
+        };
+        IterationTestRequest: {
+            input: Record<string, never>;
+            dry_run?: boolean;
+            accept_cost?: boolean;
+            wait_seconds?: number;
+        };
+        IterationTestResult: {
+            dry_run?: boolean;
+            needs_reference?: boolean;
+            draft_version?: number;
+            /** Format: uuid */
+            draft_run_id?: string;
+            /** Format: uuid */
+            reference_run_id?: string | null;
+            state?: string;
+            poll_after_seconds?: number;
+            estimate: components["schemas"]["IterationEstimate"];
+            /** @description Test enregistré sur le brouillon : conformité, coût, rejeu sans modèle, diff par clé d'identité et son empreinte. */
+            test?: Record<string, never> | null;
+            summary?: string;
+            next_action: Record<string, never> | null;
+            console_url?: string;
+            message_locale?: string;
+        };
+        IterationPromoteRequest: {
+            diff_hash: string;
+            accept_cost_increase?: boolean;
+            acknowledge_breaking?: boolean;
+            /**
+             * @description Réponse à l'élicitation de promotion ; honorée seulement pour une clé passée par le serveur MCP.
+             * @enum {string}
+             */
+            elicitation?: "accepted" | "declined";
+        };
+        IterationRevertRequest: {
+            version?: number;
+            acknowledge_breaking?: boolean;
+            /** @enum {string} */
+            elicitation?: "accepted" | "declined";
+        };
+        IterationMoveResult: {
+            current_version: number;
+            previous_version: number;
+            status: string;
+            /** @description 22 depuis `erreur`, sinon null (pas une transition). */
+            transition: number | null;
+            reason?: string;
+            output_schema_version: string;
+            summary: string;
+            next_action?: Record<string, never> | null;
+            console_url?: string;
+            message_locale?: string;
+        };
+        IterationDiscarded: {
+            archived_version: number;
+            summary: string;
+            message_locale?: string;
+        };
+        IterationView: {
+            slug: string;
+            status: string;
+            current_version: number | null;
+            output_schema_version: string;
+            /** @description Brouillon, retours (propriétaire seul), dernier test, base périmée. */
+            draft: Record<string, never> | null;
+            versions: Record<string, never>[];
+            /** @enum {string} */
+            next_step: "refine" | "test" | "promote" | "retest" | "blocked";
+            promotion?: Record<string, never> | null;
+            summary: string;
+            next_action?: Record<string, never> | null;
+            console_url?: string;
+            message_locale?: string;
+        };
         InstructedModeWrite: {
             enabled: boolean;
         };
@@ -2245,7 +2540,10 @@ export interface components {
             url: string;
             /** @description Exemple de sortie facultatif (objet ou tableau JSON). */
             example_output?: unknown;
+            /** @description Validation automatique du schéma proposé (défaut `true`, Q2 du CDC UX) ; `false` garde la porte du schéma (`validate_schema`). */
             auto_validate?: boolean;
+            /** @description Nom lisible de l'API (1 à 80 caractères) ; il court le slug. Absent, SYM le tire de la demande. */
+            name?: string;
             network_policy?: components["schemas"]["NetworkPolicy"];
             wait_seconds?: number;
             visibility?: components["schemas"]["Visibility"];
@@ -2471,7 +2769,7 @@ export interface components {
         };
         ApiExportStrategy: {
             /** @enum {string} */
-            execution: "fetch" | "fetch_in_page" | "playwright";
+            execution: "fetch" | "fetch_in_page" | "playwright" | "agent_fetch";
             /** @enum {string} */
             network: "direct" | "dc_proxy" | "res_proxy";
             /** @description Stratégie déclarative (04b § 2), sans session ni secret. */
@@ -3663,8 +3961,10 @@ export interface components {
             [key: string]: unknown;
         };
         PairingCode: {
-            /** @description Code à usage unique, valable 10 minutes. */
+            /** @description Code à usage unique, valable 10 minutes (saisie à la main). */
             code: string;
+            /** @description Code en un collage `sym-pair:v1:<base64url({url, code})>` (adresse de l'instance et code à usage unique, 10 minutes) ; l'extension le lit sans saisie d'URL. */
+            pairing_code: string;
             /** Format: date-time */
             expires_at: string;
         };
@@ -3672,8 +3972,10 @@ export interface components {
             currentPassword?: components["schemas"]["CurrentPassword"];
         };
         ExtensionPairingCode: {
-            /** @description Code à usage unique, valable 10 minutes. */
+            /** @description Code à usage unique, valable 10 minutes (saisie à la main). */
             code: string;
+            /** @description Code en un collage `sym-pair:v1:<base64url({url, code})>` (adresse de l'instance et code à usage unique, 10 minutes) ; l'extension le lit sans saisie d'URL. */
+            pairingCode: string;
             /** Format: date-time */
             expiresAt: string;
         };
@@ -3755,8 +4057,10 @@ export interface components {
             items: components["schemas"]["AdminExtensionDevice"][];
         };
         Version: {
-            /** @description Version de l'instance (SemVer, `RUNTIME_VERSION`). */
+            /** @description Version de l'instance (SemVer, `RUNTIME_VERSION`, sinon la version du paquet). */
             server: string;
+            /** @description Commit Git de l'image (`RUNTIME_COMMIT` ou `RENDER_GIT_COMMIT`) ; absent quand l'image n'en porte pas. */
+            commit?: string;
             /** @description Version attendue du schéma de base. */
             schema: number;
             /** @description Version minimale de l'extension acceptée à l'appairage. */
@@ -3828,6 +4132,8 @@ export interface components {
         Limit: number;
         /** @description Attente synchrone maximale en secondes (05 § 2) ; au-delà, 202 et run à suivre. */
         Wait: number;
+        /** @description Langue des phrases de la réponse (`en`, `fr`) ; défaut, la langue du compte. */
+        Lang: string;
     };
     requestBodies: never;
     headers: never;
@@ -4125,6 +4431,28 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    getPrerequisites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Contact du robot, modèle et prix du rôle enquête, clé du fournisseur, case « usage responsable » de la personne. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Prerequisites"];
+                };
+            };
+            401: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getMe: {
@@ -4461,6 +4789,8 @@ export interface operations {
         parameters: {
             query?: {
                 confirm?: boolean;
+                /** @description Nom de la copie (UX-16) : son slug, en minuscules sans accent, suffixé d'un jeton court seulement s'il est déjà pris. Un nom sans lettre ni chiffre est refusé (400 `invalid_request`). */
+                name?: string;
             };
             header?: never;
             path?: never;
@@ -4944,6 +5274,212 @@ export interface operations {
                     "application/json": components["schemas"]["ApiError"];
                 };
             };
+        };
+    };
+    refineApi: {
+        parameters: {
+            query?: {
+                /** @description Langue des phrases de la réponse (`en`, `fr`) ; défaut, la langue du compte. */
+                lang?: components["parameters"]["Lang"];
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IterationRefineRequest"];
+            };
+        };
+        responses: {
+            /** @description Brouillon prêt (ou estimation seule en `dry_run`). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IterationRefineResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    testDraft: {
+        parameters: {
+            query?: {
+                /** @description Langue des phrases de la réponse (`en`, `fr`) ; défaut, la langue du compte. */
+                lang?: components["parameters"]["Lang"];
+                /** @description Attente synchrone maximale en secondes (05 § 2) ; au-delà, 202 et run à suivre. */
+                wait?: components["parameters"]["Wait"];
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IterationTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Test fini (ou estimation seule en `dry_run`) : diff, coût, conformité, empreinte du diff. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IterationTestResult"];
+                };
+            };
+            /** @description Runs de test en cours. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IterationTestResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    promoteDraft: {
+        parameters: {
+            query?: {
+                /** @description Langue des phrases de la réponse (`en`, `fr`) ; défaut, la langue du compte. */
+                lang?: components["parameters"]["Lang"];
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IterationPromoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Version en service. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IterationMoveResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    revertApi: {
+        parameters: {
+            query?: {
+                /** @description Langue des phrases de la réponse (`en`, `fr`) ; défaut, la langue du compte. */
+                lang?: components["parameters"]["Lang"];
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["IterationRevertRequest"];
+            };
+        };
+        responses: {
+            /** @description Version rétablie. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IterationMoveResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    discardDraft: {
+        parameters: {
+            query?: {
+                /** @description Langue des phrases de la réponse (`en`, `fr`) ; défaut, la langue du compte. */
+                lang?: components["parameters"]["Lang"];
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Brouillon archivé. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IterationDiscarded"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    getIteration: {
+        parameters: {
+            query?: {
+                /** @description Langue des phrases de la réponse (`en`, `fr`) ; défaut, la langue du compte. */
+                lang?: components["parameters"]["Lang"];
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description État de l'itération, versions récentes, plan de promotion s'il y a un brouillon. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IterationView"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getResolvedRules: {

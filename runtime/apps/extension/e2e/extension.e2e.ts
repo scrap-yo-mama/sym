@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { kekFor, MasterKey } from '@runtime/core';
+import { decodePairingCode, encodePairingCode } from '@runtime/core/tunnel';
 import { siteCookiesForRun } from '@runtime/db';
 import pg from 'pg';
 import { auditSymSignature, EXTENSION_DIR, expectNoCspViolation, fakeInstance, startHarness, type Harness, type User } from './harness.ts';
@@ -185,12 +186,13 @@ test('appairage : URL de l’instance + code à usage unique → « Connected as
   const code = await h.console(alice.cookie, 'POST', '/api/extension/pairing-codes', { currentPassword: alice.password });
   expect(code.status).toBe(201);
   const page = await openPopup();
+  await page.click('#manual summary'); // saisie à la main (secours de l'appairage en un collage)
   await page.fill('#instance-url', h.publicUrl);
   await page.fill('#pairing-code', (code.data as { code: string }).code);
   await page.fill('#device-label', 'zz_test_e2e_browser');
   await h.grantHosts(['http://127.0.0.1/*']); // l'utilisateur accepte l'accès à SON instance
   await page.click('#pair');
-  await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  await expect(page.locator('#identity')).toContainText(`Connected as ${alice.email}`);
   // Popup appairé : la signature reste l'icône à côté de « SYM », une seule, hors des zones d'état.
   expect(await auditSymSignature(page)).toEqual({ problems: [], signatures: 1 });
 
@@ -212,7 +214,7 @@ test('appairage : URL de l’instance + code à usage unique → « Connected as
   });
   expect(replay.status).toBe(400);
   await page.reload();
-  await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  await expect(page.locator('#identity')).toContainText(`Connected as ${alice.email}`);
 });
 
 test('assert_consent_before_capture : aucune lecture de cookie avant le clic de consentement, même hôte accordé', async () => {
@@ -317,12 +319,13 @@ async function pairAliceAndConnectShop(): Promise<Page> {
   let page = await openPopup();
   await page.locator('#pairing, #paired').first().waitFor();
   if (await page.locator('#pairing').isVisible()) {
+    await page.click('#manual summary'); // saisie à la main (secours de l'appairage en un collage)
     await page.fill('#instance-url', h.publicUrl);
     await page.fill('#pairing-code', (code.data as { code: string }).code);
     await page.fill('#device-label', 'zz_test_e2e_browser');
     await h.grantHosts(['http://127.0.0.1/*']);
     await page.click('#pair');
-    await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+    await expect(page.locator('#identity')).toContainText(`Connected as ${alice.email}`);
   }
   await visit(SHOP);
   page = await openPopup();
@@ -348,7 +351,7 @@ test('« Disconnect » depuis la console : permission d’hôte retirée, 0 lect
   expect((await cookieReads()).length).toBe(before);
   expect(await h.sql<{ n: number }>('SELECT count(*)::int AS n FROM site_sessions WHERE domain = $1', [SHOP])).toEqual([{ n: 0 }]);
   const page = await openPopup();
-  await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  await expect(page.locator('#identity')).toContainText(`Connected as ${alice.email}`);
   await expect(page.locator(`#sites li[data-domain="${SHOP}"]`)).toHaveCount(0);
 });
 
@@ -397,7 +400,7 @@ test('ré-appairage vers une autre instance : consentements et permissions effac
     expect(await hasHosts(patterns(SHOP))).toBe(false);
     expect(await hasHosts(['http://127.0.0.1/*'])).toBe(true);
     const popup = await openPopup();
-    await expect(popup.locator('#identity')).toHaveText('Connected as zz_test_b@instance-b.test');
+    await expect(popup.locator('#identity')).toContainText('Connected as zz_test_b@instance-b.test');
     await expect(popup.locator(`#sites li[data-domain="${SHOP}"]`)).toContainText('connected from another browser');
   } finally {
     await b.close();
@@ -535,4 +538,56 @@ test('spike chrome.debugger (07 § 4) : attach sur un hôte optionnel accordé ;
     return null;
   };
   await expect.poll(survived, { timeout: 15_000 }).toEqual({ attached: true, doc: '#document' });
+});
+
+// U3.1 — appairage en un collage (05 § 2, 7.2). Dernier de la suite : il ré-appaire le navigateur (état de l'appairage précédent effacé).
+test('assert_pairing_single_paste — un seul collage du code de la console, sans saisie d’URL : appairée, console à jour en moins de 5 s', async () => {
+  const carol = await h.createMember('zz_test_carol_paste@example.test');
+  const created = await h.console(carol.cookie, 'POST', '/api/extension/pairing-codes', { currentPassword: carol.password });
+  expect(created.status).toBe(201);
+  const pairingCode = (created.data as { pairingCode: string }).pairingCode;
+  expect(pairingCode).toMatch(/^sym-pair:v1:/);
+  const page = await openPopup();
+  await page.locator('#pairing, #paired').first().waitFor();
+  if (await page.locator('#paired').isVisible()) await page.click('#unpair');
+  await expect(page.locator('#pairing-paste')).toBeVisible();
+  // Un seul champ à remplir ; la saisie à la main reste fermée et vide.
+  await page.fill('#pairing-paste', pairingCode);
+  expect(await page.locator('#manual').evaluate((d) => (d as HTMLDetailsElement).open)).toBe(false);
+  expect(await page.locator('#instance-url').inputValue().catch(() => '')).toBe('');
+  await h.grantHosts(['http://127.0.0.1/*']); // l'utilisateur accepte l'accès à SON instance
+  const clicked = Date.now();
+  await page.click('#pair-paste');
+  // Revue sécurité : l'origine décodée est montrée AVANT toute permission, et rien n'est appairé sans confirmation explicite.
+  const decoded = decodePairingCode(pairingCode);
+  if (!decoded.ok) throw new Error('pairing code undecodable');
+  const origin = new URL(decoded.url).origin;
+  await expect(page.locator('#pair-confirm-origin')).toHaveText(origin);
+  await expect(page.locator('#paired')).toHaveCount(0);
+  await page.click('#pair-confirm');
+  await expect(page.locator('#identity')).toHaveText(`Connected as ${carol.email} to ${origin}`);
+  // Console à jour : l'appareil figure dans la liste de l'utilisateur moins de 5 s après le collage.
+  await expect
+    .poll(async () => ((await h.console(carol.cookie, 'GET', '/api/extension/devices')).data as { items: { revokedAt: string | null }[] }).items.filter((d) => d.revokedAt === null).length, { timeout: 5_000 })
+    .toBe(1);
+  expect(Date.now() - clicked).toBeLessThan(5_000);
+});
+
+test('appairage en un collage : adresse en http:// hors boucle locale refusée avec le https:// requis, sans requête vers elle ; code à l’ancienne et version inconnue renvoyés', async () => {
+  const page = await openPopup();
+  await page.locator('#pairing, #paired').first().waitFor();
+  if (await page.locator('#paired').isVisible()) await page.click('#unpair');
+  await expect(page.locator('#pairing-paste')).toBeVisible();
+  const requests: string[] = [];
+  h.context.on('request', (r) => requests.push(r.url()));
+  await page.fill('#pairing-paste', encodePairingCode({ url: 'http://zz-test-insecure.example', code: '7K3QM-X9D2P' }));
+  await page.click('#pair-paste');
+  await expect(page.locator('#error')).toContainText('https://');
+  expect(requests.filter((u) => u.includes('zz-test-insecure'))).toEqual([]);
+  await page.fill('#pairing-paste', '7K3QM-X9D2P');
+  await page.click('#pair-paste');
+  await expect(page.locator('#error')).toContainText('not a pairing code');
+  await page.fill('#pairing-paste', 'sym-pair:v2:eyJ1cmwiOiJ4In0');
+  await page.click('#pair-paste');
+  await expect(page.locator('#error')).toContainText('update the extension');
 });

@@ -141,10 +141,11 @@ describe('M6 : langue de la prose du LLM (21 § 4.5)', () => {
       // Identique hors langue : un seul jeu de prompts, en anglais.
       expect(en.replace('English (en)', 'French (fr)')).toBe(fr);
       expect(fr.startsWith(INVESTIGATE_SYSTEM_PROMPT)).toBe(true);
-      // Le rôle investigate n'écrit aucune prose pour l'humain : les descriptions de champs restent en anglais (lues par le
-      // modèle client, 21 § 4.5), le bloc le dit explicitement et ne vise qu'un `title` éventuel.
-      expect(fr).toMatch(/descriptions?[^.\n]*\bEnglish\b[^.\n]*whatever the Language line/i);
-      expect(fr.indexOf('Language:')).toBeLessThan(fr.search(/whatever the Language line/i));
+      // UX-35 (03-specs-mcp § 6) : noms, types et valeurs d'énumération restent des sorties machine en anglais ; la description
+      // de chaque champ est une phrase pour la personne : elle suit la langue du bloc `Language:`.
+      expect(fr).toMatch(/field names, types and enum values stay in plain English/i);
+      expect(fr).toMatch(/description of each field[^.\n]*Language line/i);
+      expect(fr.indexOf('Language:')).toBeLessThan(fr.search(/description of each field/i));
       expect(none.startsWith(INVESTIGATE_SYSTEM_PROMPT)).toBe(true);
       expect(none).not.toContain('Language:');
       // Une langue hors registre (injection par runs.locale) n'entre jamais dans le prompt.

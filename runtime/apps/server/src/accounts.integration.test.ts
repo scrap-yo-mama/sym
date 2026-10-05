@@ -166,7 +166,7 @@ describe('invitations (13 § 6)', () => {
       expect({ status: res.statusCode, body: res.body }).toEqual({ status: refusals[0]!.statusCode, body: refusals[0]!.body });
       expect(res.cookies).toEqual([]);
     }
-    expect(refusals[0]!.json()).toEqual({ error: { code: 'invitation_invalid', message: expect.any(String) } });
+    expect(refusals[0]!.json()).toMatchObject({ error: { code: 'invitation_invalid', message: expect.any(String) } });
     // Un seul compte créé : celui de l'invitation valide.
     expect((await sql<{ n: number }>(srv, 'SELECT count(*)::int AS n FROM users'))[0]!.n).toBe(usersBefore[0]!.n + 1);
     expect(await sql(srv, "SELECT email FROM users WHERE email IN ('zz_test_inv_old@example.test', 'zz_test_inv_revoked@example.test')")).toEqual([]);
@@ -228,7 +228,7 @@ describe('invitations (13 § 6)', () => {
     });
     expect(put.statusCode, put.body).toBe(200);
     try {
-      expect((await invite('zz_test_inv@other.example.test')).json()).toEqual({ error: { code: 'email_domain_not_allowed', message: expect.any(String) } });
+      expect((await invite('zz_test_inv@other.example.test')).json()).toMatchObject({ error: { code: 'email_domain_not_allowed', message: expect.any(String) } });
       expect((await invite('zz_test_inv@allowed.example.test')).statusCode).toBe(201);
     } finally {
       await resetSecurity();

@@ -7,6 +7,8 @@
 //   `tunnels.gateway_instance`) ; rattrapage à la connexion et sondage de secours des jobs en attente.
 // - Avant d'émettre une commande : propriétaire du run = utilisateur du jeton (INV5, sinon refus journalisé), jeu fermé
 //   de commandes, liste blanche CDP, domaine et URL contrôlés par la garde des sites (INV10), E6 refusé (ADR 0001).
+// - `resume{run_id, last_command_seq}` (U3.4) : reprise après reconnexion, run vérifié (propriétaire), commandes en attente
+//   rattrapées.
 // - Réponses découpées (≤ 1 Mio chacune, `maxPayload`), réassemblées ici, validées, écrites en transaction puis NOTIFY
 //   du job_id au worker. Compression désactivée.
 import { randomBytes } from 'node:crypto';
@@ -324,6 +326,27 @@ export class TunnelGateway {
         return;
       case 'result':
         return this.#onResult(conn, frame);
+      case 'resume':
+        return this.#onResume(conn, frame);
+    }
+  }
+
+  /**
+   * `resume` (U3.4, 07 § 4) : après une reconnexion, l'extension dit quel run elle servait. Le run doit appartenir à
+   * l'utilisateur de la connexion (INV5) : sinon refus journalisé, la connexion reste ouverte. Reconnu, la passerelle journalise
+   * la reprise et rattrape aussitôt les commandes en attente de cet utilisateur (lectures rejouées ; écritures déjà mises en
+   * échec par le détachement de l'ancienne connexion, jamais rejouées). Aucune réponse n'est émise.
+   */
+  async #onResume(conn: Connection, frame: { run_id: string; last_command_seq: number }): Promise<void> {
+    const { rows } = await this.#options.pool.query<{ state: string }>('SELECT state FROM runs WHERE id = $1 AND owner_id = $2', [frame.run_id, conn.ownerId]);
+    if (rows[0] === undefined) {
+      await this.#audit(conn, 'tunnel.resume_denied', 'denied', { run_id: frame.run_id, reason: 'owner_mismatch' });
+      return;
+    }
+    await this.#audit(conn, 'tunnel.resumed', 'success', { run_id: frame.run_id, last_command_seq: frame.last_command_seq, run_state: rows[0].state });
+    for (const pending of await pendingTunnelJobs(this.#options.pool, [conn.ownerId])) {
+      if (conn.phase !== 'open') break;
+      await this.#dispatch(conn, pending.jobId);
     }
   }
 

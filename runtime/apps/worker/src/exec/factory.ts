@@ -10,6 +10,7 @@ import { briefConfigFromEnv } from '@runtime/core';
 import { costCapsFromEnv, DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
+import { confirmAboveUsdFromEnv } from '@runtime/core/investigation';
 import { identityFromEnv, instanceContactEnvInvalid, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
 import { PgPacingStore, publishBrowserProvider, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
@@ -22,6 +23,7 @@ import type { BrowserProvider } from '@sym/contracts/browser';
 import { installedEngineIdentity } from '../browser/engine-identity.js';
 import { cgroupMemoryLimitBytes, cgroupMemoryWorkingSetBytes } from '../browser/cgroup.js';
 import { BrowserPool } from '../browser/pool.js';
+import { probeAgentBrowser, type BrowserProbe } from '../browser/agent-browser-probe.js';
 import { chromiumSandboxCheck, seccompMode, type ChromiumSandboxStatus } from '../browser/sandbox-check.js';
 import { ProcessSandboxEngine, sandboxOptionsFromEnv, type IsolationProbe } from '../sandbox/index.js';
 import type { ExecutorFactory } from '../worker.js';
@@ -37,6 +39,7 @@ import { createStrategyRuntime, type AgentPorts } from './strategy-executor.js';
  * Rôles résolus pour l'enquête (schéma, prix des couples E4 et E6). Le rôle `judge` n'en fait PAS partie (revue 2.12) :
  * il est résolu à part (`judgeLlm`), et une erreur de ses réglages n'empêche jamais l'enquête.
  */
+export { confirmAboveUsdFromEnv };
 export const INVESTIGATION_LLM_ROLES = ['investigate', 'extract', 'agent'] as const;
 
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
@@ -94,6 +97,8 @@ export type ProductionFactoryOverrides = {
   readonly sandboxEngine?: (options: { production: boolean }) => FactoryEngine;
   /** Vérification du bac à sable de Chromium au démarrage (tests) ; défaut : `chromiumSandboxCheck()`. */
   readonly chromiumSandbox?: () => Promise<ChromiumSandboxStatus>;
+  /** Test « Navigateur » au démarrage (UX-23, tests) ; défaut : `probeAgentBrowser()`, qui lance le Chromium dédié de l'agent puis le ferme. */
+  readonly agentBrowser?: () => Promise<BrowserProbe>;
 };
 
 export function productionExecutorFactory(env: Readonly<Record<string, string | undefined>> = process.env, overrides: ProductionFactoryOverrides = {}): ExecutorFactory {
@@ -178,6 +183,20 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
             { alert: 'chromium_sandbox_unavailable', seccomp, detail: status.detail },
             "Chromium : bac à sable indisponible (espaces de noms utilisateur refusés par le profil seccomp ou AppArmor de l'hôte) : les runs navigateur échoueront (« No usable sandbox! »). Docker : profil seccomp-chromium.json (security_opt du worker), voir docs/deploiement.md",
           );
+        }
+        // Test « Navigateur » (UX-23), SUR DEMANDE (`AGENT_BROWSER_PROBE=true`, désactivé par défaut) : le Chromium dédié de l'agent
+        // démarre-t-il sur ce worker (HOME, bac à sable, binaire) ? Dit au démarrage, avec la classe d'erreur en code fermé, au lieu
+        // d'un essai d'enquête muet après 60 s ; n'empêche aucun run. Un lancement de Chromium coûte plusieurs secondes : jamais
+        // imposé à chaque démarrage (ni aux processus de test), c'est le déploiement qui l'active (Ma stack, `check:stack`).
+        if (env['AGENT_BROWSER_PROBE'] === 'true') {
+          const agentBrowser = await (overrides.agentBrowser ?? probeAgentBrowser)();
+          if (agentBrowser.ok) logger.info({ ms: agentBrowser.ms }, 'Chromium agentique : démarre');
+          else {
+            logger.error(
+              { alert: 'agent_browser_unavailable', class: agentBrowser.class, ms: agentBrowser.ms },
+              "Chromium agentique : ne démarre pas (classe d'erreur dans le champ class) : les essais agent (E4 par le navigateur, E5 délégué, E6) échoueront en agent_engine_error",
+            );
+          }
         }
       }
     }
@@ -280,6 +299,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       strategy,
       // Dossier d'enquête (2.14) : bornes BRIEF_* (sondes, part du budget, mémoire négative, budget du prompt).
       briefConfig: briefConfigFromEnv(process.env),
+      // Coût annoncé avant dépense (CDC UX, U1.9) : au-delà de `CONFIRM_ABOVE_USD`, la validation automatique attend la confirmation.
+      confirmAboveUsd: confirmAboveUsdFromEnv(process.env),
       // Session requise ou tunnel seul (04 §4) : étape 0 et reconnaissance par l'extension du propriétaire.
       tunnel,
       agentic: true,

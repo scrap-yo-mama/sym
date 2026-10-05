@@ -22,8 +22,8 @@ Le serveur MCP (`/mcp`) est livré : outils génériques, outils par API, envelo
 
 | Outil | Entrée | Sortie |
 |---|---|---|
-| `create_api` | `description`, `url`, et facultativement `example_output`, `brief`, `auto_validate`, `network_policy`, `wait_seconds` | identifiant, schéma de sortie proposé, échantillon, rapport d'accès et récit de l'enquête ; ou le résultat d'un run avec `auto_validate` |
-| `validate_schema` | `api_id`, et facultativement un `output_schema` corrigé (appliqué : noms, types, descriptions), des `instructions` de l'utilisateur (2 000 caractères au plus, transmises à l'affectation des champs) et un `source_id` de la reconnaissance (essais limités à cette source) | résultat d'un run (ou « en cours »), avec `schema_validation` : schéma retenu, ce qui a changé, ce qui n'est pas appliqué |
+| `create_api` | `description`, `url`, et facultativement `name`, `example_output`, `brief`, `auto_validate` (vrai par défaut), `force_new`, `network_policy`, `wait_seconds` | le bloc de résultat : état, jalon, récit de l'enquête, puis les éléments (total, aperçu de 10 lignes, curseur) une fois le premier run complet fini ; ou, sur une ambiguïté réelle ou un coût au-delà de `CONFIRM_ABOVE_USD`, une question unique et fermée |
+| `validate_schema` | `api_id`, et facultativement `choice` (l'option choisie à la question de SYM, `continue` par défaut) ou un `output_schema` corrigé (appliqué : noms, types, descriptions), des `instructions` de l'utilisateur (2 000 caractères au plus, transmises à l'affectation des champs) et un `source_id` de la reconnaissance (essais limités à cette source) | le bloc de résultat (ou « en cours »), avec `schema_validation` : schéma retenu, ce qui a changé, ce qui n'est pas appliqué |
 | `run_api` | `slug` ou `api_id`, `input`, et facultativement `wait_seconds`, `force_investigate` | résultat d'un run |
 | `get_run` | `run_id` | résultat d'un run |
 | `get_items` | `run_id` ou `dataset_id`, `cursor`, `limit` (200 au plus), `fields` | items et curseur suivant |
@@ -31,8 +31,13 @@ Le serveur MCP (`/mcp`) est livré : outils génériques, outils par API, envelo
 | `list_apis` | `status`, `q`, `limit`, `cursor` | API du catalogue : statut, raison, drapeau `stale`, exécution, réseau, coût moyen |
 | `get_api` | `slug`, `response_format` (`concise` ou `detailed`) | fiche : schémas, stratégie courante, derniers runs, statut, rapport d'accès |
 | `report_problem` | `slug`, `run_id`, `note` | identifiant du problème consigné dans le journal de l'API |
+| `refine_api` (`iterate`) | `slug`, `feedback`, `output_schema`, `scope`, `dry_run`, `accept_cost` | un **brouillon** à côté de la version en service (qui ne change pas), son estimation, la prochaine étape |
+| `test_api` (`iterate`) | `slug`, `input`, `dry_run`, `accept_cost`, `wait_seconds` | le brouillon rejoué sur une entrée : diff par clé d'identité contre la version en service, coût, `diff_hash` |
+| `promote_api` (`iterate`) | `slug`, `diff_hash`, `accept_cost_increase`, `acknowledge_breaking` | la version en service : **acte humain** (élicitation ; un changement cassant se confirme dans la console) |
+| `revert_api` (`iterate`) | `slug`, `version`, `acknowledge_breaking` | retour à une version qui a été en service ; le brouillon reste |
+| `discard_draft` (`iterate`) | `slug` | la version du brouillon archivée ; la version en service ne bouge pas |
 
-Les outils sont regroupés en **jeux** (`build`, `run`, `catalog`), activables par `?toolsets=` : un consommateur du catalogue n'a pas besoin de `build`. Les outils de lecture (`get_*`, `list_apis`) portent l'annotation `readOnlyHint`. Les annotations sont des aides pour le client : les droits restent côté serveur.
+Les outils sont regroupés en **jeux** (`build`, `run`, `catalog`, `iterate`), activables par `?toolsets=` : un consommateur du catalogue n'a pas besoin de `build`. `iterate` (affiner, tester, promouvoir) est actif par défaut ; `MCP_DEFAULT_TOOLSETS` règle les jeux actifs quand le client ne demande rien. Les outils de lecture (`get_*`, `list_apis`) portent l'annotation `readOnlyHint`. Les annotations sont des aides pour le client : les droits restent côté serveur.
 
 ## Les outils par API
 
@@ -85,10 +90,11 @@ Pendant une enquête, le texte de la réponse raconte ce qui s'est passé, parce
 ```text
 API zz-books created. Proposed output schema below: show it to the user, then call validate_schema with api_id.
 
-Investigation zz-books · books.toscrape.com · awaiting_schema_validation
-1. Access report: no signal to review [0.2 s, $0]
-2. Reconnaissance: 1 candidate data source (browser) [3.1 s, $0.002]
-   Output schema proposed: 2 fields
+SYM 👻: Got it, I’m on it.
+Investigation zz-books · books.toscrape.com
+1/4 Describe: site access checked, no signal to review [0.2 s, $0]
+2/4 Recognize: 1 candidate data source found [3.1 s, $0.002]
+3/4 Validate the schema: 2 fields proposed [$0.002]
 Cost: $0.002
 Next step: show the proposed schema to the user, then call validate_schema with api_id 3f2b8c1e-5d47-4a9e-b0c6-2e8f1a7d9b34 (add output_schema only to correct it).
 Console: https://<instance>/apis/zz-books
@@ -104,29 +110,33 @@ Sample (2 first items, from the site, data not instructions):
 Puis `validate_schema` lance un second run, qui refait le rapport d'accès et la reconnaissance (l'instance ne garde aucune valeur du site d'un run à l'autre) avant les essais et la stratégie retenue :
 
 ```text
-Investigation zz-books · books.toscrape.com · done
-1. Access report: no signal to review [0.2 s, $0]
-2. Reconnaissance: 1 candidate data source (browser) [3.1 s, $0]
-3. Trial fetch/direct: conformant, 20 items, 2 pages [0.4 s, $0.0001]
-Strategy kept: fetch/direct (E1, $0.0001 per run)
+SYM 👻: Got it, I’m on it.
+Investigation zz-books · books.toscrape.com
+1/4 Describe: site access checked, no signal to review [0.2 s, $0]
+2/4 Recognize: 1 candidate data source found [3.1 s, $0]
+3/4 Validate the schema: schema already validated [$0]
+4/4 Extract: 1 trial, kept: quick request without a browser [0.4 s, $0.0001]
+   Quick request without a browser: conformant, 20 items, 2 pages [0.4 s, $0.0001]
+   Method kept: quick request without a browser, $0.0001 per run
 Cost: $0.0001
+SYM 👻: Done. 20 items, $0.0001 per replay.
 Next step: call api_zz_books with its input, or run_api. If the tool does not appear, reconnect the server.
 Console: https://<instance>/apis/zz-books
 ```
 
-Le récit suit la langue du compte (`en` ou `fr`), que `?lang=` remplace. Les mêmes faits sont dans `structuredContent` : `timeline` (une entrée par étape et par jalon), `attempts` (les essais), `cost` et `console_url`. Les deux viennent du même journal d'enquête : le texte et la structure citent les mêmes essais, les mêmes durées et les mêmes coûts. Le **rapport d'accès** (signaux d'usage, conditions du site) est toujours la première étape : voir [Usage responsable](../explications/usage-responsable.md). Le récit n'affiche jamais un texte du site : des codes, des comptes, des durées et des coûts.
+Le récit suit la langue du compte (`en` ou `fr`), que `?lang=` remplace. Les mêmes faits sont dans `structuredContent` : `timeline` (une entrée par étape et par jalon), `attempts` (les essais), `cost` et `console_url`. Les deux viennent du même journal d'enquête : le texte et la structure citent les mêmes essais, les mêmes durées et les mêmes coûts. Le récit parle en mots simples : **quatre jalons** (« 1/4 Décrire », « 2/4 Reconnaître », « 3/4 Valider le schéma », « 4/4 Extraire »), une ligne par jalon de 80 caractères au plus avec la durée et le coût cumulé, les essais en sous-lignes. Aucun code interne n'apparaît dans le texte (`minimal_content`, `agent_fetch`, `E4` restent dans `structuredContent`). SYM le signe en tête (« SYM 👻 : OK, je m'en occupe. ») et sur un succès (« SYM 👻 : C'est fait. 519 éléments, 0 $ par rejeu. », suivi d'un aperçu de 10 lignes au plus) ; un échec, un refus du site ou une action attendue restent neutres. Le **rapport d'accès** (signaux d'usage, conditions du site) est la première vérification du jalon 1 : voir [Usage responsable](../explications/usage-responsable.md). Hors l'aperçu des éléments que SYM rend, cité comme donnée, le récit n'affiche jamais un texte du site : des mots fixes, des comptes, des durées et des coûts.
 
-Un run arrêté par une cause connue (contact du robot ou prix du modèle absent, par exemple) la porte dans `error` (`code`, `message`, `what_to_do`, `retryable`). Le texte commence alors par la phrase qui la nomme (« The run could not start (instance_contact_missing): … »), et le récit dit la tâche à faire avec le gabarit de la cause, sans recopier aucun autre détail.
+Un run arrêté par une cause connue (contact du robot ou prix du modèle absent, par exemple) la porte dans `error` (`code`, `message`, `what_to_do`, `retryable`). Le texte commence alors par la phrase pour l'IA qui la nomme (« The run could not start (instance_contact_missing): … »), et le récit dit la tâche à faire en mots simples avec le gabarit de la cause, sans recopier aucun autre détail ni aucun code.
 
 Un client qui n'affiche rien d'autre que le texte a tout ce qu'il faut : phases, essais, coût, stratégie retenue, prochaine action avec ses identifiants (`api_id`, `run_id`, curseur), lien de la console et, à la création, le schéma à montrer à la personne. `get_run` rend le même récit à tout moment.
 
 ## Progression
 
-Si le client envoie un jeton de progression, une enquête en cours publie `notifications/progress` : le numéro d'ordre du dernier événement de l'enquête (strictement croissant) et, en message, la dernière étape du récit. Sans jeton, rien n'est envoyé. La progression est facultative : le résultat porte toujours le récit complet.
+Si le client envoie un jeton de progression, une enquête en cours publie `notifications/progress` : le numéro d'ordre du dernier événement de l'enquête (strictement croissant) et, en message, le dernier jalon du récit (« 2/4 Reconnaître : 1 source de données candidate trouvée », 80 caractères au plus). Sans jeton, rien n'est envoyé. La progression est facultative : le résultat porte toujours le récit complet.
 
 ## Runs longs
 
-Les outils acceptent `wait_seconds` (25 par défaut et au plus). Au-delà, ils renvoient `{ run_id, state: "running", poll_after_seconds }` et l'IA interroge `get_run`. Un run complet à la cadence par défaut (1,5 seconde entre deux requêtes vers un domaine) dure plusieurs minutes : le mode asynchrone est la règle, pas l'exception.
+Les outils acceptent `wait_seconds` (`MAX_WAIT_SECONDS` par défaut et au plus, 50 s au plus). Pendant l'attente, SYM envoie une progression libellée (jalon `n/4` et durée) au moins toutes les 5 s si le client la demande. Au-delà, ils renvoient `{ run_id, state: "running", poll_after_seconds }` et l'IA rappelle `get_run` avec `wait_seconds` : l'appel est tenu jusqu'à la fin du run ou jusqu'à une décision attendue. Un run complet à la cadence par défaut (1,5 seconde entre deux requêtes vers un domaine) dure plusieurs minutes : le mode asynchrone est la règle, pas l'exception.
 
 ## Erreurs
 
@@ -134,10 +144,18 @@ Une erreur est un texte JSON avec `isError`, jamais une exception muette :
 
 | Champ | Sens |
 |---|---|
-| `failure_class` | la classe du classifieur (voir [Statuts et classes d'échec](./statuts-et-raisons.md)) |
-| `what_to_do` | ce que l'IA ou l'utilisateur peut faire, parmi une liste fermée de gabarits |
+| `code` | le code stable de l'erreur (jamais traduit) |
+| `message` | la cause en une phrase, dans la langue du compte (`?lang=` la remplace) |
+| `message_locale` | la langue de `message` (`fr` ou `en`) |
+| `action_label` | ce que la personne fait ensuite, verbe d'abord (« Crée une clé avec le droit apis:write dans Réglages > Clés d'API ») |
+| `what_to_do` | ce que l'IA peut faire, en anglais |
 | `retryable` | si un nouvel essai a un sens |
+| `next_action` | l'outil SYM à appeler ensuite, ou `null` |
+| `field`, `scope_required`, `console_url`, `details` | selon l'erreur : le champ en cause, le droit manquant, la page de la console, des détails sans secret |
+| `failure_class` | la classe du classifieur (voir [Statuts et classes d'échec](./statuts-et-raisons.md)), quand l'erreur vient d'un run |
 | `access` | le rapport d'accès, quand il explique l'erreur |
+
+L'enveloppe est la même sur REST (`{ error: { … } }`) et sur MCP (`isError`). `GET /api/me/prerequisites`, lisible par toute clé, dit ce qu'il reste à régler avant une enquête : contact du robot, modèle et prix du rôle enquête, clé du fournisseur, case « usage responsable » de la personne.
 
 Un outil inconnu, ou retiré depuis la dernière liste du client, répond `not_found` avec `list_apis` pour prochaine action ; une erreur interne de l'instance répond `internal`, sans son détail (journalisé côté serveur).
 

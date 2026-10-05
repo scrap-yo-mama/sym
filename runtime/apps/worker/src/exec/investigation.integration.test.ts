@@ -8,11 +8,12 @@
 // budget dépassé → `erreur`, validation du schéma en deux temps (`validate_schema`), étape 0 d'abord
 // (`assert_access_report_first`), robots.txt qui interdit le chemin sans effet sur l'enquête (D-91).
 import { randomUUID } from 'node:crypto';
-import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, Secret, secretValues, validateOutput, type RunExecutor } from '@runtime/core';
+import { DomainPacer, generateMasterKey, inputSchemaIssues, MasterKey, parseApiExport, sealExport, Secret, secretValues, validateOutput, type RunExecutor } from '@runtime/core';
 import { firstCostInversion, milestoneHeading, type InvestigationMilestone } from '@runtime/core/investigation';
 import * as net from '@runtime/core/net';
 import {
   createRun,
+  importApi,
   keyCheck,
   listInvestigationEvents,
   migrateUp,
@@ -298,6 +299,25 @@ describe('enquête (tâche 2.1)', () => {
     expect(recon.candidates.map((c) => c.from)).toEqual(['embedded']);
   });
 
+  test('UX-26 — « les 2 premières pages » sur une liste qui ne pagine pas : demande SIGNALÉE (not_paginated), jamais ignorée en silence ; aucune entrée max_pages', async () => {
+    fake.setScenario(MODEL, [scripted.json(NEXT_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_inv_pages_unsupported');
+    const run = await investigate(apiId, { url: `${base(NEXT_HOST)}/`, description: 'liste des produits, les 2 premières pages', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded', items: 10 });
+    const finished = (await eventsOf(run.id)).find((e) => e.kind === 'investigation.finished')!.payload as { pages_requested?: unknown };
+    expect(finished.pages_requested).toEqual({ pages: 2, outcome: 'not_paginated' });
+    const inputSchema = (await pool.query<{ input_schema: { properties: Record<string, unknown> } }>('SELECT input_schema FROM apis WHERE id = $1', [apiId])).rows[0]!.input_schema;
+    expect(inputSchema.properties['max_pages']).toBeUndefined();
+  });
+
+  test('UX-26 — aucune limite de pages demandée : rien n’est dit (pas de pages_requested)', async () => {
+    fake.setScenario(MODEL, [scripted.json(NEXT_PROPOSAL)]);
+    const apiId = await insertApi('zz_test_inv_pages_not_asked');
+    const run = await investigate(apiId, { url: `${base(NEXT_HOST)}/`, description: 'liste des produits, toutes les pages', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded' });
+    expect(((await eventsOf(run.id)).find((e) => e.kind === 'investigation.finished')!.payload as { pages_requested?: unknown }).pages_requested).toBeUndefined();
+  });
+
   test('budget d’enquête dépassé → erreur (transition 2), aucun essai payé au-delà', async () => {
     // 1 M$ par million de jetons : l'appel d'enquête coûte bien plus que le budget de 0,001 $.
     price = { in: 1_000_000, out: 1_000_000 };
@@ -451,6 +471,64 @@ describe('enquête (tâche 2.1)', () => {
     // N = 3 : trois mises en forme par le rôle extract ; le coût LLM des essais est imputé à l'essai.
     expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
     expect(run.attempts[0]!.cost_usd).toBeGreaterThan(0);
+  });
+
+  test('UX-28 — import d’une stratégie E4 (agent_fetch) : ni reconnaissance ni schéma proposé, l’essai passe par le rôle extract (N = 3), version created_by import, API saine', async () => {
+    withExtract = true;
+    const items = { items: [{ title: 'Lampe Zztest 0001', price: 12.5 }, { title: 'Table Zztest 0002', price: 40 }] };
+    fake.setScenario(EXTRACT_MODEL, [scripted.json(items), scripted.json(items), scripted.json(items)]);
+    const page = `${base(SSR_HOST)}/`;
+    const doc = sealExport({
+      format: 'scrapyomama.api',
+      format_version: '1.0',
+      min_runtime_version: '0.0.0',
+      exported_at: '2026-10-05T10:00:00.000Z',
+      api: {
+        slug: 'zz-test-import-e4',
+        description: 'liste des produits du catalogue',
+        source_url: page,
+        input_schema: { type: 'object', additionalProperties: false, properties: {} },
+        output_schema: { type: 'object', additionalProperties: false, required: ['title', 'price'], properties: { title: { type: 'string' }, price: { type: 'number' } } },
+        output_columns: ['title', 'price'],
+        views: {},
+        purpose: null,
+        legal_basis: null,
+        contains_personal_data: false,
+        max_cost_usd: 0.5,
+        budget_daily_usd: 5,
+        network_policy: { allow: ['direct'] },
+        alert_targets: [],
+      },
+      strategy: {
+        execution: 'agent_fetch',
+        network: 'direct',
+        spec: { schema_version: 1, kind: 'agent_fetch', request: { url: page, allowed_hosts: [SSR_HOST] }, via: 'fetch', instruction: 'Return every product of the page with its title and price.', limits: { max_response_bytes: 5_000_000, max_input_chars: 60_000, timeout_ms: 120_000 } },
+        est_cost_usd: 0.004,
+      },
+      history: [],
+      schedules: [],
+    });
+    const parsed = parseApiExport(JSON.parse(JSON.stringify(doc)), { runtimeVersion: '9.9.9' });
+    if (!parsed.ok) throw new Error(`export illisible : ${parsed.code} ${parsed.message}`);
+    const { apiId, runId } = await withActor(pool, actorA, async (tx) => {
+      const made = await importApi(tx, queue, { ownerId: A, slug: 'zz-test-import-e4', trigger: 'rest', export: parsed.export, networkPolicy: { allow: ['direct'] } });
+      await tx.query('UPDATE apis SET domain_pacing = $2 WHERE id = $1', [made.apiId, JSON.stringify({ min_delay_ms: 5, max_requests_per_run: 200, max_wait_ms: 60000 })]);
+      return made;
+    });
+    const run = await waitRun(runId);
+    expect(run).toMatchObject({ state: 'succeeded', items: 2, strategy_version: 1 });
+    // « 0 enquête » de l'IA : ni reconnaissance ni schéma proposé, seule la stratégie du fichier est essayée (par le rôle `extract`).
+    // La compilation html d'un E4 retenu (rejeu à coût nul) reste permise : elle n'est pas une enquête.
+    const kinds = (await eventsOf(run.id)).map((e) => e.kind);
+    expect(kinds).not.toContain('reconnaissance.finished');
+    expect(kinds).not.toContain('schema.proposed');
+    expect(fake.byRole[EXTRACT_MODEL]).toBe(3);
+    const attempts = await attemptsOf(run.id);
+    expect(attempts.map((a) => [a.execution, a.result_class])).toEqual([['agent_fetch', 'ok']]);
+    // Le coût estimé de l'essai vient du prix du modèle d'extraction (jamais inconnu ni 0 quand le prix est réglé).
+    expect(Number(attempts[0]!.est_cost_usd)).toBeGreaterThan(0);
+    expect((await pool.query<{ execution: string; created_by: string }>('SELECT execution, created_by FROM strategy_versions WHERE api_id = $1', [apiId])).rows).toEqual([{ execution: 'agent_fetch', created_by: 'import' }]);
+    expect((await pool.query<{ status: string }>('SELECT status FROM apis WHERE id = $1', [apiId])).rows[0]!.status).toBe('sain');
   });
 
   test('assert_html_replay_no_llm — page HTML statique : l’essai E4 conforme est compilé en déclaratif html (vérifié sans LLM), E4 gardé en repli, puis le rejeu compte 0 appel LLM', async () => {
@@ -668,6 +746,46 @@ describe('enquête (tâche 2.1)', () => {
     const replay = await waitRun((await withActor(pool, actorA, (tx) => createRun(tx, queue, { apiId, ownerId: A, trigger: 'rest' }))).runId);
     expect(replay).toMatchObject({ state: 'succeeded', items: HTML_LIST_TOTAL });
     expect(fake.requests).toBe(0);
+  });
+
+  test('UX-26 — « les 3 premières pages » : la demande est lue par le code, honorée par max_pages (défaut annoncé 3) et dite à la fin de l’enquête', async () => {
+    withExtract = true;
+    const op = (name: string) => ({ op: name, pattern: null, group: null, decimal: null, format: null });
+    const items = Array.from({ length: 10 }, (_, k) => {
+      const b = htmlListItem(k + 1);
+      return { title: b.title, sector: b.sector, reference: b.ref, url: `${base(HTML_LIST)}${b.path}` };
+    });
+    // Le secteur est le même sur les 10 cartes de la page 1 : contenu minimal en échec sur les sorties d'E4 seules.
+    expect(new Set(items.map((i) => i.sector)).size).toBe(1);
+    const fields = {
+      fields: [
+        { name: 'title', type: 'string', required: true, personal: false, description: 'Title' },
+        { name: 'sector', type: 'string', required: true, personal: false, description: 'Sector' },
+        { name: 'reference', type: 'string', required: true, personal: false, description: 'Reference' },
+        { name: 'url', type: 'string', required: true, personal: false, description: 'Listing URL' },
+      ],
+      sources: [],
+    };
+    fake.setScenario(MODEL, [
+      scripted.json(fields),
+      scripted.json({
+        records: 'main article.item-bien',
+        fields: [
+          { field: 'title', css: 'h3', attr: null, ops: [op('trim')] },
+          { field: 'sector', css: 'span.flex-none', attr: null, ops: [op('trim')] },
+          { field: 'reference', css: 'a', attr: 'data-ref', ops: [] },
+          { field: 'url', css: 'a', attr: 'href', ops: [op('abs_url')] },
+        ],
+      }),
+    ]);
+    fake.setScenario(EXTRACT_MODEL, [scripted.json({ items }), scripted.json({ items }), scripted.json({ items })]);
+    const apiId = await insertApi('zz_test_inv_pages_asked');
+    const run = await investigate(apiId, { url: `${base(HTML_LIST)}/nos-maisons/`, description: 'liste des biens, les 3 premières pages, sans ouvrir les fiches', auto_validate: true });
+    expect(run).toMatchObject({ state: 'succeeded' });
+    const finished = (await eventsOf(run.id)).find((e) => e.kind === 'investigation.finished')!.payload as { pages_requested?: unknown };
+    expect(finished.pages_requested).toEqual({ pages: 3, outcome: 'max_pages_default' });
+    const inputSchema = (await pool.query<{ input_schema: { properties: { max_pages?: { default?: number } } } }>('SELECT input_schema FROM apis WHERE id = $1', [apiId])).rows[0]!.input_schema;
+    expect(inputSchema.properties.max_pages?.default).toBe(3);
   });
 
   test('type non compilable (tableau d’objets) : compilation refusée AVANT tout appel (unsupported_field_type), E4 gardé, aucun coût de compilation', async () => {

@@ -58,3 +58,4 @@ export function createDb(connectionString: string, max = 5): { db: Db; pool: pg.
   return { db: drizzle({ client: pool, schema }), pool };
 }
 export * from './steps.js';
+export * from './iteration.js';

@@ -86,7 +86,8 @@ export function useNewApiForm() {
     errors.value = next;
     if (Object.keys(next).length > 0) return null;
 
-    const body: ApiCreateBody = { description, url, network_policy: { allow } };
+    // La console garde la porte du schéma (Q2 du CDC UX : le serveur valide désormais par défaut) jusqu'à la tâche U2.4.
+    const body: ApiCreateBody = { description, url, network_policy: { allow }, auto_validate: false };
     if (example !== undefined) body.example_output = example;
     if (form.resProxy && country !== '') body.network_policy = { allow, res_proxy_params: { country } };
     if (accountWarningShown.value) body.account_site_acknowledged = true;

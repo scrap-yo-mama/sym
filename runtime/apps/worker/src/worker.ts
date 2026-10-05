@@ -22,6 +22,7 @@ import {
   createLogger,
   filterExcludedItems,
   initTelemetry,
+  isDraftTrigger,
   PersonalValueRegistry,
   RUN_QUEUE,
   RUN_SHUTDOWN_DETAIL,
@@ -43,6 +44,8 @@ import {
   createRunLogger,
   currentSchemaVersion,
   expectedSchemaVersion,
+  expireDrafts,
+  finishRun,
   finishRunAndNotify,
   heartbeatRun,
   holdSecretsLock,
@@ -259,6 +262,11 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       .then((r) => {
         if (r.daily) log.info({ report: r.report }, 'rétention : passe quotidienne');
       })
+      // Brouillons périmés (DRAFT_TTL_DAYS, 3.14) : archivés `expired`, jamais supprimés en silence.
+      .then(() => expireDrafts(maintenancePool))
+      .then((n) => {
+        if (n > 0) log.info({ expired: n }, 'itération : brouillons périmés archivés');
+      })
       .catch((error: unknown) => log.error({ err: errorDetail(error) }, 'rétention : échec de la passe'))
       .finally(() => (retentionRunning = undefined));
   }, config.retentionTickSeconds * 1000);
@@ -329,6 +337,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           strategyVersion: claim.strategyVersion,
           input: claim.input,
           kind: claim.kind,
+          trigger: claim.trigger,
           proseLocale: claim.locale,
           signal: controller.signal,
           recordAttempt: async (attempt) => {
@@ -344,6 +353,8 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
           // Machine à états (04 §6) : une enquête mène son API à `sain`, `bloquee`, `action_requise` ou `erreur`
           // (transitions 1 à 4, 21) ; status_events, webhooks et alertes dans la même transaction.
           applyStatus: async (event) => {
+            // Test d'un brouillon (3.14) : jamais une transition, jamais de ligne `status_events` (assert_draft_run_no_status_change).
+            if (isDraftTrigger(claim.trigger)) return { ok: false, status: null, reason: null };
             const step = await applyStatusAndNotify(pool, q, { apiId: claim.apiId, runId, event, clock: { now: () => new Date() } }, { persistence: { policy: config.persistence } });
             await runLog.log('info', 'status_event', { event: event.type, applied: step.ok });
             return { ok: step.ok, status: step.state.status, reason: step.state.reason };
@@ -361,13 +372,16 @@ export async function startWorker(options: StartWorkerOptions): Promise<Worker> 
       }
       // Bail perdu ou arrêt : le run a déjà été annulé, repris ou remis en file ; rien n'est écrit.
       if (entry.cause === 'lease_lost' || entry.cause === 'shutdown') return;
-      const closed = await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects, persistence: { policy: config.persistence } });
+      // Un run d'essai de brouillon se clôt sans webhook, sans alerte, sans clé de déduplication, sans tentative de persistance.
+      const closed = isDraftTrigger(claim.trigger)
+        ? await finishRun(pool, runId, jobId, result, { personal })
+        : await finishRunAndNotify(pool, q, { runId, jobId, result }, { personal, subjectKey: subjects, persistence: { policy: config.persistence } });
       if (result.state === 'failed') span.fail(result.failure_class ?? result.stop_reason);
       if (result.state === 'skipped_tunnel_offline') span.fail(result.stop_reason);
       // Run arrêté sans classe d'échec (défi en tunnel, extension hors ligne) : événement `run_stopped` de la machine à
       // états (04 §6, transition 14 : la main revient à l'humain, `action_requise`). Les autres fins de run relèvent de
       // l'enquête et de la réparation (2.1, 2.3).
-      if (closed && result.state === 'failed' && result.stop_reason !== undefined) {
+      if (closed && result.state === 'failed' && result.stop_reason !== undefined && !isDraftTrigger(claim.trigger)) {
         const step = await applyStatusAndNotify(pool, q, { apiId: claim.apiId, runId, event: { type: 'run_stopped', reason: result.stop_reason }, clock: { now: () => new Date() } }).catch(
           (error: unknown) => {
             log.error({ runId, err: errorDetail(error) }, 'statut : run_stopped non appliqué');

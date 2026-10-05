@@ -64,8 +64,8 @@ server:
   - prompts-get-with-args
   - prompts-get-embedded-resource
   - prompts-get-with-image
-  # [3.14] ressources.
-  - resources-list
+  # [3.14] SYM sert UNE ressource (modèle `scrapyomama://api/{slug}/iteration`, reprise d'une itération) : resources-list passe.
+  # Les scénarios qui lisent ou s'abonnent aux ressources de démonstration de la suite (`test://…`) restent hors de portée.
   - resources-read-text
   - resources-read-binary
   - resources-templates-read

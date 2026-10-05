@@ -139,11 +139,12 @@ test('appairage et site connecté en tunnel : le service worker ouvre la WSS (un
   const code = await h.console(alice.cookie, 'POST', '/api/extension/pairing-codes', { currentPassword: alice.password });
   expect(code.status).toBe(201);
   const page: Page = await h.popup();
+  await page.click('#manual summary'); // saisie à la main (secours de l'appairage en un collage)
   await page.fill('#instance-url', h.publicUrl);
   await page.fill('#pairing-code', (code.data as { code: string }).code);
   await h.grantHosts(['http://127.0.0.1/*']);
   await page.click('#pair');
-  await expect(page.locator('#identity')).toHaveText(`Connected as ${alice.email}`);
+  await expect(page.locator('#identity')).toContainText(`Connected as ${alice.email}`);
   // Le site, connecté en mode tunnel (défaut) : aucun cookie ne quitte le navigateur.
   const site = await h.context.newPage();
   await site.goto(`http://${SHOP}:${h.sitePort}/`);

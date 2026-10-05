@@ -33,7 +33,7 @@ describe('sondes', () => {
     const srv = await server();
     const res = await get(srv, '/api/health');
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: 'ok', version: '0.0.0' });
+    expect(res.json()).toEqual({ status: 'ok', version: expect.stringMatching(/^(?!0\.0\.0$)\d+\.\d+\.\d+/) });
     const versioned = await server({ RUNTIME_VERSION: '1.4.2-beta.1' });
     expect((await get(versioned, '/api/health')).json()).toEqual({ status: 'ok', version: '1.4.2-beta.1' });
   });
@@ -64,14 +64,14 @@ describe('sondes', () => {
     try {
       started = await prepareServer(serverEnv(tdb.url, generateMasterKey(), bootstrap), { schemaPollMs: 60_000 });
       const inject = (method: 'GET' | 'POST', url: string, payload?: object) => started!.app.inject({ method, url, ...(payload ? { payload } : {}) });
-      expect((await inject('GET', '/api/health')).json()).toEqual({ status: 'ok', version: '0.0.0' });
+      expect((await inject('GET', '/api/health')).json()).toEqual({ status: 'ok', version: expect.stringMatching(/^(?!0\.0\.0$)\d+\.\d+\.\d+/) });
       const before = await inject('GET', '/api/ready');
       expect(before.statusCode).toBe(503);
       expect(before.json()).toEqual({ status: 'not_ready', checks: { database: true, schema: false, key_check: false } });
       // Aucune autre route tant que le schéma manque (ni assistant, ni auth, ni métriques).
       const setupEarly = await inject('POST', '/api/setup', { token: bootstrap, email: 'zz_test_owner@example.test', password: 'zz_test_password_123456' });
       expect(setupEarly.statusCode).toBe(503);
-      expect(setupEarly.json()).toEqual({ error: { code: 'not_ready', message: expect.any(String) } });
+      expect(setupEarly.json()).toMatchObject({ error: { code: 'not_ready', message: expect.any(String) } });
       expect((await inject('POST', '/api/auth/sign-in/email', { email: 'a@example.test', password: 'x' })).statusCode).toBe(503);
       expect((await inject('GET', '/api/ready?detail=1')).statusCode).toBe(503);
       // Aucun effet de bord avant la migration : pas de key_check écrit.

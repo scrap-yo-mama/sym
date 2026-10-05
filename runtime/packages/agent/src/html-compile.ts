@@ -41,6 +41,7 @@ export const HTML_COMPILE_SYSTEM_PROMPT = [
   'For an array field of the schema, "css" selects EVERY element that gives one item of the array, relative to the record element; the operators apply to each item.',
   'When the page writes a number or a boolean as a word or a phrase (a rating "Three" in a class name, "In stock"), read that word or phrase with no conversion operator: the code maps each word seen on the page to the value of the records.',
   'The code replays your recipe on the same HTML and compares the result with the records: same number of records, same values. Never invent a value, a URL or a host.',
+  'When the page shows a value cut with "..." (a title shortened in a list) and the full value is in an attribute of the same element (title, aria-label, data-*) or on the element itself, read that full value, never the shortened display.',
   'An optional PREVIOUS ATTEMPT block gives your previous recipe and how its replay differed from the records: fix the recipe.',
 ].join('\n');
 

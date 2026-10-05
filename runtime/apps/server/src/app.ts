@@ -10,6 +10,7 @@ import type { ServerContext } from './context.js';
 import { localizeErrors } from './i18n.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { apiRoutes } from './routes/apis.js';
+import { iterationRoutes } from './routes/iteration.js';
 import { datasetRoutes } from './routes/datasets.js';
 import { eventRoutes } from './routes/events.js';
 import { openapiRoutes } from './routes/openapi.js';
@@ -28,6 +29,7 @@ import { identityRoutes } from './routes/identity.js';
 import { invitationRoutes } from './routes/invitations.js';
 import { mcpRoutes, mcpTransportGuard } from './routes/mcp.js';
 import { meRoutes } from './routes/me.js';
+import { prerequisitesRoutes } from './routes/prerequisites.js';
 import { findRoute } from './routes/registry.js';
 import { setupRoutes } from './routes/setup.js';
 import { ssoRoutes } from './routes/sso.js';
@@ -120,6 +122,7 @@ export function buildServer(
   setupRoutes(app, ctx);
   authRoutes(app, ctx);
   meRoutes(app, ctx);
+  prerequisitesRoutes(app, ctx);
   apiKeyRoutes(app, ctx);
   extensionRoutes(app, ctx);
   // Comptes avancés (tâche 3.7).
@@ -128,6 +131,7 @@ export function buildServer(
   ssoRoutes(app, ctx);
   // API REST (tâche 3.1, 05 § 4.2).
   apiRoutes(app, ctx);
+  iterationRoutes(app, ctx);
   // Portabilité (tâche 3.12, 16 § 6).
   portabilityRoutes(app, ctx);
   runRoutes(app, ctx);
