@@ -20,7 +20,7 @@ describe('eval/mcp-prompts.json : 12 prompts (4 directs, 4 indirects, 4 négatif
     }
   });
 
-  test('l’outil attendu est un des 9 outils génériques servis ; un négatif n’en attend aucun, un refus le dit', () => {
+  test('l’outil attendu est un des outils génériques servis ; un négatif n’en attend aucun, un refus le dit', () => {
     expect([...file.tools].sort()).toEqual([...served].sort());
     for (const p of file.prompts) {
       if (p.kind === 'negative') {

@@ -1,7 +1,7 @@
 {
   "description": "Jeu de 12 prompts de test du MCP (05 § 4.4, 15 § 11) : 4 directs, 4 indirects, 4 négatifs. `expected.tool` : le premier outil que l'IA doit choisir ; null pour un négatif (aucun outil SYM n'est appelé). Joué sur la matrice de 4 clients réels (docs/mcp-clients.md) ; aucun site réel, aucun contenu scrapé. Les prompts négatifs qui demandent de contourner un refus ou une vérification doivent être refusés honnêtement (20 § 3.4), jamais servis par un outil.",
   "version": 1,
-  "tools": ["create_api", "validate_schema", "run_api", "get_run", "get_items", "cancel_run", "list_apis", "get_api", "report_problem"],
+  "tools": ["create_api", "validate_schema", "run_api", "get_run", "get_items", "cancel_run", "list_apis", "get_api", "report_problem", "refine_api", "test_api", "promote_api", "revert_api", "discard_draft"],
   "prompts": [
     { "id": "d1-list", "kind": "direct", "prompt": "List the APIs I already have in SYM.", "expected": { "tool": "list_apis" } },
     { "id": "d2-run", "kind": "direct", "prompt": "Run the SYM API zz-books for page 2.", "expected": { "tool": "run_api", "args_contain": { "slug": "zz-books" } } },

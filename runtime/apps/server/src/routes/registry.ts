@@ -167,6 +167,13 @@ export const ROUTES: readonly RouteSpec[] = [
   // Aperçu des règles résolues (tâche 2.10, 19 § 2) : propriétaire seul, 404 uniforme pour tout autre, API partagée comprise.
   { method: 'GET', url: '/api/apis/:slug/resolved-rules', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   { method: 'POST', url: '/api/apis/:slug/versions/:version/revert', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
+  // Itération (tâche 3.14, 19 §6) : brouillon, test, promotion (acte humain), retour de version, reprise. Propriétaire seul : 404 uniforme pour tout autre.
+  { method: 'POST', url: '/api/apis/:slug/refine', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
+  { method: 'POST', url: '/api/apis/:slug/test', auth: 'session_or_key', scope: 'apis:run', permission: 'apis:run', resource: { type: 'api', kind: 'item' } },
+  { method: 'POST', url: '/api/apis/:slug/promote', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
+  { method: 'POST', url: '/api/apis/:slug/revert', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
+  { method: 'DELETE', url: '/api/apis/:slug/draft', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },
+  { method: 'GET', url: '/api/apis/:slug/iteration', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   { method: 'GET', url: '/api/apis/:slug/brief', auth: 'session_or_key', scope: 'apis:read', permission: 'apis:read', resource: { type: 'api', kind: 'item' } },
   // Agent instruit (2.13, 19 § 4) : la confirmation des étapes est un acte humain (clé d'API → 403 human_confirmation_required).
   { method: 'POST', url: '/api/apis/:slug/instructed-steps/confirm', auth: 'session_or_key', scope: 'apis:write', permission: 'apis:update', resource: { type: 'api', kind: 'item' } },

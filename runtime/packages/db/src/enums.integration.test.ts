@@ -15,7 +15,7 @@ import {
   RUN_TRIGGERS,
   STEP_OUTCOMES,
   STRATEGY_ARCHIVE_REASONS,
-  STRATEGY_COMPILABLE,
+  STRATEGY_STATES,  STRATEGY_COMPILABLE,
   STRATEGY_CREATORS,
   VISIBILITIES,
 } from '@runtime/core';
@@ -76,14 +76,16 @@ describe('énumérations TS = CHECK SQL', () => {
     // 0023_step_repair (2.13).
     ['strategy_versions', 'compilable', STRATEGY_COMPILABLE],
     ['run_attempts', 'step_outcome', STEP_OUTCOMES],
+    // 0027_iteration (3.14).
+    ['strategy_versions', 'state', STRATEGY_STATES],
   ] as const)('%s.%s', async (table, column, values) => {
     expect(sorted(await checkValues(table, column))).toEqual(sorted(values));
   });
 
-  test('strategy_versions.archive_reason : valeur unique (2.13), CHECK identique', async () => {
+  test('strategy_versions.archive_reason : liste ordonnée (2.13, puis 3.14), CHECK identique', async () => {
     const { rows } = await client.query<{ def: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS def FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
-        WHERE c.relname = 'strategy_versions' AND k.contype = 'c' AND pg_get_constraintdef(k.oid) LIKE '%archive_reason%'`,
+        WHERE c.relname = 'strategy_versions' AND k.contype = 'c' AND k.conname = 'strategy_versions_archive_reason_check'`,
     );
     expect(rows).toHaveLength(1);
     expect([...(rows[0] as { def: string }).def.matchAll(/'([^']+)'::text/g)].map((m) => m[1])).toEqual([...STRATEGY_ARCHIVE_REASONS]);

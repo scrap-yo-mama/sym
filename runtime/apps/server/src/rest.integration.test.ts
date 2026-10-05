@@ -1921,6 +1921,166 @@ describe('agent instruit (2.13, 19 § 4) : confirmation humaine des étapes inst
   });
 });
 
+describe('itération (3.14, 19 § 6) : brouillon, test, promotion (acte humain), retour de version, reprise', () => {
+  const SCHEMA_SURFACE = { type: 'object', additionalProperties: false, required: ['title'], properties: { title: { type: 'string', 'x-key': true }, price: { type: 'number' }, note: { type: 'string' }, surface: { type: 'number' } } };
+  const SCHEMA_RENAMED = { type: 'object', additionalProperties: false, required: ['title'], properties: { title: { type: 'string', 'x-key': true }, prix: { type: 'number' }, note: { type: 'string' } } };
+  const REF_ITEMS = [{ title: 'a', price: 10 }, { title: 'b', price: 20 }, { title: 'c', price: 30 }];
+  const DRAFT_ITEMS = [{ title: 'a', price: 10, surface: 40 }, { title: 'b', price: 20, surface: 55 }, { title: 'c', price: 31, surface: 70 }];
+  const DRAFT_RENAMED = [{ title: 'a', prix: 10 }, { title: 'b', prix: 20 }, { title: 'c', prix: 30 }];
+
+  /** Worker simulé : termine les runs `draft_test` (brouillon et référence) dès qu'ils sont créés. */
+  async function finishTestRuns(apiId: string, draftItems: Record<string, unknown>[], refItems: Record<string, unknown>[] = REF_ITEMS): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    let done = 0;
+    while (done < 2 && Date.now() < deadline) {
+      const rows = await withClient(srv.db.url, async (c) =>
+        (await c.query<{ id: string; strategy_version: number; cur: number }>("SELECT r.id, r.strategy_version, a.current_strategy_version AS cur FROM runs r JOIN apis a ON a.id = r.api_id WHERE r.api_id = $1 AND r.trigger = 'draft_test' AND r.state = 'queued'", [apiId])).rows,
+      );
+      for (const r of rows) {
+        await completeRun(r.id, r.strategy_version === r.cur ? refItems : draftItems);
+        done += 1;
+      }
+      if (rows.length === 0) await new Promise((res) => setTimeout(res, 25));
+    }
+  }
+
+  const keyOf = async (party: Party, scopes: string[]) =>
+    (await srv.app.inject({ method: 'POST', url: '/api/api-keys', headers: { cookie: party.cookie, origin: PUBLIC_URL }, payload: { label: 'zz itération', scopes, currentPassword: party.user.password } })).json<{ key: string }>().key;
+
+  async function readyDraft(schema: Record<string, unknown>, draftItems: Record<string, unknown>[], opts: { status?: string } = {}) {
+    const seeded = await seedApi(srv.db.url, a.user.id, opts.status === undefined ? {} : { status: opts.status });
+    const refined = await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'ajoute la surface', output_schema: schema });
+    expect(refined.status).toBe(200);
+    const finishing = finishTestRuns(seeded.id, draftItems);
+    const tested = await api(a, 'POST', `/api/apis/${seeded.slug}/test?wait=5`, '/api/apis/{slug}/test', { input: { page: 1 } });
+    await finishing;
+    return { seeded, refined, tested };
+  }
+
+  test('refine : brouillon créé, version en service et statut inchangés ; estimation seule en dry_run ; un autre membre : 404', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    const dry = await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'ajoute la surface', dry_run: true });
+    expect(dry).toMatchObject({ status: 200, body: { dry_run: true, estimate: { basis: 'none', above_cap: false } } });
+    expect(await count('SELECT count(*) FROM strategy_versions WHERE api_id = $1', [seeded.id])).toBe(1);
+    const refined = await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'ajoute la surface', output_schema: SCHEMA_SURFACE });
+    expect(refined).toMatchObject({ status: 200, body: { draft_version: 2, base_version: 1, schema_level: 'minor', output_schema_version: '1.1.0-draft.1', next_action: { tool: 'test_api' } } });
+    expect(refined.body['summary']).toMatch(/Brouillon prêt|Draft ready/);
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 1 AND status = 'sain' AND draft_strategy_version = 2", [seeded.id])).toBe(1);
+    expect(await count('SELECT count(*) FROM status_events WHERE api_id = $1', [seeded.id])).toBe(0);
+    // Le schéma en service ne change que par promotion : PATCH répond toujours draft_required.
+    expect((await api(a, 'PATCH', `/api/apis/${seeded.slug}`, '/api/apis/{slug}', { output_schema: SCHEMA_SURFACE })).status).toBe(409);
+    expect((await api(b, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'x' })).status).toBe(404);
+    const empty = await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', {});
+    expect(empty).toMatchObject({ status: 400, body: { error: { code: 'nothing_to_refine' } } });
+    const blocked = await seedApi(srv.db.url, a.user.id, { status: 'bloquee' });
+    const refused = await api(a, 'POST', `/api/apis/${blocked.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'x' });
+    expect(refused).toMatchObject({ status: 409, body: { error: { code: 'api_blocked', retryable: false } } });
+    expect(await count('SELECT count(*) FROM runs WHERE api_id = $1', [blocked.id])).toBe(0);
+  });
+
+  test('test puis reprise : 202 tant que les runs ne sont pas finis, GET iteration enregistre le test (diff, empreinte) et donne la prochaine étape', async () => {
+    const seeded = await seedApi(srv.db.url, a.user.id);
+    await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'ajoute la surface', output_schema: SCHEMA_SURFACE });
+    const dry = await api(a, 'POST', `/api/apis/${seeded.slug}/test`, '/api/apis/{slug}/test', { input: { page: 1 }, dry_run: true });
+    expect(dry).toMatchObject({ status: 200, body: { dry_run: true, needs_reference: true } });
+    // Entrée hors input_schema : refus avant tout run.
+    expect((await api(a, 'POST', `/api/apis/${seeded.slug}/test`, '/api/apis/{slug}/test', { input: { page: 0 } })).status).toBe(400);
+    expect(await count("SELECT count(*) FROM runs WHERE api_id = $1 AND trigger = 'draft_test'", [seeded.id])).toBe(0);
+    const started = await api(a, 'POST', `/api/apis/${seeded.slug}/test?wait=0`, '/api/apis/{slug}/test', { input: { page: 1 } });
+    expect(started).toMatchObject({ status: 202, body: { state: 'running', draft_version: 2 } });
+    expect(await count("SELECT count(*) FROM runs WHERE api_id = $1 AND trigger = 'draft_test'", [seeded.id])).toBe(2);
+    const before = await api(a, 'GET', `/api/apis/${seeded.slug}/iteration`, '/api/apis/{slug}/iteration');
+    expect(before.body).toMatchObject({ next_step: 'test', draft: { version: 2, tested: false } });
+    await finishTestRuns(seeded.id, DRAFT_ITEMS);
+    const after = await api(a, 'GET', `/api/apis/${seeded.slug}/iteration`, '/api/apis/{slug}/iteration');
+    expect(after.body).toMatchObject({ status: 'sain', current_version: 1, next_step: 'promote', draft: { version: 2, tested: true, last_test: { ok: true, items: 3, reference: 'run' } }, promotion: { level: 'minor', ready_error: null } });
+    expect(after.body['draft'].last_test.diff_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(after.body['draft'].last_test.diff).toMatchObject({ identity: 'key', changed: 3 });
+    expect(after.body['next_action']).toMatchObject({ tool: 'promote_api' });
+    // Reprise : propriétaire seul.
+    expect((await api(b, 'GET', `/api/apis/${seeded.slug}/iteration`, '/api/apis/{slug}/iteration')).status).toBe(404);
+    // Aucun statut n'a bougé pendant le test.
+    expect(await count('SELECT count(*) FROM status_events WHERE api_id = $1', [seeded.id])).toBe(0);
+  });
+
+  test('promotion depuis la console : diff_hash exigé (409), version en service déplacée, statut inchangé sur sain ; le test réussi dans l’attente rend 200', async () => {
+    const { seeded, tested } = await readyDraft(SCHEMA_SURFACE, DRAFT_ITEMS);
+    expect(tested).toMatchObject({ status: 200, body: { state: 'succeeded', test: { ok: true, llm_free: true }, next_action: { tool: 'promote_api' } } });
+    const hash = tested.body['test'].diff_hash as string;
+    const stale = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: 'a'.repeat(64) });
+    expect(stale).toMatchObject({ status: 409, body: { error: { code: 'diff_hash_mismatch' } } });
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 1', [seeded.id])).toBe(1);
+    const promoted = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: hash });
+    expect(promoted).toMatchObject({ status: 200, body: { current_version: 2, previous_version: 1, status: 'sain', transition: null, output_schema_version: '1.1.0' } });
+    expect(promoted.body['summary']).toMatch(/Version 2/);
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 2 AND output_schema ->> 'type' = 'object' AND output_schema -> 'properties' ? 'surface'", [seeded.id])).toBe(1);
+    // Rien d'écrit au statut : une promotion sur sain n'est pas une transition.
+    expect(await count('SELECT count(*) FROM status_events WHERE api_id = $1', [seeded.id])).toBe(0);
+    // Audit : l'acte et sa nature humaine.
+    expect(await count("SELECT count(*) FROM audit_events WHERE action = 'api.promoted' AND target_id = $1 AND meta ->> 'human' = 'console'", [seeded.id])).toBe(1);
+  });
+
+  test('assert_promotion_requires_human : un changement major par clé d’API, avec ou sans acknowledge_breaking, répond 403 human_confirmation_required et ne bouge rien ; console : accusé exigé', async () => {
+    const { seeded, tested } = await readyDraft(SCHEMA_RENAMED, DRAFT_RENAMED);
+    const hash = tested.body['test'].diff_hash as string;
+    const key = await keyOf(a, ['apis:read', 'apis:write', 'apis:run']);
+    for (const acknowledge of [false, true]) {
+      const res = await srv.app.inject({ method: 'POST', url: `/api/apis/${seeded.slug}/promote`, headers: { authorization: `Bearer ${key}` }, payload: { diff_hash: hash, acknowledge_breaking: acknowledge, elicitation: 'accepted' } });
+      expect(res.statusCode, `acknowledge=${acknowledge}`).toBe(403);
+      expect(contract.check('POST', '/api/apis/{slug}/promote', 403, res.json())).toEqual([]);
+      expect(res.json()).toMatchObject({ error: { code: 'human_confirmation_required', level: 'major', next_action: { url: expect.stringContaining(`/apis/${seeded.slug}`) } } });
+      expect(res.json().error.impacted).toBeInstanceOf(Array);
+    }
+    // L'élicitation écrite par un client REST n'est jamais honorée (seul le canal interne du serveur MCP la porte).
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 1', [seeded.id])).toBe(1);
+    // Console : sans l'accusé, 409 ; avec lui, la promotion passe.
+    const noAck = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: hash });
+    expect(noAck).toMatchObject({ status: 409, body: { error: { code: 'breaking_change_requires_ack', level: 'major' } } });
+    const ok = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: hash, acknowledge_breaking: true });
+    expect(ok).toMatchObject({ status: 200, body: { current_version: 2, output_schema_version: '2.0.0' } });
+    // Une clé peut promouvoir un changement minor par un appel explicite du propriétaire (sans élicitation) ; all_in_console le ferme.
+    const minor = await readyDraft(SCHEMA_SURFACE, DRAFT_ITEMS);
+    await withClient(srv.db.url, (c) => c.query("UPDATE users SET promotion_gate = 'all_in_console' WHERE id = $1", [a.user.id]));
+    const closed = await srv.app.inject({ method: 'POST', url: `/api/apis/${minor.seeded.slug}/promote`, headers: { authorization: `Bearer ${key}` }, payload: { diff_hash: minor.tested.body['test'].diff_hash } });
+    expect(closed.statusCode).toBe(403);
+    await withClient(srv.db.url, (c) => c.query("UPDATE users SET promotion_gate = 'major_in_console' WHERE id = $1", [a.user.id]));
+    const open = await srv.app.inject({ method: 'POST', url: `/api/apis/${minor.seeded.slug}/promote`, headers: { authorization: `Bearer ${key}` }, payload: { diff_hash: minor.tested.body['test'].diff_hash } });
+    expect(open.statusCode).toBe(200);
+    expect(contract.check('POST', '/api/apis/{slug}/promote', 200, open.json())).toEqual([]);
+    expect(await count("SELECT count(*) FROM audit_events WHERE action = 'api.promoted' AND target_id = $1 AND meta ->> 'human' = 'explicit_owner_call'", [minor.seeded.id])).toBe(1);
+  });
+
+  test('transition 22 : promotion depuis erreur → warning (promoted), journalisée', async () => {
+    const { seeded, tested } = await readyDraft(SCHEMA_SURFACE, DRAFT_ITEMS, { status: 'erreur' });
+    const promoted = await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: tested.body['test'].diff_hash });
+    expect(promoted).toMatchObject({ status: 200, body: { transition: 22, status: 'warning' } });
+    expect(await count("SELECT count(*) FROM status_events WHERE api_id = $1 AND from_status = 'erreur' AND to_status = 'warning' AND reason = 'promoted'", [seeded.id])).toBe(1);
+  });
+
+  test('revert : retour vers une version qui a été en service (accusé si le schéma change), version jamais courante refusée, brouillon jeté', async () => {
+    const { seeded, tested } = await readyDraft(SCHEMA_SURFACE, DRAFT_ITEMS);
+    await api(a, 'POST', `/api/apis/${seeded.slug}/promote`, '/api/apis/{slug}/promote', { diff_hash: tested.body['test'].diff_hash });
+    // Vers la v1 (schéma 1.0.0, la courante est en 1.1.0) : autre version de schéma → accusé, comme un changement major.
+    const noAck = await api(a, 'POST', `/api/apis/${seeded.slug}/revert`, '/api/apis/{slug}/revert', {});
+    expect(noAck).toMatchObject({ status: 409, body: { error: { code: 'breaking_change_requires_ack' } } });
+    const key = await keyOf(a, ['apis:read', 'apis:write']);
+    const viaKey = await srv.app.inject({ method: 'POST', url: `/api/apis/${seeded.slug}/revert`, headers: { authorization: `Bearer ${key}` }, payload: {} });
+    expect(viaKey.statusCode).toBe(403);
+    expect(contract.check('POST', '/api/apis/{slug}/revert', 403, viaKey.json())).toEqual([]);
+    const reverted = await api(a, 'POST', `/api/apis/${seeded.slug}/revert`, '/api/apis/{slug}/revert', { acknowledge_breaking: true });
+    expect(reverted).toMatchObject({ status: 200, body: { current_version: 1, previous_version: 2, reason: 'reverted', output_schema_version: '1.0.0' } });
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND current_strategy_version = 1 AND NOT (output_schema -> 'properties' ? 'surface')", [seeded.id])).toBe(1);
+    // Brouillon écarté : jamais rétabli.
+    await api(a, 'POST', `/api/apis/${seeded.slug}/refine`, '/api/apis/{slug}/refine', { feedback: 'autre idée' });
+    const discarded = await api(a, 'DELETE', `/api/apis/${seeded.slug}/draft`, '/api/apis/{slug}/draft');
+    expect(discarded).toMatchObject({ status: 200, body: { archived_version: 3 } });
+    expect((await api(a, 'DELETE', `/api/apis/${seeded.slug}/draft`, '/api/apis/{slug}/draft')).body).toMatchObject({ error: { code: 'no_draft' } });
+    const never = await api(a, 'POST', `/api/apis/${seeded.slug}/revert`, '/api/apis/{slug}/revert', { version: 3 });
+    expect(never).toMatchObject({ status: 400, body: { error: { code: 'version_not_revertable' } } });
+    expect((await api(b, 'DELETE', `/api/apis/${seeded.slug}/draft`, '/api/apis/{slug}/draft')).status).toBe(404);
+  });
+});
+
 describe('assert_rest_endpoints_contract : chaque endpoint livré par 3.1 a des réponses contrôlées au contrat', () => {
   test('couverture', () => {
     // Routes livrées par 3.1 : le bloc du registre qui commence à GET /api/openapi.json (aucune liste à tenir à la main).

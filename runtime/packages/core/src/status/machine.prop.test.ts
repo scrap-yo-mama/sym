@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // assert_status_transitions, part 2 (15 §3) : test basé sur un modèle fast-check (commands, modelRun, replayPath).
-// Modèle de référence réécrit à part de la machine, horloge injectée, 11 commandes. Rejouer une séquence fautive :
+// Modèle de référence réécrit à part de la machine, horloge injectée, 12 commandes. Rejouer une séquence fautive :
 //   STATUS_MODEL_SEED=<graine> STATUS_MODEL_PATH=<chemin> pnpm vitest run --project unit packages/core/src/status/machine.prop
 import fc from 'fast-check';
 import { describe, test } from 'vitest';
@@ -119,6 +119,9 @@ function modelStep(m: ModelState, ev: StatusEventInput, now: number): Expected {
         : same;
     case 'persistence_attempt':
       return m.status === 'erreur' && BACKOFF_OK.has(ev.failureClass) ? go([16], 'enquete', 'persistence_attempt', { prev: 'erreur' }) : same;
+    case 'version_promoted':
+      // 22 (3.14) : depuis erreur seulement ; sur sain ou warning, pas de transition.
+      return m.status === 'erreur' ? go([22], 'warning', ev.via, { streak: 0, ...signal }) : same;
     case 'user_acted':
       return m.status === 'action_requise' ? go([17], 'enquete', 'user_acted', { prev: null }) : same;
   }
@@ -169,7 +172,7 @@ function drive(model: Model, real: Real, ev: StatusEventInput, opts: { manualRei
     }
     if (at !== s.status) fail('dernier to_status différent du statut final');
   }
-  // Chaque transition journalisée existe dans la table des 21, avec un code de raison stable de cette transition.
+  // Chaque transition journalisée existe dans la table des 22, avec un code de raison stable de cette transition.
   for (const t of step.transitions) {
     const def = TRANSITIONS.find((d) => d.id === t.transition);
     if (def === undefined || def.from !== t.from || !def.reasons.includes(t.reason)) fail(`transition hors table : ${JSON.stringify(t)}`);
@@ -234,7 +237,7 @@ const cmd = (label: string, run: (m: Model, r: Real) => void): Cmd => ({
   toString: () => label,
 });
 
-// 11 commandes : run propre, dégradé, échec, retour de version, issue de réparation, issue d'enquête, ré-enquête,
+// 12 commandes : run propre, dégradé, échec, retour de version, issue de réparation, issue d'enquête, ré-enquête,
 // action de l'utilisateur, backoff, tentative de persistance (D-49), passage du temps (avec contrôle du drapeau stale).
 const commandArbs = [
   triggerArb.map((t) => cmd(`CleanRun(${t})`, (m, r) => drivenRun(m, r, { type: 'run_succeeded', signals: [] }, t))),
@@ -254,6 +257,8 @@ const commandArbs = [
   fc.constantFrom<ReinvestigationTrigger>('manual', 'schema_changed', 'force_investigate', 'rules_changed').map((trigger) =>
     cmd(`Reinvestigate(${trigger})`, (m, r) => drive(m, r, { type: 'reinvestigate', trigger }, { manualReinvestigation: trigger === 'manual' })),
   ),
+  // Transition 22 (3.14) : promotion d'un brouillon ou retour de version.
+  fc.constantFrom<'promoted' | 'reverted'>('promoted', 'reverted').map((via) => cmd(`VersionPromoted(${via})`, (m, r) => drive(m, r, { type: 'version_promoted', via }))),
   fc.constant(cmd('UserActed', (m, r) => drive(m, r, { type: 'user_acted' }))),
   fc.tuple(failureArb, fc.integer({ min: -1, max: 4 })).map(([c, a]) =>
     cmd(`Backoff(${c},${String(a)})`, (m, r) => drive(m, r, { type: 'backoff_elapsed', failureClass: c, attempt: a })),
@@ -306,7 +311,7 @@ describe('assert_status_transitions (modèle)', () => {
     );
   });
 
-  test('couverture : la marche aléatoire atteint les 21 transitions', () => {
+  test('couverture : la marche aléatoire atteint les 22 transitions', () => {
     // Garde-fou du modèle : sans ce test, un modèle qui n'explorerait que quelques états passerait pour vert. 6 000 marches :
     // avec la mémoire négative (2.12) et la tentative de persistance (2.16), 3 000 ne suffisent plus à atteindre la 13. Graine fixe : 42 laissait 9 transitions hors de portée une fois les classes robots_* retirées des tirages (D-91), 43 les atteint toutes ; sur un nouveau déséquilibre, changer la graine.
     const seen = new Set<number>();

@@ -31,6 +31,7 @@ import {
   ProtocolError,
   ProtocolErrorCode,
   requireScopes,
+  ResourceTemplate,
   type CallToolResult,
   type InputRequiredResult,
   type jsonSchemaValidator,
@@ -49,6 +50,7 @@ import { waitSecondsOf } from '../rest/shared.js';
 import { UUID } from '../routes/account-helpers.js';
 import { createdView, waitApiLeavesEnquete } from '../routes/apis.js';
 import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
+import { promotionElicitation, schemaChangeText, breakingText, diffSentence, testRunningText } from './iteration-texts.js';
 import { journeyTexts } from './journey-texts.js';
 import { attemptsOf, createdSummary, PREVIEW_MAX_ROWS, renderNarrative, schemaValidationLines } from './narrative.js';
 import { createProgressSink, progressMessage, type ProgressSink } from './progress.js';
@@ -248,7 +250,7 @@ function errorOf(body: Json): Json | null {
 
 type RestAnswer = { status: number; body: Json };
 
-async function rest(ctx: ServerContext, caller: McpCaller, method: 'GET' | 'POST', url: string, payload?: Json): Promise<RestAnswer> {
+async function rest(ctx: ServerContext, caller: McpCaller, method: 'GET' | 'POST' | 'DELETE', url: string, payload?: Json): Promise<RestAnswer> {
   const { request, app } = caller;
   const userAgent = request.headers['user-agent'];
   const res = await app.inject({
@@ -610,6 +612,84 @@ async function findExistingRequest(ctx: ServerContext, actor: Actor, url: string
   const wantedText = normalizeText(description);
   const hit = rows.find((r) => r.url !== null && r.description !== null && normalizeUrl(r.url) === wantedUrl && normalizeText(r.description) === wantedText);
   return hit === undefined ? null : { apiId: hit.api_id, runId: hit.run_id };
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// Itération (3.14, 07 § 2) : cinq outils `iterate`, façades des routes REST ; la promotion est un acte humain
+// ---------------------------------------------------------------------------------------------------------------
+
+const PROMOTE_STATE = /^p1\.([a-z0-9-]{1,63})\.([0-9a-f]{64})$/;
+const promoteState = (slug: string, diffHash: string) => `p1.${slug}.${diffHash}`;
+
+/** Erreur d'une route d'itération : le message est déjà dans la langue de la personne, `what_to_do` et la prochaine étape viennent de la route. */
+const iterationError = (answer: RestAnswer, locale: McpLocale = 'en'): CallToolResult => restError(answer, () => ((answer.body['error'] ?? {}) as Json)['next_action'] as Json | null ?? null, locale);
+
+const clip = (v: unknown, max: number): string => String(v ?? '').slice(0, max);
+
+/**
+ * Bloc de reprise (19b § 2, `get_api` `view: "iteration"`) : 2 000 jetons au plus, propriétaire seul (la route répond 404 à tout
+ * autre). Les retours sont les siens (texte non fiable, borné) ; le diff est réduit à sa phrase et à ses comptes, aucune valeur.
+ */
+function resumeBlock(body: Json): Json {
+  const draft = (body['draft'] ?? null) as Json | null;
+  const test = (draft?.['last_test'] ?? null) as Json | null;
+  const feedback = Array.isArray(draft?.['feedback']) ? (draft?.['feedback'] as Json[]).slice(-5).map((f) => ({ kind: f['kind'], field: f['field'], origin: f['origin'], text: clip(f['text'], 300) })) : [];
+  const versions = Array.isArray(body['versions']) ? (body['versions'] as Json[]).slice(0, 6) : [];
+  return {
+    slug: body['slug'],
+    status: body['status'],
+    current_version: body['current_version'],
+    output_schema_version: body['output_schema_version'],
+    draft:
+      draft === null
+        ? null
+        : {
+            version: draft['version'],
+            base_version: draft['base_version'],
+            base_stale: draft['base_stale'],
+            output_schema_version: draft['output_schema_version'],
+            schema_level: draft['schema_level'],
+            expires_at: draft['expires_at'],
+            tested: draft['tested'],
+            feedback,
+            last_test:
+              test === null
+                ? null
+                : { ok: test['ok'], items: test['items'], items_rejected: test['items_rejected'], cost_usd: test['cost_usd'], llm_free: test['llm_free'], diff_hash: test['diff_hash'], diff_summary: test['diff_summary'] },
+          },
+    versions,
+    next_step: body['next_step'],
+    summary: body['summary'],
+    next_action: body['next_action'] ?? null,
+    console_url: body['console_url'],
+    message_locale: body['message_locale'],
+  };
+}
+
+/** Élicitation de promotion (Q12) : le diff en une phrase, le coût, la conséquence ; deux valeurs d'enum stables. */
+function promotionForm(view: Json, locale: McpLocale) {
+  const draft = view['draft'] as Json;
+  const test = draft['last_test'] as Json;
+  const promotion = (view['promotion'] ?? {}) as Json;
+  const parts = test['summary_parts'] as { code: 'diff_none' | 'diff_changes' | 'diff_content'; params: Record<string, number> } | null;
+  const changes = (Array.isArray(promotion['changes']) ? promotion['changes'] : []) as never[];
+  const impacted = (Array.isArray(promotion['impacted']) ? promotion['impacted'] : []) as { kind: string; field: string }[];
+  const text = promotionElicitation(locale, {
+    slug: String(view['slug']),
+    sentence: parts === null ? '' : diffSentence(locale, parts),
+    schemaText: schemaChangeText(locale, changes),
+    breaking: promotion['level'] === 'major' ? breakingText(locale, impacted) : null,
+    costUsd: typeof test['cost_usd'] === 'number' ? test['cost_usd'] : null,
+  });
+  return inputRequired.elicit({
+    message: text.message,
+    requestedSchema: {
+      type: 'object',
+      properties: { decision: { type: 'string', title: text.decision, default: 'promote', enum: ['promote', 'cancel'], enumNames: [text.promote, text.cancel] } },
+      required: ['decision'],
+    } as never,
+  });
 }
 
 type Handler = (args: Json, caller: McpCaller, call: Call) => Promise<ToolOutput>;
@@ -1039,12 +1119,89 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     },
 
     async get_api(args, caller, call) {
-      const answer = await rest(ctx, caller, 'GET', `/api/apis/${encodeURIComponent(String(args['slug']))}${query({ response_format: args['response_format'] as string | undefined })}`);
+      const slug = encodeURIComponent(String(args['slug']));
+      // Reprise d'une itération dans une autre conversation (19 §6) : le bloc de reprise, propriétaire seul.
+      if (args['view'] === 'iteration') {
+        const view = await rest(ctx, caller, 'GET', `/api/apis/${slug}/iteration${query({ lang: call.locale })}`);
+        if (view.status !== 200) return restError(view, undefined, call.locale);
+        const block = resumeBlock(view.body);
+        return success(String(view.body['summary'] ?? ''), block);
+      }
+      if (args['view'] === 'versions') {
+        const versions = await rest(ctx, caller, 'GET', `/api/apis/${slug}/versions`);
+        if (versions.status !== 200) return restError(versions, undefined, call.locale);
+        return success(`${((versions.body['versions'] ?? []) as unknown[]).length} versions.`, { slug: String(args['slug']), ...versions.body });
+      }
+      const answer = await rest(ctx, caller, 'GET', `/api/apis/${slug}${query({ response_format: args['response_format'] as string | undefined })}`);
       if (answer.status !== 200) return restError(answer, undefined, call.locale);
       // Enquête en attente d'une décision (UX-18, UX-36) : le schéma proposé, l'échantillon, les champs trouvés et la question
       // unique, comme `get_run` (03 § 3). Propriétaire seulement (la porte et la proposition sont à lui).
       const awaiting = await awaitingExtras(String(answer.body['id'] ?? ''), caller, call);
       return success(`API ${String(answer.body['slug'])}: status ${String(answer.body['status'])}.${awaiting === null ? '' : ' A schema is waiting for a decision: see proposed_output_schema and question.'}`, awaiting === null ? answer.body : { ...answer.body, ...awaiting });
+    },
+
+    async refine_api(args, caller, call) {
+      const slug = String(args['slug']);
+      const body: Json = {};
+      for (const key of ['feedback', 'output_schema', 'scope', 'dry_run', 'accept_cost'] as const) if (args[key] !== undefined) body[key] = args[key];
+      const answer = await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(slug)}/refine${query({ lang: call.locale })}`, body);
+      if (answer.status !== 200) return iterationError(answer, call.locale);
+      return success(String(answer.body['summary'] ?? ''), answer.body);
+    },
+
+    async test_api(args, caller, call) {
+      const slug = String(args['slug']);
+      const body: Json = { input: args['input'] };
+      for (const key of ['dry_run', 'accept_cost'] as const) if (args[key] !== undefined) body[key] = args[key];
+      const answer = await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(slug)}/test${query({ lang: call.locale, wait: wait(args) })}`, body);
+      if (answer.status === 202) return success(testRunningText(call.locale), answer.body);
+      if (answer.status !== 200) return iterationError(answer, call.locale);
+      return success(String(answer.body['summary'] ?? (answer.body['dry_run'] === true ? 'Estimate only: nothing was run.' : '')), answer.body);
+    },
+
+    async promote_api(args, caller, call) {
+      const slug = String(args['slug']);
+      const diffHash = String(args['diff_hash']);
+      const base = `/api/apis/${encodeURIComponent(slug)}`;
+      // Tour suivant d'une élicitation : la réponse de la personne décide ; refus ou annulation : aucune promotion.
+      const resumed = call.requestState !== undefined && PROMOTE_STATE.test(call.requestState);
+      let elicitation: 'accepted' | 'declined' | undefined;
+      if (resumed) {
+        const reply = inputResponse(call.inputResponses, 'promote_api');
+        elicitation = reply.kind === 'elicit' && reply.action === 'accept' && reply.content?.['decision'] === 'promote' ? 'accepted' : 'declined';
+      } else if (call.canElicit) {
+        // Toute promotion passe par une élicitation quand le client la déclare (19 §6) : la personne voit le diff, le coût, la conséquence.
+        const view = await rest(ctx, caller, 'GET', `${base}/iteration${query({ lang: call.locale })}`);
+        if (view.status !== 200) return iterationError(view, call.locale);
+        const draft = view.body['draft'] as Json | null;
+        const test = (draft?.['last_test'] ?? null) as Json | null;
+        if (draft !== null && test !== null && test['diff_hash'] === diffHash && test['ok'] === true) {
+          return inputRequired({ inputRequests: { promote_api: promotionForm(view.body, call.locale) }, requestState: promoteState(slug, diffHash) });
+        }
+        // Rien à confirmer (pas de test, empreinte périmée…) : la route répond avec la cause exacte.
+      }
+      const body: Json = { diff_hash: diffHash };
+      for (const key of ['accept_cost_increase', 'acknowledge_breaking'] as const) if (args[key] !== undefined) body[key] = args[key];
+      if (elicitation !== undefined) body['elicitation'] = elicitation;
+      const answer = await rest(ctx, caller, 'POST', `${base}/promote${query({ lang: call.locale })}`, body);
+      if (answer.status !== 200) return iterationError(answer, call.locale);
+      return success(String(answer.body['summary'] ?? ''), answer.body);
+    },
+
+    async revert_api(args, caller, call) {
+      const slug = String(args['slug']);
+      const body: Json = {};
+      for (const key of ['version', 'acknowledge_breaking'] as const) if (args[key] !== undefined) body[key] = args[key];
+      const answer = await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(slug)}/revert${query({ lang: call.locale })}`, body);
+      if (answer.status !== 200) return iterationError(answer, call.locale);
+      return success(String(answer.body['summary'] ?? ''), answer.body);
+    },
+
+    async discard_draft(args, caller, call) {
+      const slug = String(args['slug']);
+      const answer = await rest(ctx, caller, 'DELETE', `/api/apis/${encodeURIComponent(slug)}/draft${query({ lang: call.locale })}`);
+      if (answer.status !== 200) return iterationError(answer, call.locale);
+      return success(String(answer.body['summary'] ?? ''), answer.body);
     },
 
     async report_problem(args, caller, call) {
@@ -1161,9 +1318,27 @@ function registerPrompts(server: McpServer, locale: McpLocale): void {
   }
 }
 
+/**
+ * Ressource de reprise `scrapyomama://api/{slug}/iteration` (19b § 2, `audience: assistant`) : le même bloc que
+ * `get_api(view: "iteration")`, propriétaire seul (la route répond 404 à tout autre : l'API d'autrui n'existe pas pour lui).
+ */
+function registerResources(server: McpServer, ctx: ServerContext, caller: McpCaller, locale: McpLocale): void {
+  server.registerResource(
+    'api_iteration',
+    new ResourceTemplate('scrapyomama://api/{slug}/iteration', { list: undefined }),
+    { title: 'API iteration', description: 'The draft, the feedback, the last test and the next step of an API being refined (owner only).', mimeType: 'application/json', annotations: { audience: ['assistant'] } },
+    async (uri, variables) => {
+      const slug = String(variables['slug'] ?? '');
+      const view = await rest(ctx, caller, 'GET', `/api/apis/${encodeURIComponent(slug)}/iteration${query({ lang: locale })}`);
+      if (view.status !== 200) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Unknown resource: read list_apis for the slugs you can use.', { code: 'not_found', next_action: { tool: 'list_apis', args: {} } });
+      return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(resumeBlock(view.body)) }] };
+    },
+  );
+}
+
 /** Serveur MCP d'une requête : outils des toolsets demandés, outils par API de l'acteur, prompts. */
 export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, version: string): Promise<McpServer> {
-  const server = new McpServer({ name: 'sym', version }, { instructions: MCP_INSTRUCTIONS, capabilities: { tools: { listChanged: true }, prompts: { listChanged: false } } });
+  const server = new McpServer({ name: 'sym', version }, { instructions: MCP_INSTRUCTIONS, capabilities: { tools: { listChanged: true }, prompts: { listChanged: false }, resources: { listChanged: false } } });
   const locale = await localeOf(ctx, caller);
   const all = handlers(ctx);
   /** Outils enregistrés et scope exigé par chacun. */
@@ -1228,6 +1403,7 @@ export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, vers
     }
   }
   registerPrompts(server, locale);
+  registerResources(server, ctx, caller, locale);
   shapeToolHandlers(server, scopes, new Set(caller.actor.scopes ?? []));
   return server;
 }

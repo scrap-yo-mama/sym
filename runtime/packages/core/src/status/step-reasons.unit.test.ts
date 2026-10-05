@@ -38,7 +38,7 @@ describe('raisons de la reprise par étape sur les transitions existantes', () =
   });
   test('aucune transition nouvelle ; chaque raison est déclarée par sa transition', () => {
     expect(TRANSITIONS).toHaveLength(TRANSITION_COUNT);
-    expect(TRANSITION_COUNT).toBe(21);
+    expect(TRANSITION_COUNT).toBe(22);
     expect(transitionDef(2).reasons).toContain('not_compilable');
     expect(transitionDef(21).reasons).toContain('not_compilable');
     expect(transitionDef(12).reasons).toContain('repair_not_validated');

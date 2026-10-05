@@ -129,11 +129,16 @@ export type StatusEventInput =
    * préventif AVANT tout appel LLM et toute requête, par la transition 4 existante, raison `prior_refusal`.
    */
   | { type: 'prior_refusal' }
+  /**
+   * Promotion d'un brouillon (`promoted`) ou retour de version (`reverted`) par 3.14 : la 22 depuis `erreur` seulement
+   * (`warning`) ; sur `sain` ou `warning` ce n'est pas une transition (événement `version.promoted`, statut inchangé).
+   */
+  | { type: 'version_promoted'; via: 'promoted' | 'reverted' }
   /** L'utilisateur a agi : connexion, proxy, paiement, tunnel (17). */
   | { type: 'user_acted' };
 
 export type TransitionId =
-  | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21;
+  | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22;
 
 /** Une transition appliquée : c'est ce qu'on persiste dans `status_events`. */
 export type TransitionRecord = {

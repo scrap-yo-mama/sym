@@ -500,6 +500,30 @@ describe('règles Markdown dans la réparation (tâche 2.10, 18 §4.5)', () => {
     expect(rows[0]!.ok).toBe(true);
   });
 
+  test('assert_feedback_survives_repair — un retour d’utilisateur de la source de vN est gardé dans la source de vN+1 (texte non fiable, jamais une règle)', async () => {
+    const apiId = await healthyContacts('zz_test_feedback_repair');
+    const feedback = [
+      { at: '2026-10-05T10:00:00.000Z', author_id: A, origin: 'mcp', kind: 'wrong_value', field: 'name', text: 'le nom est coupé après 20 caractères', expected_ref: null },
+      { at: '2026-10-05T10:05:00.000Z', author_id: A, origin: 'ui', kind: 'missing_field', field: 'city', text: 'la ville manque souvent', expected_ref: null },
+    ];
+    const v1Source = {
+      request: { description: 'zz_test liste des contacts', url: `${base(API_HOST)}/contacts`, example_output_ref: null },
+      output_schema_sha256: 'a'.repeat(64),
+      investigation_id: null,
+      decisions: [],
+      rules: [],
+      reason: 'investigation',
+      feedback,
+    };
+    await pool.query('UPDATE strategy_versions SET source = $2::jsonb WHERE api_id = $1 AND version = 1', [apiId, JSON.stringify(v1Source)]);
+    await site('api_json', { mutation: 'rename_field' });
+    fake.setScenario(MODEL, [proposal([{ op: 'replace', path: '/fields/name/path', value: '$.full_name' }])]);
+    expect(await runOf(apiId)).toMatchObject({ state: 'succeeded', strategy_version: 2 });
+    const source = await readStrategySource(pool, { apiId, ownerId: A, version: 2 });
+    expect(source!.source.reason).toBe('repair');
+    expect(source!.source.feedback).toEqual(feedback);
+  });
+
   test('source de vN+1 sans source sur la version courante : la demande vient de l’enquête de l’API (description, URL), jamais vide', async () => {
     const apiId = await healthyContacts('zz_test_rules_repair_request');
     await pool.query("UPDATE apis SET investigation = $2::jsonb WHERE id = $1", [
