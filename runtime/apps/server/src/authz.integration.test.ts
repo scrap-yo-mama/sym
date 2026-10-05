@@ -390,7 +390,8 @@ describe('assert_authz_matrix (squelette, 08b § 4) : paramétré sur le registr
       const { key } = await createKey(srv, a.cookie, a.user, GRANTABLE_SCOPES.filter((s) => s !== route.scope));
       const res = await call(route, { authorization: `Bearer ${key}` }, ZERO_UUID, VALID_BODIES[keyOf(route)]?.(a));
       expect(res.statusCode).toBe(403);
-      expect(res.json()).toMatchObject({ error: { code: 'insufficient_scope' } });
+      // UX-09 : le droit manquant est nommé, avec l'action et la marche à suivre.
+      expect(res.json()).toMatchObject({ error: { code: 'insufficient_scope', scope_required: route.scope, action_label: expect.stringContaining(route.scope!), what_to_do: expect.stringContaining(route.scope!), retryable: false } });
     },
   );
 

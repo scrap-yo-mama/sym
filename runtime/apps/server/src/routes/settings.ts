@@ -22,7 +22,7 @@ import { audit, notFound, sendError } from './guard.js';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-async function readSetting<T>(ctx: ServerContext, key: string): Promise<T | null> {
+export async function readSetting<T>(ctx: ServerContext, key: string): Promise<T | null> {
   const { rows } = await ctx.pool.query<{ value: T }>('SELECT value FROM settings WHERE key = $1', [key]);
   return rows[0]?.value ?? null;
 }
@@ -51,7 +51,7 @@ async function deleteInstanceSecrets(ctx: ServerContext, ids: readonly (string |
 }
 
 /** Secrets illisibles (« À ressaisir », 06 § 4.2 `secret_unreadable`). */
-async function unreadable(ctx: ServerContext, ids: readonly string[]): Promise<Set<string>> {
+export async function unreadable(ctx: ServerContext, ids: readonly string[]): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
   const { rows } = await ctx.pool.query<{ id: string }>("SELECT id FROM secrets WHERE id = ANY($1::uuid[]) AND owner_id IS NULL AND state = 'unreadable'", [ids]);
   return new Set(rows.map((r) => r.id));

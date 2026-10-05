@@ -87,14 +87,14 @@ export type InvestigateArgs = {
 };
 
 /**
- * Rappel placé APRÈS le bloc `Language:` : ce rôle n'écrit aucune phrase pour l'humain. Noms, types et descriptions de champs
- * sont des sorties machine, et la description est lue par le modèle client (21 § 4.5) : anglais, quelle que soit `runs.locale`.
- * Seul un `title` de champ (absent de la proposition V1) suivrait la langue du run. Le schéma de sortie ne dépend donc pas de la
- * langue du demandeur. La consigne est la seule garde de la description : aucun motif de caractères ne la refuse (« Price (€) »,
- * « Person’s name » sont de l'anglais), une description mal rédigée ne fait jamais échouer l'enquête.
+ * Rappel placé APRÈS le bloc `Language:` (UX-35, 03-specs-mcp § 6) : noms de champs, types et valeurs d'énumération sont des sorties
+ * machine, en anglais quelle que soit `runs.locale` ; la `description` de chaque champ est une phrase pour la personne et suit la
+ * langue du bloc. Le schéma de sortie (noms, types) ne dépend donc pas de la langue du demandeur. La consigne est la seule garde
+ * de la description : aucun motif de caractères ne la refuse, une description dans une autre langue ne fait jamais échouer
+ * l'enquête.
  */
 const INVESTIGATE_MACHINE_FIELDS_NOTE =
-  'This role writes no sentence for the user: field names, types and every description stay in plain English whatever the Language line says (descriptions are read by the API client and are never translated).';
+  'Field names, types and enum values stay in plain English whatever the Language line says (they are machine outputs). The description of each field is a short sentence for the user: write it in the language of the Language line.';
 
 /**
  * Prompt système : un seul jeu en anglais ; le bloc `Language:` (nom de langue du registre, jamais une saisie libre) est ajouté

@@ -23,13 +23,13 @@ export function createProgressSink(token: string | number | undefined, notify: N
   };
 }
 
-/** Message de progression : la dernière étape du récit (même texte que le récit), sinon « l'enquête est en cours ». */
+/** Message de progression : le dernier jalon du récit (« 2/4 Reconnaître : … », 80 caractères au plus), sinon « l'enquête est en cours ». */
 export function progressMessage(timeline: readonly TimelineEntry[], locale: McpLocale): string {
   for (let i = timeline.length - 1; i >= 0; i -= 1) {
     const entry = timeline[i]!;
     if (entry.kind === 'investigation') continue;
     const text = entryText(entry, locale);
-    if (text !== null) return entry.step !== null && entry.step > 0 ? `${entry.step}. ${text}` : text;
+    if (text !== null) return text;
   }
   return narrativeCatalog(locale).running;
 }

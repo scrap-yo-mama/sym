@@ -27,6 +27,7 @@ import { identityRoutes } from './routes/identity.js';
 import { invitationRoutes } from './routes/invitations.js';
 import { mcpRoutes, mcpTransportGuard } from './routes/mcp.js';
 import { meRoutes } from './routes/me.js';
+import { prerequisitesRoutes } from './routes/prerequisites.js';
 import { findRoute } from './routes/registry.js';
 import { setupRoutes } from './routes/setup.js';
 import { ssoRoutes } from './routes/sso.js';
@@ -119,6 +120,7 @@ export function buildServer(
   setupRoutes(app, ctx);
   authRoutes(app, ctx);
   meRoutes(app, ctx);
+  prerequisitesRoutes(app, ctx);
   apiKeyRoutes(app, ctx);
   extensionRoutes(app, ctx);
   // Comptes avancés (tâche 3.7).

@@ -146,16 +146,25 @@ const IMPORTED_BYTES_ESTIMATE = 200_000;
  * tunnel la jouerait avec les cookies et l'identité de l'utilisateur (INV5). Sans Chromium, E2 et E3 n'ont donc aucun
  * essai. Source `import`.
  */
-export function buildImportedPlan(input: { readonly execution: Execution; readonly spec: Record<string, unknown>; readonly networks: readonly PlanNetwork[]; readonly browser: boolean }): PlanEntry[] {
+export function buildImportedPlan(input: {
+  readonly execution: Execution;
+  readonly spec: Record<string, unknown>;
+  readonly networks: readonly PlanNetwork[];
+  readonly browser: boolean;
+  /** Prix du rôle `extract` (E4 importé, UX-28) : sans lui, le coût estimé d'un essai E4 est inconnu (null). */
+  readonly llmPrice?: { readonly in: number; readonly out: number } | null;
+}): PlanEntry[] {
   const pagination = input.spec['pagination'];
+  // E1 et E4 par `fetch` n'ouvrent aucun navigateur ; E2, E3 et E4 par la page ouverte (`fetch_in_page`) en demandent un.
+  const needsBrowser = input.execution === 'agent_fetch' ? input.spec['via'] === 'fetch_in_page' : input.execution !== 'fetch';
   const paginated = typeof pagination === 'object' && pagination !== null && (pagination as { type?: unknown }).type !== 'none';
   const entries: PlanEntry[] = input.networks
-    .filter((n) => n.mode !== 'tunnel' && (input.execution === 'fetch' || input.browser))
+    .filter((n) => n.mode !== 'tunnel' && (!needsBrowser || input.browser))
     .map((n) => ({
       execution: input.execution,
       network: n.mode,
       source: 'import',
-      est_cost_usd: estimateCostUsd(input.execution, n.mode, { bytes: IMPORTED_BYTES_ESTIMATE, pages: 1, perGbUsd: n.perGbUsd, llmPrice: null }),
+      est_cost_usd: estimateCostUsd(input.execution, n.mode, { bytes: IMPORTED_BYTES_ESTIMATE, pages: 1, perGbUsd: n.perGbUsd, llmPrice: input.llmPrice ?? null }),
       spec: input.spec,
       paginated,
     }));

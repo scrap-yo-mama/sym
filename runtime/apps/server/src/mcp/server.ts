@@ -41,6 +41,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ServerContext } from '../context.js';
 import { readApiById, readApiBySlug } from '../rest/apis.js';
 import { datasetItems } from '../rest/export.js';
+import { errorTexts } from '../error-catalog.js';
 import { runErrorFor } from '../rest/run-error.js';
 import { buildRunResult, decodeItemsCursor, itemsCursor, readRunRow, runMetadataForAdmin, type RunRow } from '../rest/runs.js';
 import { investigationProgressOf, type TimelineEntry } from '../rest/timeline.js';
@@ -49,7 +50,7 @@ import { UUID } from '../routes/account-helpers.js';
 import { createdView, waitApiLeavesEnquete } from '../routes/apis.js';
 import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
 import { journeyTexts } from './journey-texts.js';
-import { attemptsOf, createdSummary, renderNarrative, schemaValidationLines } from './narrative.js';
+import { attemptsOf, createdSummary, PREVIEW_MAX_ROWS, renderNarrative, schemaValidationLines } from './narrative.js';
 import { createProgressSink, progressMessage, type ProgressSink } from './progress.js';
 import { blockHead, buildResultBlock, firstRunDue, firstRunGateOf, readFirstRunRequested, type FirstRunGate, milestoneText, PROGRESS_HEARTBEAT_MS, questionOf, readFirstRun, readGate, stepOf, type Question, type ResultBlock } from './result-block.js';
 import { promptBody, PROMPT_ARG_SCHEMAS } from './prompts.js';
@@ -118,16 +119,37 @@ const GUIDES: Record<string, ErrorGuide> = {
   internal: { what_to_do: 'The instance hit an internal error: call again in a moment; if it persists, tell the user to check the instance logs.', retryable: true },
 };
 
-const DEFAULT_GUIDE: ErrorGuide = { what_to_do: 'Read the message; if it persists, report_problem with what you tried.', retryable: false };
+const DEFAULT_MESSAGE = 'Something went wrong.';
 
-/** Erreur d'outil (05 § 4.3) : texte JSON, `isError`, aucun `structuredContent`. `bloquee` et `action_requise` : gabarit FERMÉ (texts.ts). */
-function toolError(code: string, message: string, nextAction: Json | null = null, own?: ErrorGuide): CallToolResult {
-  const guide = own ?? GUIDES[code] ?? DEFAULT_GUIDE;
-  const body = { code, message, what_to_do: guide.what_to_do, retryable: guide.retryable, next_action: nextAction };
+/** Ce que la route ou l'appelant sait déjà d'une erreur : sa langue, son action, sa marche à suivre, ses champs nommés. */
+type ErrorOwn = { message_locale?: string; action_label?: string; what_to_do?: string; retryable?: boolean; field?: string; scope_required?: string; console_url?: string; details?: unknown };
+
+/**
+ * Erreur d'outil (05 § 4.3, 03-specs-mcp § 10.3) : texte JSON `{ code, message, message_locale, action_label, what_to_do,
+ * retryable, next_action, … }`, `isError`, aucun `structuredContent`. `message` null : le texte du catalogue dans `locale`.
+ * `bloquee` et `action_requise` : gabarit FERMÉ (texts.ts).
+ */
+function toolError(code: string, message: string | null, nextAction: Json | null = null, own: ErrorOwn = {}, locale: McpLocale = 'en'): CallToolResult {
+  const guide = GUIDES[code];
+  const params = { scope: own.scope_required, field: own.field, ...(typeof own.details === 'object' && own.details !== null ? (own.details as Record<string, unknown>) : {}) };
+  const texts = errorTexts(code, locale, params);
+  const body = {
+    code,
+    message: message ?? texts.message ?? DEFAULT_MESSAGE,
+    message_locale: own.message_locale ?? locale,
+    action_label: own.action_label ?? texts.action_label,
+    what_to_do: own.what_to_do ?? guide?.what_to_do ?? texts.what_to_do,
+    retryable: own.retryable ?? guide?.retryable ?? texts.retryable,
+    next_action: nextAction,
+    ...(own.field === undefined ? {} : { field: own.field }),
+    ...(own.scope_required === undefined ? {} : { scope_required: own.scope_required }),
+    ...(own.console_url === undefined ? {} : { console_url: own.console_url }),
+    ...(own.details === undefined ? {} : { details: own.details }),
+  };
   return { isError: true, content: [{ type: 'text', text: JSON.stringify(body) }] };
 }
 
-const notFoundError = () => toolError('not_found', 'ressource introuvable', { tool: 'list_apis', args: {} });
+const notFoundError = (locale: McpLocale = 'en') => toolError('not_found', null, { tool: 'list_apis', args: {} }, {}, locale);
 
 /**
  * Outil inconnu, ou outil par API disparu entre deux listes : erreur de PROTOCOLE `-32602` (spécification MCP, « Unknown
@@ -144,9 +166,9 @@ function unknownToolError(): ProtocolError {
 }
 
 /** Exception dans un outil : erreur `internal` sans le message interne (base, réseau…), journalisée côté serveur. */
-function internalError(caller: McpCaller, tool: string, error: unknown): CallToolResult {
+function internalError(caller: McpCaller, tool: string, error: unknown, locale: McpLocale = 'en'): CallToolResult {
   caller.request.log.error({ err: error, tool }, 'mcp : erreur interne d’un outil');
-  return toolError('internal', 'erreur interne de l’instance');
+  return toolError('internal', null, null, {}, locale);
 }
 
 /** Succès : faits structurés, et les mêmes en texte (phrase puis JSON). */
@@ -198,6 +220,9 @@ function narrativeAnswer(envelope: Json, call: Call, extra?: { consoleUrl?: stri
       nextAction: (envelope['next_action'] as { tool: string } | null) ?? null,
       pollAfterSeconds: typeof envelope['poll_after_seconds'] === 'number' ? envelope['poll_after_seconds'] : null,
       ...(extra?.schemaRemark === true ? { schemaRemark: true } : {}),
+      ...(Array.isArray(envelope['items']) && (envelope['items'] as unknown[]).length > 0 && envelope['state'] === 'succeeded'
+        ? { result: { total: typeof envelope['total'] === 'number' ? envelope['total'] : null, preview: (envelope['items'] as Record<string, unknown>[]).slice(0, PREVIEW_MAX_ROWS) } }
+        : {}),
     },
     call.locale,
   );
@@ -233,6 +258,8 @@ async function rest(ctx: ServerContext, caller: McpCaller, method: 'GET' | 'POST
     headers: {
       authorization: request.headers.authorization ?? '',
       [MCP_CHANNEL_HEADER]: ctx.mcp!.channelToken,
+      // `?lang=` du client MCP : les erreurs REST rejouées en interne parlent la langue demandée (UX-35).
+      ...(parseLang(caller.lang) === null ? {} : { 'accept-language': parseLang(caller.lang)! }),
       ...(typeof userAgent === 'string' ? { 'user-agent': userAgent } : {}),
       ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
     },
@@ -247,14 +274,29 @@ async function rest(ctx: ServerContext, caller: McpCaller, method: 'GET' | 'POST
   return { status: res.statusCode, body };
 }
 
-/** Réponse d'erreur REST → erreur d'outil ; `nextAction` selon le code. */
-function restError(answer: RestAnswer, nextAction: (code: string) => Json | null = () => null): CallToolResult {
-  const error = (answer.body['error'] ?? {}) as { code?: unknown; message?: unknown; what_to_do?: unknown; retryable?: unknown };
-  const code = typeof error.code === 'string' ? error.code : answer.status === 404 ? 'not_found' : 'internal';
-  if (code === 'not_found') return notFoundError();
-  // Marche à suivre écrite par la route elle-même (ex. contact du robot absent ou invalide, UX-04/UX-05) : reprise telle quelle.
-  const own = typeof error.what_to_do === 'string' && typeof error.retryable === 'boolean' ? { what_to_do: error.what_to_do, retryable: error.retryable } : undefined;
-  return toolError(code, typeof error.message === 'string' ? error.message : 'erreur', nextAction(code), own);
+/**
+ * Réponse d'erreur REST → erreur d'outil ; `nextAction` selon le code. L'enveloppe REST (crochet `onSend`) a déjà son message
+ * localisé, son action et sa marche à suivre : ils sont repris tels quels, sur MCP comme sur REST.
+ */
+function restError(answer: RestAnswer, nextAction: (code: string) => Json | null = () => null, locale: McpLocale = 'en'): CallToolResult {
+  const error = (answer.body['error'] ?? {}) as Record<string, unknown>;
+  const code = typeof error['code'] === 'string' ? error['code'] : answer.status === 404 ? 'not_found' : 'internal';
+  if (code === 'not_found') return notFoundError(locale);
+  const text = (key: string) => (typeof error[key] === 'string' ? (error[key] as string) : undefined);
+  // La marche à suivre générée par le catalogue cède devant celle, plus précise, de l'outil (GUIDES) ; une cause écrite par la route est gardée.
+  const generated = errorTexts(code, 'en', { scope: error['scope_required'], field: error['field'] }).what_to_do;
+  const keepWhat = text('what_to_do') !== undefined && !(GUIDES[code] !== undefined && text('what_to_do') === generated);
+  const own: ErrorOwn = {
+    ...(text('message_locale') === undefined ? {} : { message_locale: text('message_locale')! }),
+    ...(text('action_label') === undefined ? {} : { action_label: text('action_label')! }),
+    ...(keepWhat ? { what_to_do: text('what_to_do')! } : {}),
+    ...(typeof error['retryable'] === 'boolean' ? { retryable: error['retryable'] } : {}),
+    ...(text('field') === undefined ? {} : { field: text('field')! }),
+    ...(text('scope_required') === undefined ? {} : { scope_required: text('scope_required')! }),
+    ...(text('console_url') === undefined ? {} : { console_url: text('console_url')! }),
+    ...(error['details'] === undefined ? {} : { details: error['details'] }),
+  };
+  return toolError(code, text('message') ?? null, nextAction(code), own, locale);
 }
 
 const query = (params: Record<string, string | number | undefined>): string => {
@@ -289,7 +331,7 @@ async function closedStatusError(ctx: ServerContext, caller: McpCaller, call: Ca
   const code = ((answer.body['error'] ?? {}) as { code?: unknown }).code;
   if (code !== 'blocked' && code !== 'action_required') return null;
   const reason = (await withActor(ctx.pool, caller.actor, (db) => readApiBySlug(db, slug)))?.status_reason ?? null;
-  return toolError(code, code === 'blocked' ? blockedTemplate(call.locale, reason) : actionTemplate(call.locale, reason), nextAction?.(code) ?? null);
+  return toolError(code, code === 'blocked' ? blockedTemplate(call.locale, reason) : actionTemplate(call.locale, reason), nextAction?.(code) ?? null, {}, call.locale);
 }
 
 /** Réponse REST d'une exécution (200 RunResult, 202 run à suivre) → RunResult. `slug` : API visée (gabarits fermés des statuts). */
@@ -303,7 +345,7 @@ async function executionAnswer(ctx: ServerContext, caller: McpCaller, call: Call
     const closed = await closedStatusError(ctx, caller, call, answer, slug, nextAction);
     if (closed !== null) return closed;
   }
-  return restError(answer, nextAction);
+  return restError(answer, nextAction, call.locale);
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -505,9 +547,10 @@ const runNextAction = (slug: string) => (code: string): Json | null => (code ===
  * jamais une valeur reçue dans l'erreur, rien n'est créé. Un dossier valide est lu : transmis à la route REST, qui le
  * contrôle à nouveau, le masque et l'enregistre avec l'API.
  */
-function checkBrief(ctx: ServerContext, brief: unknown): CallToolResult | null {
+function checkBrief(ctx: ServerContext, brief: unknown, locale: McpLocale): CallToolResult | null {
   const out = checkBriefInput(brief, { maxBytes: ctx.brief?.maxBytes ?? BRIEF_MAX_BYTES });
-  return out.ok ? null : toolError(out.code, out.message);
+  // Le message du service nomme le champ refusé (jamais sa valeur) : il est gardé tel quel, en anglais.
+  return out.ok ? null : toolError(out.code, out.message, null, { message_locale: 'en', ...(out.field === null ? {} : { field: out.field }) }, locale);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -628,11 +671,11 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
    */
   const investigationAnswer = async (runId: string, caller: McpCaller, call: Call, opts: AnswerOptions = {}): Promise<ToolOutput> => {
     const row = await withActor(ctx.pool, caller.actor, (db) => readRunRow(db, runId));
-    if (row === null) return notFoundError();
+    if (row === null) return notFoundError(call.locale);
     const first = await ensureFirstRun(ctx, caller, row, opts.launchFirstRun === true ? 'launch' : 'read');
     const block = await buildResultBlock({ ctx, actor: caller.actor, locale: call.locale, runId, existing: opts.existing === true, firstRun: first.run, firstRunGate: first.gate, firstRunPending: first.pending });
     const base = await runResultOf(ctx, caller.actor, runId);
-    if (base === null) return notFoundError();
+    if (base === null) return notFoundError(call.locale);
     if (block === null) return runResultAnswer(base, call);
     const apiId = String(block.fields['api_id']);
     const awaiting = block.state === 'awaiting_decision';
@@ -718,7 +761,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       await waitRun(ctx, caller, call, runId, wait(args), true);
       return withSchemaValidation(await investigationAnswer(runId, caller, call, { launchFirstRun: true }), validated, call.locale);
     }
-    return restError(answer);
+    return restError(answer, undefined, call.locale);
   };
 
   /**
@@ -769,7 +812,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     if (!valid.includes(choice)) return toolError('invalid_input', t.choice.unknown(valid.join(', ')));
     // Dernier run d'enquête de l'API : le bloc de résultat (la question reste lisible) accompagne la réponse.
     const latest = await withActor(ctx.pool, caller.actor, async (db) => (await db.query<{ id: string }>("SELECT id FROM runs WHERE api_id = $1 AND kind = 'investigation' ORDER BY created_at DESC LIMIT 1", [apiId])).rows[0]);
-    if (latest === undefined) return notFoundError();
+    if (latest === undefined) return notFoundError(call.locale);
     if (choice === 'cancel') return investigationAnswer(latest.id, caller, call, { note: t.choice.declined, created: true, nextAction: null });
     const hint = choice === 'other_list' ? (call.locale === 'fr' ? 'prends l’autre liste de la page' : 'take the other list of the page') : choice === 'look_details' ? (call.locale === 'fr' ? 'regarde aussi les pages de détail' : 'also look at the detail pages') : remark === '' ? (call.locale === 'fr' ? 'selon ma remarque' : 'as I remarked') : remark;
     const description = `${info.description} (${hint})`.slice(0, 2000);
@@ -780,8 +823,8 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
   /** Tour suivant d'une élicitation : valider (essais lancés), modifier (rien lancé), refuser ou annuler (rien lancé). */
   const resumeSchemaDecision = async (state: { apiId: string; runId: string }, args: Json, caller: McpCaller, call: Call): Promise<ToolOutput> => {
     const api = await withActor(ctx.pool, caller.actor, (db) => readApiById(db, state.apiId));
-    if (api === null || api.owner_id !== caller.actor.userId) return notFoundError();
-    if (api.investigation_phase !== 'awaiting_schema_validation') return toolError('not_awaiting_validation', 'cette API n’attend pas de validation de schéma');
+    if (api === null || api.owner_id !== caller.actor.userId) return notFoundError(call.locale);
+    if (api.investigation_phase !== 'awaiting_schema_validation') return toolError('not_awaiting_validation', null, null, {}, call.locale);
     const answer = inputResponse(call.inputResponses, 'validate_schema');
     const c = elicitationCatalog(call.locale);
     const accepted = answer.kind === 'elicit' && answer.action === 'accept';
@@ -845,7 +888,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
           for (const key of ['example_output', 'auto_validate', 'network_policy', 'brief', 'name'] as const) if (args[key] !== undefined) body[key] = args[key];
           // Création sans attente : l'attente (et la progression) sont ici, pour que le client voie l'enquête avancer.
           const answer = await rest(ctx, caller, 'POST', `/api/apis${query({ wait: 0 })}`, body);
-          if (answer.status !== 201) return restError(answer);
+          if (answer.status !== 201) return restError(answer, undefined, call.locale);
           // Le premier run complet suit cette demande-là seulement (créée par l'outil d'écriture) : drapeau durable dans la demande.
           await setFirstRunRequested(ctx, caller, String(answer.body['api_id']), true);
           target = { apiId: String(answer.body['api_id']), runId: String(answer.body['run_id']), existing: false };
@@ -873,7 +916,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
 
     async validate_schema(args, caller, call) {
       const apiId = String(args['api_id']);
-      if (!UUID.test(apiId)) return notFoundError();
+      if (!UUID.test(apiId)) return notFoundError(call.locale);
       // Schéma corrigé : la personne a tranché, les essais partent. Sinon `choice` répond à la question unique (obligatoire quand une question est posée ; « continue » seulement sans question).
       if (args['output_schema'] !== undefined) return validateFlow(apiId, { output_schema: args['output_schema'] }, args, caller, call);
       return choose(apiId, typeof args['choice'] === 'string' ? args['choice'] : undefined, '', args, caller, call);
@@ -882,19 +925,19 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     async run_api(args, caller, call) {
       const hasSlug = typeof args['slug'] === 'string';
       const hasId = typeof args['api_id'] === 'string';
-      if (hasSlug === hasId) return toolError('invalid_input', 'slug ou api_id : exactement un des deux');
+      if (hasSlug === hasId) return toolError('invalid_input', null, null, { what_to_do: 'Pass exactly one of slug or api_id.' }, call.locale);
       let slug = hasSlug ? String(args['slug']) : null;
       if (slug === null) {
         const id = String(args['api_id']);
         const api = UUID.test(id) ? await withActor(ctx.pool, caller.actor, (db) => readApiById(db, id)) : null;
-        if (api === null) return notFoundError();
+        if (api === null) return notFoundError(call.locale);
         slug = api.slug;
       }
       return runApi(slug, args['input'] as Json, args, caller, call);
     },
 
     async get_run(args, caller, call) {
-      if (!allowed(caller, 'runs:read')) return toolError('forbidden', 'action non autorisée');
+      if (!allowed(caller, 'runs:read')) return toolError('forbidden', null, null, {}, call.locale);
       const runId = String(args['run_id']);
       // `wait_seconds` tenu (UX-14, 03 § 3) : retour avant l'échéance seulement si le run finit, ou attend une décision.
       const seconds = typeof args['wait_seconds'] === 'number' ? waitSecondsOf(ctx, args['wait_seconds']) : 0;
@@ -906,7 +949,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       // assert_no_impersonation (05 § 4.4, INV5) : l'admin et l'owner lisent les métadonnées du run d'autrui (état, coût,
       // nombre d'items), comme GET /api/runs/{id} ; jamais ses items, son entrée ni son dataset. Lecture auditée.
       const metadata = UUID.test(runId) ? await runMetadataForAdmin(ctx, caller.actor, runId) : null;
-      if (metadata === null) return notFoundError();
+      if (metadata === null) return notFoundError(call.locale);
       await audit(ctx, caller.request, { ...caller.actor, channel: 'mcp' }, { action: 'run.metadata_read', targetType: 'run', targetId: metadata.id, outcome: 'success' });
       const status = (await ctx.pool.query<{ status: string }>('SELECT status FROM apis WHERE id = $1', [metadata.api_id])).rows[0]?.status ?? 'erreur';
       return runResultAnswer(
@@ -932,14 +975,14 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       );
     },
 
-    async get_items(args, caller) {
-      if (!allowed(caller, 'datasets:read')) return toolError('forbidden', 'action non autorisée');
+    async get_items(args, caller, call) {
+      if (!allowed(caller, 'datasets:read')) return toolError('forbidden', null, null, {}, call.locale);
       const byRun = typeof args['run_id'] === 'string';
-      if (byRun === (typeof args['dataset_id'] === 'string')) return toolError('invalid_input', 'run_id ou dataset_id : exactement un des deux');
+      if (byRun === (typeof args['dataset_id'] === 'string')) return toolError('invalid_input', null, null, { what_to_do: 'Pass exactly one of run_id or dataset_id.' }, call.locale);
       const id = String(byRun ? args['run_id'] : args['dataset_id']);
-      if (!UUID.test(id)) return notFoundError();
+      if (!UUID.test(id)) return notFoundError(call.locale);
       const after = decodeItemsCursor(typeof args['cursor'] === 'string' ? args['cursor'] : undefined);
-      if (after === null) return toolError('invalid_cursor', 'curseur illisible');
+      if (after === null) return toolError('invalid_cursor', null, null, {}, call.locale);
       const datasetId = await withActor(ctx.pool, caller.actor, async (db) => {
         if (byRun) {
           const run = await readRunRow(db, id);
@@ -948,7 +991,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
         const { rows } = await db.query<{ id: string }>('SELECT id FROM datasets WHERE id = $1 AND deleted_at IS NULL', [id]);
         return rows[0]?.id ?? null;
       });
-      if (datasetId === null) return notFoundError();
+      if (datasetId === null) return notFoundError(call.locale);
       if (datasetId === '') return success('The run has no items yet: poll get_run.', { items: [], next_cursor: null });
       const limit = typeof args['limit'] === 'number' ? args['limit'] : ITEMS_DEFAULT_LIMIT;
       const fields = Array.isArray(args['fields']) ? (args['fields'] as string[]) : undefined;
@@ -969,17 +1012,17 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       return success(`${items.length} items${next === null ? '; no more items.' : '; call get_items again with next_cursor for the rest.'}`, { items, next_cursor: next });
     },
 
-    async cancel_run(args, caller) {
+    async cancel_run(args, caller, call) {
       const runId = String(args['run_id']);
-      if (!UUID.test(runId)) return notFoundError();
+      if (!UUID.test(runId)) return notFoundError(call.locale);
       const answer = await rest(ctx, caller, 'POST', `/api/runs/${runId}/cancel`, {});
-      if (answer.status !== 200) return restError(answer);
+      if (answer.status !== 200) return restError(answer, undefined, call.locale);
       return success('The run is cancelled; incurred costs remain charged.', answer.body);
     },
 
-    async list_apis(args, caller) {
+    async list_apis(args, caller, call) {
       const answer = await rest(ctx, caller, 'GET', `/api/apis${query({ status: args['status'] as string | undefined, q: args['q'] as string | undefined, limit: (args['limit'] as number | undefined) ?? 20, cursor: args['cursor'] as string | undefined })}`);
-      if (answer.status !== 200) return restError(answer);
+      if (answer.status !== 200) return restError(answer, undefined, call.locale);
       const apis = ((answer.body['apis'] ?? []) as Json[]).map((a) => ({
         slug: a['slug'],
         description: a['description'],
@@ -997,14 +1040,14 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
 
     async get_api(args, caller, call) {
       const answer = await rest(ctx, caller, 'GET', `/api/apis/${encodeURIComponent(String(args['slug']))}${query({ response_format: args['response_format'] as string | undefined })}`);
-      if (answer.status !== 200) return restError(answer);
+      if (answer.status !== 200) return restError(answer, undefined, call.locale);
       // Enquête en attente d'une décision (UX-18, UX-36) : le schéma proposé, l'échantillon, les champs trouvés et la question
       // unique, comme `get_run` (03 § 3). Propriétaire seulement (la porte et la proposition sont à lui).
       const awaiting = await awaitingExtras(String(answer.body['id'] ?? ''), caller, call);
       return success(`API ${String(answer.body['slug'])}: status ${String(answer.body['status'])}.${awaiting === null ? '' : ' A schema is waiting for a decision: see proposed_output_schema and question.'}`, awaiting === null ? answer.body : { ...answer.body, ...awaiting });
     },
 
-    async report_problem(args, caller) {
+    async report_problem(args, caller, call) {
       const slug = String(args['slug']);
       const runId = typeof args['run_id'] === 'string' ? args['run_id'] : null;
       const found = await withActor(ctx.pool, caller.actor, async (db) => {
@@ -1016,7 +1059,7 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
         }
         return api;
       });
-      if (found === null) return notFoundError();
+      if (found === null) return notFoundError(call.locale);
       const bugId = randomUUID();
       // Journal de l'API : audit en ajout seul (acteur, API, run) ; la note passe par le masquage de l'audit (INV8).
       await audit(ctx, caller.request, { ...caller.actor, channel: 'mcp' }, {
@@ -1139,7 +1182,7 @@ export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, vers
     try {
       return await body((args ?? {}) as Json, callOf(sdk));
     } catch (error) {
-      return internalError(caller, name, error);
+      return internalError(caller, name, error, locale);
     }
   };
   for (const tool of GENERIC_TOOLS) {
@@ -1157,11 +1200,11 @@ export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, vers
       guarded(tool.name, async (input, call) => {
         // Dossier d'enquête contrôlé AVANT le reste (19c § 9.3) : invalid_brief nomme le champ, brief_too_large sans troncature.
         if (tool.name === 'create_api' && input['brief'] !== undefined) {
-          const refused = checkBrief(ctx, input['brief']);
+          const refused = checkBrief(ctx, input['brief'], call.locale);
           if (refused) return refused;
         }
         const checked = validateOutput(tool.inputSchema, input);
-        if (!checked.ok) return toolError('invalid_input', `arguments hors du schéma de ${tool.name} : ${formatIssues(checked.errors).replace(/\n/g, ' ; ')}`);
+        if (!checked.ok) return toolError('invalid_input', null, null, { what_to_do: `${GUIDES['invalid_input']!.what_to_do} Issues for ${tool.name}: ${formatIssues(checked.errors).replace(/\n/g, ' ; ')}` }, call.locale);
         return all[tool.name](input, caller, call);
       }),
     );

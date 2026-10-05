@@ -280,6 +280,22 @@ paths:
       responses:
         '302':
           description: Vers la console (session ouverte), `/login?mfa=1` (second facteur attendu) ou `/login?sso_error=<code>`.
+  /api/me/prerequisites:
+    get:
+      operationId: getPrerequisites
+      tags: [account]
+      summary: Ce qu'il reste à régler avant qu'une enquête parte (UX-09, UX-19), lisible par toute clé d'API
+      responses:
+        '200':
+          description: Contact du robot, modèle et prix du rôle enquête, clé du fournisseur, case « usage responsable » de la personne.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Prerequisites'
+        '401':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
   /api/me:
     get:
       operationId: getMe
@@ -586,6 +602,16 @@ paths:
           required: false
           schema:
             type: boolean
+        - name: name
+          in: query
+          required: false
+          description: >-
+            Nom de la copie (UX-16) : son slug, en minuscules sans accent, suffixé d'un jeton court seulement s'il est déjà pris.
+            Un nom sans lettre ni chiffre est refusé (400 `invalid_request`).
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 80
       requestBody:
         required: true
         content:
@@ -3298,6 +3324,41 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
   schemas:
+    Prerequisites:
+      type: object
+      additionalProperties: false
+      required: [ready, missing, items]
+      properties:
+        ready:
+          type: boolean
+        missing:
+          description: Nombre d'éléments bloquants à régler.
+          type: integer
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, ok, blocking, code, message, action_label, console_path]
+            properties:
+              id:
+                type: string
+                enum: [instance_contact, 'llm_model:investigate', 'llm_price:investigate', llm_key_readable, responsible_use]
+              ok:
+                description: >-
+                  `null` quand l'état est inconnu (aucun worker n'a encore publié son environnement).
+                type: [boolean, 'null']
+              blocking:
+                type: boolean
+              code:
+                description: Code du catalogue d'erreurs quand l'élément est à régler.
+                type: [string, 'null']
+              message:
+                type: string
+              action_label:
+                type: [string, 'null']
+              console_path:
+                type: [string, 'null']
     ApiError:
       type: object
       additionalProperties: false
@@ -3323,6 +3384,24 @@ components:
                 L'appel peut être refait tel quel une fois la marche à suivre faite (ex. `instance_contact_missing` : le
                 contact du robot posé, UX-04).
               type: boolean
+            message_locale:
+              description: Langue de `message` (`fr`, `en`) ; `fr` quand le message porte le détail écrit par la route.
+              type: string
+            action_label:
+              description: Ce que la personne fait ensuite, verbe d'abord, dans la langue de la requête (UX-09).
+              type: string
+            field:
+              description: Champ nommé par l'erreur (ex. `minimal_content`).
+              type: string
+            scope_required:
+              description: Droit manquant à la clé (`insufficient_scope`, UX-09).
+              type: string
+            console_url:
+              type: string
+            details:
+              description: Détails publiables et sans secret (compte, motif).
+              type: object
+              additionalProperties: true
     AuthError:
       description: Erreur de la bibliothèque d'authentification (format à plat, sans enveloppe `error`).
       type: object
@@ -4690,7 +4769,7 @@ components:
       properties:
         execution:
           type: string
-          enum: [fetch, fetch_in_page, playwright]
+          enum: [fetch, fetch_in_page, playwright, agent_fetch]
         network:
           type: string
           enum: [direct, dc_proxy, res_proxy]

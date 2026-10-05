@@ -391,6 +391,29 @@ export async function freeSlug(ctx: ServerContext, description: string, url: str
 }
 
 /**
+ * Slug d'une API nommée par la personne (`name` à l'import, UX-16) : le nom en minuscules sans accent, mots séparés par `-`, 50
+ * caractères au plus ; suffixé d'un jeton court SEULEMENT si ce slug est déjà pris (identité système : une API invisible de
+ * l'acteur est évitée sans révéler qu'elle existe). Null si le nom ne donne aucun caractère de slug.
+ */
+export async function freeSlugFromName(ctx: ServerContext, name: string): Promise<string | null> {
+  const base = name
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 50)
+    .replace(/-+$/, '');
+  if (base === '') return null;
+  if (!(await ctx.pool.query('SELECT 1 FROM apis WHERE slug = $1', [base])).rowCount) return base;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidate = `${base.slice(0, 50).replace(/-+$/, '')}-${randomBytes(3).toString('hex')}`;
+    if (!(await ctx.pool.query('SELECT 1 FROM apis WHERE slug = $1', [candidate])).rowCount) return candidate;
+  }
+  throw new Error('aucun slug libre');
+}
+
+/**
  * Insère l'API (sous l'acteur, propriétaire) ; l'enquête est lancée par l'appelant dans la même transaction. Non épinglée
  * pour le MCP (`mcp_exposed` faux, 05 § 1.1 « épinglées dans la console ») : en mode `pinned`, son outil `api_<slug>`
  * n'apparaît qu'une fois épinglée par son propriétaire (console, ou PATCH /api/apis/{slug}) ; le défaut de colonne de 0001
