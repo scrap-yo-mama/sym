@@ -55,7 +55,7 @@ describe('FailureClass unique', () => {
   });
 
   test('les codes de raison (04 §6) ne sont pas des failure_class', () => {
-    expect([...ACTION_REASONS].sort()).toEqual(['challenge_in_tunnel', 'instance_contact_missing', 'llm_price_missing', 'proxy_not_configured', 'session_step_broken', 'tunnel_offline', 'write_step_broken']);
+    expect([...ACTION_REASONS].sort()).toEqual(['challenge_in_tunnel', 'cookie_expired', 'instance_contact_missing', 'llm_price_missing', 'proxy_not_configured', 'session_step_broken', 'tunnel_offline', 'write_step_broken']);
     // `llm_price_missing` (UX-11) tombe dans la famille ouverte `llm_*` par son préfixe, mais n'est dans aucune liste fermée : jamais une classe d'échec écrite pour ce cas.
     for (const r of ACTION_REASONS) expect(r.startsWith('llm_') ? FAILURE_CLASSES.includes(r as never) : isFailureClass(r), r).toBe(false);
   });
