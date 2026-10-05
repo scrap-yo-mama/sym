@@ -41,6 +41,20 @@ Ajoute du temps, plafonné par la durée maximale du client.
 - Scope : `sessions:write`
 - Statuts : `200`, `401`, `403`, `404`, `409`, `422`
 
+### `GET /v1/sessions/{id}/egress`
+
+Compteurs de l’époque courante de l’egress de la session (demandes, refus, octets, budget, IP de sortie).
+
+- Scope : `sessions:read`
+- Statuts : `200`, `401`, `403`, `404`, `422`
+
+### `PUT /v1/sessions/{id}/egress`
+
+Remplace la politique d’egress à chaud : ouvre une nouvelle époque aux compteurs remis à zéro. Les identifiants d’un proxy amont ne sont ni stockés ni journalisés.
+
+- Scope : `sessions:write`
+- Statuts : `200`, `401`, `403`, `404`, `422`, `502`
+
 ### `GET /v1/version`
 
 Served versions: product, API, contract, Playwright, Chromium, platform, minimum SDK.

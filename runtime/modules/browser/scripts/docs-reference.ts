@@ -20,6 +20,8 @@ const SCOPES: Record<string, string | null> = {
   getSession: 'sessions:read',
   releaseSession: 'sessions:write',
   extendSession: 'sessions:write',
+  getSessionEgress: 'sessions:read',
+  replaceSessionEgress: 'sessions:write',
   getVersion: null,
   getOpenApi: null,
 };
@@ -31,6 +33,8 @@ const OPERATIONS_EN: Record<string, string> = {
   getSession: 'Reads a session; a `running` session gets `connectUrls` with fresh tokens.',
   releaseSession: 'Releases the session (reason `released`); replaying it has no effect.',
   extendSession: 'Adds time, capped by the client’s maximum duration.',
+  getSessionEgress: 'Counters of the current epoch of the session egress (requests, refusals, bytes, budget, exit IP).',
+  replaceSessionEgress: 'Replaces the egress policy on the fly: opens a new epoch with counters reset. Upstream proxy credentials are neither stored nor logged.',
   getVersion: 'Served versions: product, API, contract, Playwright, Chromium, platform, minimum SDK.',
   getOpenApi: 'This OpenAPI 3.1 document.',
 };

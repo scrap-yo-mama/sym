@@ -55,6 +55,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{id}/egress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Compteurs de l’époque courante de l’egress de la session (demandes, refus, octets, budget, IP de sortie). */
+        get: operations["getSessionEgress"];
+        /** @description Remplace la politique d’egress à chaud : ouvre une nouvelle époque aux compteurs remis à zéro. Les identifiants d’un proxy amont ne sont ni stockés ni journalisés. */
+        put: operations["replaceSessionEgress"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/version": {
         parameters: {
             query?: never;
@@ -575,6 +593,135 @@ export interface operations {
             };
         };
     };
+    getSessionEgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Etat de l’egress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressState"];
+                };
+            };
+            /** @description `unauthorized` : clé absente, inconnue ou expirée */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `forbidden` : scope manquant */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `session_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `invalid_option` (session terminée ou pas encore démarrée) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    replaceSessionEgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EgressPolicy"];
+            };
+        };
+        responses: {
+            /** @description Etat de la nouvelle époque */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EgressState"];
+                };
+            };
+            /** @description `unauthorized` : clé absente, inconnue ou expirée */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `forbidden` : scope manquant */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `session_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `invalid_option` (politique refusée, session terminée ou pas encore démarrée) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `proxy_unreachable` (nouvel amont injoignable ; politique courante inchangée) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     getVersion: {
         parameters: {
             query?: never;
@@ -624,6 +771,8 @@ export const OPERATIONS = {
   getSession: { method: 'GET', path: '/v1/sessions/{id}', pathParams: ["id"], query: [], headers: [], body: false, auth: true },
   releaseSession: { method: 'DELETE', path: '/v1/sessions/{id}', pathParams: ["id"], query: [], headers: [], body: false, auth: true },
   extendSession: { method: 'POST', path: '/v1/sessions/{id}/extend', pathParams: ["id"], query: [], headers: ["Idempotency-Key"], body: true, auth: true },
+  getSessionEgress: { method: 'GET', path: '/v1/sessions/{id}/egress', pathParams: ["id"], query: [], headers: [], body: false, auth: true },
+  replaceSessionEgress: { method: 'PUT', path: '/v1/sessions/{id}/egress', pathParams: ["id"], query: [], headers: [], body: true, auth: true },
   getVersion: { method: 'GET', path: '/v1/version', pathParams: [], query: [], headers: [], body: false, auth: false },
   getOpenApi: { method: 'GET', path: '/v1/openapi.json', pathParams: [], query: [], headers: [], body: false, auth: false },
 } as const;

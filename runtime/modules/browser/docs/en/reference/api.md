@@ -41,6 +41,20 @@ Adds time, capped by the client’s maximum duration.
 - Scope: `sessions:write`
 - Statuses: `200`, `401`, `403`, `404`, `409`, `422`
 
+### `GET /v1/sessions/{id}/egress`
+
+Counters of the current epoch of the session egress (requests, refusals, bytes, budget, exit IP).
+
+- Scope: `sessions:read`
+- Statuses: `200`, `401`, `403`, `404`, `422`
+
+### `PUT /v1/sessions/{id}/egress`
+
+Replaces the egress policy on the fly: opens a new epoch with counters reset. Upstream proxy credentials are neither stored nor logged.
+
+- Scope: `sessions:write`
+- Statuses: `200`, `401`, `403`, `404`, `422`, `502`
+
 ### `GET /v1/version`
 
 Served versions: product, API, contract, Playwright, Chromium, platform, minimum SDK.

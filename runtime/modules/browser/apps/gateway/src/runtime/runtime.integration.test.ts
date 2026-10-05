@@ -369,6 +369,10 @@ describe('mode all : API /v1, relais et superviseur montés dans le binaire (F-2
     expect(downText).toContain('proxy_unreachable');
     expect(downText).not.toContain(secret);
     expect(((await (await fetch(url, { headers: auth })).json()) as { epoch: number }).epoch).toBe(2);
+    // BINV6 : le mot de passe en ligne du proxy n'est écrit nulle part en base (sessions, événements, idempotence).
+    for (const table of ['sessions', 'session_events', 'idempotency_keys', 'usage_records']) {
+      expect(await query(db, `SELECT count(*)::int AS n FROM ${table} t WHERE t::text LIKE '%${secret}%'`)).toEqual([{ n: 0 }]);
+    }
 
     // Session libérée : plus de politique à lire ni à remplacer.
     await fetch(`${base}/v1/sessions/${session.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${key}` } });
