@@ -528,13 +528,13 @@ describe('A1 (CDC V1 sym-sessions) : rejeu serveur pour le propriétaire, secret
       withActor(pool(), { userId: owner, role: 'member' }, async (db) =>
         db.query('INSERT INTO site_session_events (owner_id, site_session_id, domain, event, outcome) VALUES ($1, $2, $3, $4, $5) RETURNING id', [owner, await siteOf(owner), domain, event, 'ok']),
       );
-    const own = (await insert(u.id, 'used')).rows[0]!.id as string;
-    await insert(v.id, 'checked');
+    const own = (await insert(u.id, 'revoked')).rows[0]!.id as string;
+    await insert(v.id, 'refreshed');
 
     // Le propriétaire lit les siens ; U ne voit pas ceux de V ; un admin ne lit pas ceux d'un autre (assert_no_impersonation).
     const seen = (userId: string, role: 'member' | 'admin') => withActor(pool(), { userId, role }, (db) => db.query('SELECT owner_id, event FROM site_session_events'));
-    expect((await seen(u.id, 'member')).rows).toEqual([{ owner_id: u.id, event: 'used' }]);
-    expect((await seen(v.id, 'member')).rows).toEqual([{ owner_id: v.id, event: 'checked' }]);
+    expect((await seen(u.id, 'member')).rows).toEqual([{ owner_id: u.id, event: 'revoked' }]);
+    expect((await seen(v.id, 'member')).rows).toEqual([{ owner_id: v.id, event: 'refreshed' }]);
     expect((await seen(admin.id, 'admin')).rows).toEqual([]);
 
     // Ajout seul : UPDATE, DELETE et TRUNCATE refusés au rôle applicatif, même pour son propre événement ou en admin.
@@ -547,14 +547,55 @@ describe('A1 (CDC V1 sym-sessions) : rejeu serveur pour le propriétaire, secret
     await expect(
       withActor(pool(), { userId: u.id, role: 'member' }, (db) => db.query('INSERT INTO site_session_events (owner_id, domain, event) VALUES ($1, $2, $3)', [v.id, domain, 'used'])),
     ).rejects.toMatchObject({ code: '42501' });
-    await expect(insert(u.id, 'zz_unknown')).rejects.toMatchObject({ code: '23514' });
+    await expect(insert(u.id, 'zz_unknown')).rejects.toMatchObject({ code: '42501' });
+    // Journal fiable (B1) : used, checked et refresh_requested sont écrits par le système ; le rôle des requêtes ne les insère pas.
+    for (const event of ['used', 'checked', 'refresh_requested']) await expect(insert(u.id, event)).rejects.toMatchObject({ code: '42501' });
+    // Le système (identité propriétaire des tables) les écrit, la contrainte de liste restant vérifiée.
+    await sql("INSERT INTO site_session_events (owner_id, site_session_id, domain, event) VALUES ($1, $2, $3, 'used')", [u.id, await siteOf(u.id), domain]);
+    await expect(sql("INSERT INTO site_session_events (owner_id, domain, event) VALUES ($1, $2, 'zz_unknown')", [u.id, domain])).rejects.toMatchObject({ code: '23514' });
     const columns = await sql<{ column_name: string }>("SELECT column_name FROM information_schema.columns WHERE table_name = 'site_session_events' ORDER BY column_name");
     expect(columns.map((c) => c.column_name)).toEqual(['created_at', 'domain', 'event', 'id', 'outcome', 'owner_id', 'run_id', 'site_session_id']);
     expect(await sql('SELECT 1 FROM site_session_events WHERE id = $1', [own])).toHaveLength(1);
+    await sql("DELETE FROM site_session_events WHERE owner_id = $1 AND event = 'used'", [u.id]);
 
     // La déconnexion du site garde l'événement (rattachement mis à NULL), sans la session.
     expect((await extCall(tu, 'DELETE', `/api/extension/sites/${domain}`)).statusCode).toBe(204);
     expect(await sql('SELECT site_session_id, domain FROM site_session_events WHERE id = $1', [own])).toEqual([{ site_session_id: null, domain }]);
+  });
+
+  test('site_session_events_owner_bound (INV5, INV12) : un événement ne se rattache qu’à la session et au run de son propriétaire, même code 42501 sans oracle d’existence', async () => {
+    const domain = 'zz-test-bound.example';
+    const u = await createUser(srv, 'zz_test_bound_u@example.test');
+    const v = await createUser(srv, 'zz_test_bound_v@example.test');
+    const tu = (await pairUser(u, await signIn(srv, u), 'zz_test_dev_bound_u')).token;
+    const tv = (await pairUser(v, await signIn(srv, v), 'zz_test_dev_bound_v')).token;
+    for (const t of [tu, tv]) expect((await extCall(t, 'PUT', `/api/extension/sites/${domain}`, { serverUseAllowed: true })).statusCode).toBe(201);
+    const siteOf = async (owner: string) => (await sql<{ id: string }>('SELECT id FROM site_sessions WHERE owner_id = $1 AND domain = $2', [owner, domain]))[0]!.id;
+    const ghost = '00000000-0000-4000-8000-000000000001';
+    const attach = (actor: string, owner: string, sessionId: string | null, runId: string | null, d = domain) =>
+      withActor(pool(), { userId: actor, role: 'member' }, (db) =>
+        db.query("INSERT INTO site_session_events (owner_id, site_session_id, domain, event, run_id) VALUES ($1, $2, $3, 'revoked', $4)", [owner, sessionId, d, runId]),
+      );
+    const vSession = await siteOf(v.id);
+    const vRun = await runFor(v.id);
+    const uRun = await runFor(u.id);
+    const denied: unknown[] = [];
+    // U attache un événement à la session de V, au run de V, ou à un UUID inexistant : le même 42501, avant la clé étrangère (23503).
+    for (const [session, run] of [[vSession, null], [null, vRun], [ghost, null], [null, ghost], [await siteOf(u.id), vRun]] as const) {
+      const err = await attach(u.id, u.id, session, run).then(() => null, (e: unknown) => e);
+      expect(err).toMatchObject({ code: '42501' });
+      denied.push((err as Error).message);
+    }
+    expect(new Set(denied).size).toBe(1);
+    expect(denied[0]).not.toMatch(/\d{8}-|zz_test/);
+    // Même propriétaire mais autre domaine : refusé.
+    await expect(attach(u.id, u.id, await siteOf(u.id), null, 'zz-test-other-domain.example')).rejects.toMatchObject({ code: '42501' });
+    // Le système (sans RLS) ne contourne pas le contrôle : un rattachement croisé est refusé aussi.
+    await expect(sql("INSERT INTO site_session_events (owner_id, site_session_id, domain, event) VALUES ($1, $2, $3, 'used')", [u.id, vSession, domain])).rejects.toMatchObject({ code: '42501' });
+    // Nominal : U sur sa session et son run.
+    await attach(u.id, u.id, await siteOf(u.id), uRun);
+    expect(await sql('SELECT 1 FROM site_session_events WHERE owner_id = $1 AND run_id = $2', [u.id, uRun])).toHaveLength(1);
+    expect(await sql('SELECT 1 FROM site_session_events WHERE owner_id = $1 AND run_id = $2', [v.id, uRun])).toHaveLength(0);
   });
 
   test('assert_no_impersonation (INV5, A1) : un admin ne lit ni le contenu scellé d’une session ni le journal d’usage d’un autre utilisateur', async () => {
