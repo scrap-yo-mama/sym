@@ -345,6 +345,9 @@ describe('mode all : API /v1, relais et superviseur montés dans le binaire (F-2
     expect(first.status).toBe(200);
     expect(await first.json()).toMatchObject({ epoch: 1, blocked: 1, budgetExceeded: false });
 
+    // Les refus de l'egress sont écrits dans session_events (SSE, webhooks, egress.attach du worker de SYM) : F-20261005-01.
+    await expect.poll(async () => await query(db, `SELECT data->>'host' AS host, data->>'reason' AS reason FROM session_events WHERE session_id = '${session.id}' AND type = 'egress.blocked'`), { timeout: 5_000 }).toEqual([{ host: 'denied.example', reason: 'domain_not_allowed' }]);
+
     // Remplacement à chaud : nouvelle époque, compteurs remis à zéro, nouvelle liste d'hôtes appliquée sur le même proxy.
     const put = await fetch(url, { method: 'PUT', headers: auth, body: JSON.stringify({ allowedHosts: ['other.example'], ports: [80] }) });
     expect(put.status).toBe(200);

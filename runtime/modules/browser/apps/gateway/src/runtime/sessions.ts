@@ -19,8 +19,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { ConfigError, egressGuardFromConfig, type BrowserConfig, type Logger } from '@sym-browser/core';
-import { createPgSessionStore } from '@sym-browser/db';
+import { createPgSessionEventSink, createPgSessionStore } from '@sym-browser/db';
 import type { BrowserPool, PoolLease } from '@sym-browser/node';
+import { forwardEgressEvents, type EgressEventForwarder } from '@sym-browser/node/events';
 import { EgressPolicyError, type SessionEgress as ProxyEgress } from '@sym-browser/node/egress';
 import { createNodeRelay } from '@sym-browser/node/relay';
 import { SessionHost, SessionSupervisor, type HostLease, type SessionAcquireRequest, type SharedSessionInput } from '@sym-browser/node/sessions';
@@ -73,6 +74,9 @@ export async function assembleAllModeSessions(deps: AllModeSessionsDeps): Promis
   const policies = new Map<string, EgressPolicy>();
   /** Egress amont de chaque session tenue : lecture et remplacement à chaud de la politique (`/v1/sessions/{id}/egress`). */
   const upstreams = new Map<string, UpstreamSession>();
+  /** Relais des événements d'egress (`egress.blocked`, `egress.budget_exceeded`) vers `session_events` : SSE, webhooks, worker de SYM. */
+  const forwarders = new Map<string, EgressEventForwarder>();
+  const eventSink = createPgSessionEventSink(db);
   const leases = new Map<string, HostLease>();
   const store = createPgSessionStore(db);
   // Répertoire de travail inutilisable : arrêt du démarrage avec un message qui nomme la variable et le code système.
@@ -85,14 +89,20 @@ export async function assembleAllModeSessions(deps: AllModeSessionsDeps): Promis
     pool: deps.pool,
     dataDir: config.dataDir,
     egress: async ({ sessionId, tenantId }) => {
+      const forward = forwardEgressEvents(sessionId, eventSink, onError);
+      forwarders.set(sessionId, forward);
       const upstream = await startUpstreamSessionEgress(policies.get(sessionId) ?? {}, {
         guard,
+        onEvent: forward.onEvent,
         tenantId,
         echoUrl: config.ipEchoUrl ?? DEFAULT_IP_ECHO_URL,
         onDenied: (error) => log('info', 'egress_denied', { sessionId, reason: error.reason }),
         // Superviseur déclaré plus bas : l'egress ne le sollicite qu'une fois la session démarrée.
         onBudgetEnd: () => void supervisor.end(sessionId, 'budget_exceeded').catch(onError),
         onCounters: (state) => meter.observe(sessionId, state),
+      }).catch((error: unknown) => {
+        forwarders.delete(sessionId);
+        throw error;
       });
       const egress = upstream.egress;
       egresses.set(sessionId, egress);
@@ -104,6 +114,9 @@ export async function assembleAllModeSessions(deps: AllModeSessionsDeps): Promis
           egresses.delete(sessionId);
           upstreams.delete(sessionId);
           await egress.close();
+          // Dernières écritures (refus agrégés vidés à la fermeture) avant la fin de la session.
+          await forwarders.get(sessionId)?.flush();
+          forwarders.delete(sessionId);
         },
       };
     },
