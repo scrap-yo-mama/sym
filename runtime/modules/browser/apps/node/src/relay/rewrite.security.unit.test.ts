@@ -126,3 +126,16 @@ describe('relecture browser-v1 S18 à S20 : rien ne contourne les réécritures 
     refused(rewriteCdpMessage(JSON.stringify({ id: 1, method: 'Input.dispatchDragEvent', params: { type: 'drop', x: 0, y: 0, data: { items: [], dragOperationsMask: 1, files: [ok] } } }), { egressProxyUrl: null, downloadsDir: null }));
   });
 });
+
+describe('audit 5.3 S53-01 et S53-02 : le protocole natif ne rouvre ni serveur ni écriture hors session', () => {
+  test('S53-01 : startServer et stopServer (browser.bind) refusés', () => {
+    refused(pw('startServer', { port: 0, host: '0.0.0.0' }));
+    refused(pw('stopServer'));
+  });
+  test('S53-02 : un nom de trace non simple est refusé, un nom simple passe', () => {
+    for (const method of ['tracingStart', 'tracingStartChunk']) {
+      for (const name of ['../../x', '/etc/x', 'a/b', 'a\\b', '..']) refused(pw(method, { name }));
+      expect(forwarded(pw(method, { name: 'ma-trace' }))).toBeTruthy();
+    }
+  });
+});

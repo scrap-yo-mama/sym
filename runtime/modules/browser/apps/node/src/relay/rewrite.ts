@@ -37,7 +37,7 @@ const LOOPBACK_ONLY = '<-loopback>';
 const DOWNLOAD_METHODS = new Set(['Browser.setDownloadBehavior', 'Page.setDownloadBehavior']);
 const PLAYWRIGHT_CONTEXT_METHODS = new Set(['newContext', 'newContextForReuse']);
 const DENIED_CDP_METHODS = new Set(['Tethering.bind', 'Tethering.unbind', 'Target.exposeDevToolsProtocol', 'Target.sendMessageToTarget', 'Browser.crash', 'Browser.crashGpuProcess']);
-const DENIED_PLAYWRIGHT_METHODS = new Set(['newCDPSession', 'newBrowserCDPSession', 'launch', 'launchPersistentContext', 'launchServer', 'connectOverCDP', 'connect', 'saveAs', 'pathAfterFinished']);
+const DENIED_PLAYWRIGHT_METHODS = new Set(['newCDPSession', 'newBrowserCDPSession', 'launch', 'launchPersistentContext', 'launchServer', 'connectOverCDP', 'connect', 'saveAs', 'pathAfterFinished', 'startServer', 'stopServer']);
 const NAVIGATION_SCHEMES = new Set(['http:', 'https:', 'about:', 'data:', 'blob:']);
 const CDP_NAVIGATIONS = new Set(['Page.navigate', 'Target.createTarget']);
 
@@ -130,6 +130,7 @@ export function rewritePlaywrightMessage(text: string, ctx: RewriteContext): Rew
   if (!message) return { kind: 'reject', code: 1007, reason: 'message Playwright illisible' };
   const params = paramsOf(message);
   if (typeof message.method === 'string' && DENIED_PLAYWRIGHT_METHODS.has(message.method)) return playwrightError(message.id, `${message.method} refusé par SYM Browser (CDP : connectUrls.cdp des sessions dedicated)`);
+  if ((message.method === 'tracingStart' || message.method === 'tracingStartChunk') && params['name'] !== undefined && !(typeof params['name'] === 'string' && /^[\w.-]+$/.test(params['name']) && !params['name'].includes('..'))) return playwrightError(message.id, 'nom de trace refusé par SYM Browser');
   if ('localPaths' in params || 'localDirectory' in params) return playwrightError(message.id, 'chemins locaux du nœud refusés : envoyer le contenu des fichiers');
   if (message.method === 'goto' && !navigable(params['url'])) return playwrightError(message.id, 'schéma de navigation refusé par SYM Browser');
   if (typeof message.method === 'string' && PLAYWRIGHT_CONTEXT_METHODS.has(message.method)) {
