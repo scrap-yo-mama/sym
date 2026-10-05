@@ -998,10 +998,42 @@ export const siteSessions = pgTable(
     alg: text('alg'),
     consentedAt: tstz('consented_at').notNull().defaultNow(),
     updatedAt: updatedAt(),
+    // Migration 0027_session_server_state (CDC V1 sym-sessions, A1) : nature du secret (cookie en V1), usage et
+    // vérification, étiquette du compte. La durée de vie du secret reste `expires_at`.
+    secretKind: text('secret_kind').notNull().default('cookie'),
+    lastUsedAt: tstz('last_used_at'),
+    lastCheckedAt: tstz('last_checked_at'),
+    accountLabel: text('account_label'),
   },
   (t) => [
     unique('site_sessions_owner_domain_key').on(t.ownerId, t.domain),
     check('site_sessions_server_use', sql`${t.serverUseAllowed} OR ${t.ciphertext} IS NULL`),
+    check('site_sessions_secret_kind', sql`${t.secretKind} IN ('cookie')`),
+    check('site_sessions_account_label_len', sql`${t.accountLabel} IS NULL OR length(${t.accountLabel}) <= 120`),
+  ],
+);
+
+// Journal d'usage des sessions (migration 0027) : ajout seul pour le rôle applicatif, aucune valeur de secret.
+export const siteSessionEvents = pgTable(
+  'site_session_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    siteSessionId: uuid('site_session_id').references(() => siteSessions.id, { onDelete: 'set null' }),
+    domain: text('domain').notNull(),
+    event: text('event').notNull(),
+    runId: uuid('run_id').references(() => runs.id, { onDelete: 'set null' }),
+    outcome: text('outcome'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('site_session_events_owner_idx').on(t.ownerId, t.createdAt.desc()),
+    index('site_session_events_session_idx').on(t.siteSessionId).where(sql`${t.siteSessionId} IS NOT NULL`),
+    index('site_session_events_run_idx').on(t.runId).where(sql`${t.runId} IS NOT NULL`),
+    check('site_session_events_event', sql`${t.event} IN ('used', 'checked', 'revoked', 'refresh_requested', 'refreshed')`),
+    check('site_session_events_outcome_len', sql`${t.outcome} IS NULL OR length(${t.outcome}) <= 120`),
   ],
 );
 

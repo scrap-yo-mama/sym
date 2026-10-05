@@ -91,6 +91,7 @@ import { InstanceContactError } from '@runtime/core/access';
 import {
   buildNetworkRungs,
   checkSiteDomain,
+  createSessionCookies,
   loadProxyCredentials,
   openBrowserEgress,
   openNetworkSession,
@@ -101,15 +102,16 @@ import {
   type NetworkRung,
   type NetworkSession,
   type NetworkSessionOptions,
+  type SessionCookies,
   type NetworkUsage,
   type ProxyCredentials,
   type Resolver,
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { archivedRepairExists, countSucceededRuns, deleteRejectedItems, inputHash, loadRunTarget, markStrategyCompilable, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, type RunTarget } from '@runtime/db';
+import { recordSessionUse, RunSessionNotFoundError, siteCookiesForRun, archivedRepairExists, countSucceededRuns, deleteRejectedItems, inputHash, loadRunTarget, markStrategyCompilable, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
-import { degradedQualitySignals, profileItems, type CostCaps } from '@runtime/core';
+import { degradedQualitySignals, profileItems, type CostCaps, type Kek } from '@runtime/core';
 import type { QualityPorts } from './quality-job.js';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -157,6 +159,12 @@ export type StrategyExecutorDeps = {
   readonly agent?: AgentPorts;
   /** Client du tunnel (mode réseau `tunnel`, tâche 2.7) ; absent : `tunnel_unavailable`. */
   readonly tunnel?: TunnelPort;
+  /**
+   * Rejeu serveur des sessions de site (CDC V1 sym-sessions, A2) : clé de scellement `site_sessions`. Présente, une API
+   * à session dont le propriétaire a consenti l'usage serveur s'exécute ici avec ses cookies (E1, lecture) ; absente, ou
+   * session indisponible : tunnel, comme avant.
+   */
+  readonly siteSessions?: { readonly kek: Kek };
   /** Garde de classification avant extraction (1.7) ; défaut : `classifyExchange` de chaque exécuteur. */
   readonly classify?: (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
   /**
@@ -582,7 +590,59 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     return { result: out.result, usage: null, ...(out.stop === null ? {} : { stop: out.stop }), ...(out.lost ? { tunnelLost: true } : {}), ...(out.needsUser ? { needsUser: true } : {}) };
   };
 
+  /**
+   * Session serveur (A2, INV5 évolué) : API à session, usage serveur consenti, cookies du propriétaire du run lus par
+   * `siteCookiesForRun` (seul point qui ouvre un cookie). `null` : comportement d'avant (tunnel). E1 en lecture seulement ;
+   * premier barreau serveur de la politique réseau de l'API (garde SSRF, pacing et verrou de domaines inchangés).
+   */
+  const serverSessionFor = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<{ strategy: NonNullable<RunTarget['strategy']>; cookies: SessionCookies; domain: string } | null> => {
+    if (deps.siteSessions === undefined || !target.api.requiresSession) return null;
+    const serverNetwork = strategy.network !== 'tunnel';
+    // E1 GET sans script : le seul rejeu serveur de la V1. Une autre exécution reste en tunnel (ou, déjà sur le serveur, refusée).
+    if (strategy.execution !== 'fetch' || strategy.scriptRef !== null) {
+      return serverNetwork && (await sessionAvailable(ctx, target, strategy)) !== null ? refuse('code_error', 'session_execution_not_fetch') : null;
+    }
+    return sessionAvailable(ctx, target, strategy);
+  };
+
+  const sessionAvailable = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>) => {
+    let rungs: NetworkRung[];
+    try {
+      rungs = buildNetworkRungs(parseNetworkPolicy(target.api.networkPolicy), parseProxyDefinitions(await readProxySettings(deps.pool)));
+    } catch {
+      return null;
+    }
+    const rung = strategy.network === 'tunnel' ? rungs[0] : rungs.find((r) => r.mode === strategy.network);
+    if (rung === undefined) return null;
+    const check = validateDeclarativeSpec(strategy.spec, { outputSchema: target.api.outputSchema });
+    // Lecture seule (V1) : la requête principale ET chaque étape en GET sans corps, contrôlées sur la spec validée
+    // effectivement exécutée. Une écriture (étape POST, corps) n'emporte jamais la session : repli d'avant.
+    if (!check.ok || ![check.spec.request, ...(check.spec.steps ?? []).map((s) => s.request)].every((r) => r.method === 'GET' && r.body === undefined)) return null;
+    const declared = target.api.requires.session_domain;
+    const verdict = checkSiteDomain(typeof declared === 'string' && declared !== '' ? declared : new URL(check.spec.request.url).hostname);
+    if (!verdict.ok) return null;
+    const session = await siteCookiesForRun(deps.pool, deps.siteSessions!.kek, { runId: ctx.runId, domain: verdict.domain }).catch((error: unknown) => {
+      if (error instanceof RunSessionNotFoundError) return null;
+      throw error;
+    });
+    if (session === null || !session.ok) return null;
+    return { strategy: { ...strategy, network: rung.mode }, cookies: createSessionCookies(verdict.domain, session.cookies), domain: verdict.domain };
+  };
+
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy, extras?: StepsTrialExtras): Promise<Outcome> => {
+    const served = await serverSessionFor(ctx, target, strategy);
+    if (served === null) return executeWith(ctx, target, strategy, itemPolicy, extras);
+    let outcome = 'error';
+    try {
+      const out = await executeWith(ctx, target, served.strategy, itemPolicy, extras, served.cookies);
+      outcome = out.result.ok ? 'ok' : out.result.failure.failure_class;
+      return out;
+    } finally {
+      if (served.cookies.used()) await recordSessionUse(deps.pool, { runId: ctx.runId, domain: served.domain, outcome }).catch(() => undefined);
+    }
+  };
+
+  const executeWith = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy, extras?: StepsTrialExtras, cookies?: SessionCookies): Promise<Outcome> => {
     // Agent à chaque run (19 §4, 2.13) : une version E6 non compilable en E5 ne tourne qu'en mode « agent instruit »
     // (opt-in explicite, étapes confirmées par un humain). Une version `unknown` a droit à son essai de compilation.
     const eachRun = agentEachRun(strategy);
@@ -628,6 +688,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       },
       userAgent,
       ...(from === null ? {} : { from }),
+      ...(cookies === undefined ? {} : { sessionCookies: cookies }),
     });
     const pacer = pacerFor(target);
     const common = {
