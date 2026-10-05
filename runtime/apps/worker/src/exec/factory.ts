@@ -7,7 +7,7 @@
 // SANDBOX_LAUNCHER) ; en production, la frontière de l'OS est éprouvée au démarrage (`probeIsolation`) et le worker
 // refuse de démarrer si l'enfant pourrait lire l'environnement du worker (D-30).
 import { briefConfigFromEnv } from '@runtime/core';
-import { costCapsFromEnv, DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
+import { costCapsFromEnv, DomainPacer, kekFor, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
 import { identityFromEnv, instanceContactEnvInvalid, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
@@ -98,6 +98,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
     const costCaps = costCapsFromEnv(env);
     const pacer = new DomainPacer(new PgPacingStore(pool));
     const secrets = secretStore(pool, config.keyring, checked);
+    // Rejeu serveur des sessions de site (A2) : même clé que l'écriture par le serveur (`start.ts`).
+    const siteSessionsKek = kekFor(config.keyring.current, checked.version, 'site_sessions');
     const production = env['NODE_ENV'] === 'production';
     const sandbox = sandboxOptionsFromEnv(env);
     const engine: FactoryEngine =
@@ -235,6 +237,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       secrets,
       logger,
       tunnel,
+      siteSessions: { kek: siteSessionsKek },
       script: { engine, loadScript: loadInlineScript },
       agent,
       instanceContact,
@@ -258,6 +261,7 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       briefConfig: briefConfigFromEnv(process.env),
       // Session requise ou tunnel seul (04 §4) : étape 0 et reconnaissance par l'extension du propriétaire.
       tunnel,
+      siteSessions: { kek: siteSessionsKek },
       agentic: true,
       llm: {
         config: async () => {

@@ -125,6 +125,7 @@ import {
 import {
   buildNetworkRungs,
   checkSiteDomain,
+  createSessionCookies,
   createStaticAssetAllowance,
   loadProxyCredentials,
   openBrowserEgress,
@@ -133,6 +134,7 @@ import {
   parseProxyDefinitions,
   policyAllowsTunnel,
   type NetworkRung,
+  type SessionCookies,
   type NetworkSession,
   type ProxyCredentials,
   type Resolver,
@@ -203,6 +205,8 @@ import {
   readCatalogMemory,
   readProxySettings,
   recordAccessReport,
+  recordSessionUse,
+  siteCookiesForRun,
   recordMemoryRefs,
   resolveRulesForApi,
   saveInvestigationState,
@@ -216,6 +220,7 @@ import {
   type InvestigationState,
   type RunTarget,
 } from '@runtime/db';
+import type { Kek } from '@runtime/core';
 import { LlmError, roleTarget, toFailureClass, type LlmClient, type LlmConfig } from '@runtime/llm';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
@@ -247,6 +252,8 @@ export type InvestigationExecutorDeps = {
   readonly strategy: StrategyRuntime;
   /** Client du tunnel (2.7) : étape 0 et reconnaissance d'une enquête à session ou en tunnel seul ; absent : `tunnel_offline`. */
   readonly tunnel?: TunnelPort;
+  /** Rejeu serveur des sessions de site (A2) : clé `site_sessions` ; absente, une API à session reste en tunnel seul. */
+  readonly siteSessions?: { readonly kek: Kek };
   readonly llm?: InvestigationLlmPorts;
   /** Exécuteurs agentiques E4-E6 branchés dans l'exécuteur de stratégie : leurs couples entrent alors dans le plan. */
   readonly agentic?: boolean;
@@ -635,14 +642,30 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     }
     // 04 §4 : reconnaissance « en tunnel si la session est requise » ; aussi quand la politique n'admet que le tunnel.
     const sessionRequired = target.api.requiresSession || target.api.requires.tunnel === true;
-    const tunnelMode = sessionRequired || (rungs.length === 0 && tunnelChosen);
     const first = rungs[0];
+    // Session serveur (A2, INV5 évolué) : API à session dont le propriétaire a consenti l'usage serveur pour le domaine, cookies
+    // lus par `siteCookiesForRun` pour ce run. Sinon (pas de consentement, session absente ou morte, aucun réseau serveur
+    // dans la politique) : tunnel seul, comme avant (B1 traitera l'état « à rafraîchir »).
+    let serverSession: SessionCookies | null = null;
+    if (target.api.requiresSession && deps.siteSessions !== undefined && first !== undefined) {
+      const declaredDomain = target.api.requires.session_domain;
+      const sessionVerdict = checkSiteDomain(typeof declaredDomain === 'string' && declaredDomain !== '' ? declaredDomain : host);
+      if (sessionVerdict.ok) {
+        const found = await siteCookiesForRun(deps.pool, deps.siteSessions.kek, { runId: ctx.runId, domain: sessionVerdict.domain }).catch(() => null);
+        if (found?.ok === true) serverSession = createSessionCookies(sessionVerdict.domain, found.cookies);
+      }
+    }
+    const tunnelOnly = sessionRequired && serverSession === null;
+    const tunnelMode = tunnelOnly || (rungs.length === 0 && tunnelChosen);
+    const recordSessionUsage = async (outcome: string): Promise<void> => {
+      if (serverSession?.used() === true) await recordSessionUse(deps.pool, { runId: ctx.runId, domain: serverSession.domain, outcome }).catch(() => undefined);
+    };
     // Session requise (04 §3.2, C2) : seul le tunnel porte l'identité de l'utilisateur. Le serveur n'utilise aucun
     // cookie de session en V1 : un essai N1/N2 partirait sans la session (401/403 → arrêt, puis tunnel élagué, X3)
     // ou retiendrait une stratégie serveur sans session pour une API à session. Le plan se limite donc au tunnel.
-    const allNetworks: PlanNetwork[] = sessionRequired
+    const allNetworks: PlanNetwork[] = tunnelOnly
       ? [{ mode: 'tunnel', perGbUsd: 0 }]
-      : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
+      : [...rungs.map((r) => ({ mode: r.mode, perGbUsd: r.mode === 'direct' ? 0 : r.proxy.price.perGbUsd })), ...(tunnelChosen && serverSession === null ? [{ mode: 'tunnel' as const, perGbUsd: 0 }] : [])];
     const networks = confirmOnce ? allNetworks.slice(0, 1) : allNetworks;
     // Politique sans réseau serveur ni tunnel : un proxy requis manque (transition 3).
     if (!tunnelMode && first === undefined) return await finishStopped('proxy_not_configured', 'proxy_not_configured', 'setup');
@@ -716,6 +739,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
         userAgent,
         ...(from === null ? {} : { from }),
+        ...(serverSession === null ? {} : { sessionCookies: serverSession }),
       };
       ports = serverAccessPorts({ sessionBase, ceiling }, host, scope, pacer);
     }
@@ -808,12 +832,12 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const planFor = (strategies: readonly BuiltStrategy[]): PlanEntry[] =>
       (
         imported !== undefined
-          ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null })
+          ? buildImportedPlan({ execution: imported.execution, spec: imported.spec, networks, browser: deps.browsers !== null && serverSession === null })
           : buildTrialPlan({
               strategies,
               networks,
-              browser: deps.browsers !== null,
-              agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
+              browser: deps.browsers !== null && serverSession === null,
+              agentic: deps.agentic === true && serverSession === null ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
               pageUrl,
               pageHost: host,
               instruction: agenticInstruction(request.description, state.validated_by === 'user' ? state.validation?.instructions : undefined),
@@ -893,9 +917,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         const recon =
           ports.mode === 'tunnel'
             ? await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope) && hostWithinDomain(h, ports.tunnel!.domain), signal, mode: 'tunnel', ...(pacer === undefined ? {} : { pacer }) })
-            : deps.browsers !== null
+            : deps.browsers !== null && serverSession === null
               ? await browserRecon(deps, { url: pageUrl, host, scope, signal, userAgent, sessionBase: ports.server!.sessionBase, ceiling: ports.server!.ceiling, otherUsd: ports.proxyUsd, ...(pacer === undefined ? {} : { pacer }) })
-              : await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope), signal, mode: 'static', skipDiscovery: briefExchanges.length > 0, ...(pacer === undefined ? {} : { pacer }) });
+              : await staticRecon(ports.reconProbe, { url: pageUrl, allowHost: (h) => withinSiteScope(h, scope), signal, mode: 'static', session: serverSession !== null, skipDiscovery: briefExchanges.length > 0, ...(pacer === undefined ? {} : { pacer }) });
         await charge(ctx, ports.proxyUsd() + recon.proxyUsd);
         spent = round6(spent + ports.proxyUsd() + recon.proxyUsd);
         const stopped1 = await tunnelOutcome('reconnaissance');
@@ -1025,7 +1049,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               const rendered = renderAgentBrief({ brief: briefRead.brief.content, digest: briefDigest, states: finalizeBriefHints(briefDigest, briefProbes, briefMatch, null), receivedAt: briefRead.brief.created_at, memoryKeys, maxTokens: briefConfig.maxTokens });
               return rendered.text === '' ? {} : { agentBrief: rendered.text };
             })()),
-            allowedCouples: previewCouples({ networks, browser: deps.browsers !== null, agentic: deps.agentic === true ? agenticPrices(config) : {}, candidates: mapCandidates, documentBytes: state.page?.document_bytes ?? capture.document?.bytes ?? 0, totalBytes: state.page?.total_bytes ?? capture.totalBytes }),
+            allowedCouples: previewCouples({ networks, browser: deps.browsers !== null && serverSession === null, agentic: deps.agentic === true && serverSession === null ? agenticPrices(config) : {}, candidates: mapCandidates, documentBytes: state.page?.document_bytes ?? capture.document?.bytes ?? 0, totalBytes: state.page?.total_bytes ?? capture.totalBytes }),
           };
           // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
           // ferait dépasser `investigation_budget_usd` ; prix inconnu → aucun appel (08 §1, jamais 0).
@@ -1880,6 +1904,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       throw error;
     } finally {
       await ports.close();
+      await recordSessionUsage('investigation');
     }
   };
 }
@@ -2158,7 +2183,7 @@ async function browserRecon(
  */
 async function staticRecon(
   probe: AccessProbe,
-  args: { url: string; allowHost: (host: string) => boolean; signal: AbortSignal; mode: 'static' | 'tunnel'; pacer?: RequestPacer; skipDiscovery?: boolean },
+  args: { url: string; allowHost: (host: string) => boolean; signal: AbortSignal; mode: 'static' | 'tunnel'; session?: boolean; pacer?: RequestPacer; skipDiscovery?: boolean },
 ): Promise<ReconOutcome> {
   const empty = (failure: ExecFailure | null): ReconOutcome => ({ capture: { mode: args.mode, pageUrl: args.url, document: null, exchanges: [], totalBytes: 0 }, failure, proxyUsd: 0 });
   type Got = { readonly kind: 'failed'; readonly failure: ExecFailure } | { readonly kind: 'got'; readonly exchange: HttpExchange; readonly refused: ExecFailure | null };
@@ -2191,7 +2216,7 @@ async function staticRecon(
     if (!args.allowHost(new URL(url).hostname)) continue;
     // En tunnel, la requête part avec les cookies de session de l'utilisateur : une URL d'action trouvée dans un script
     // (`/logout`, `/unsubscribe`, `/cart/clear`, souvent dans un gestionnaire de clic) n'est jamais rejouée.
-    if (args.mode === 'tunnel' && isActionUrl(url)) continue;
+    if ((args.mode === 'tunnel' || args.session === true) && isActionUrl(url)) continue;
     const res = await get(url);
     if (res.kind === 'failed') return empty(res.failure);
     if (res.refused !== null) {
