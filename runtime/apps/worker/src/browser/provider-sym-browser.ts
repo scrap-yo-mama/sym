@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Fournisseur de navigateur `sym-browser` (tâche 4.2 ; cdc/sym-browser 04e §2.2 et §4, 04g §1 et §2) : le Chromium d'une session
 // SYM Browser (même hôte ou autre serveur) derrière `BrowserProvider`, par le SDK (`@sym-browser/sdk`).
-// - `launchShared` : session `shared` EXPLICITE (le défaut de l'API est `dedicated`) à egress fermé (`allowedHosts: []`),
-//   `chromium.connect` ; `close()` et `kill()` libèrent la session ;
+// - `launchShared` : session `dedicated` à egress fermé (`allowedHosts: []`), `connectOverCDP` ; `close()` et `kill()` libèrent la
+//   session. Pas `shared` : les gardes du contexte de run (blockBackgroundWorkers, garde de requêtes) ouvrent des sessions CDP de
+//   navigateur et de page, que le relais refuse aux sessions `shared` (BINV1) ; un Chromium propre au worker les permet, et le
+//   relais lui impose l'egress de sa session (04f § 4). Un contexte par run, comme le Chromium partagé du pool local ;
 // - `launchDedicated` : session `dedicated` (User-Agent, arguments, egress, métadonnées), `connectOverCDP` ; `cdpUrl` est l'URL
 //   de la passerelle, transmise à Stagehand ;
 // - `engineIdentity` : `GET /v1/version` ;
@@ -132,7 +134,7 @@ export function createSymBrowserProvider(options: SymBrowserProviderOptions): Br
     kind: 'sym-browser',
     capabilities: SYM_BROWSER_CAPABILITIES,
     launchShared: async (): Promise<LaunchedBrowser> => {
-      const { session, browser } = await open({ type: 'shared', egress: { allowedHosts: [] }, metadata: { workerId: options.workerId } }, (s) => client.connect(s));
+      const { session, browser } = await open({ type: 'dedicated', egress: { allowedHosts: [] }, metadata: { workerId: options.workerId } }, (s) => client.connectCDP(s));
       const release = async () => void (await client.sessions.release(session.id));
       return { browser, close: release, kill: release };
     },

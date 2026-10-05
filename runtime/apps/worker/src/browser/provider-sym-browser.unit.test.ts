@@ -37,12 +37,13 @@ describe('fournisseur sym-browser', () => {
     expect(Object.values(p.capabilities).every((v) => v === true)).toBe(true);
   });
 
-  it('launchShared : session shared explicite à egress fermé, connexion native sur l’origine de BROWSER_URL, close et kill libèrent la session', async () => {
+  it('launchShared : session dedicated à egress fermé (les gardes du run exigent le CDP, refusé aux sessions shared), connectOverCDP sur l’origine de BROWSER_URL, close et kill libèrent la session', async () => {
     const f = fakeClient();
     const launched = await provider(f.client).launchShared();
-    expect(f.create).toHaveBeenCalledWith({ type: 'shared', egress: { allowedHosts: [] }, metadata: { workerId: 'w1' } });
-    const given = f.connect.mock.calls[0]![0] as { connectUrls: { playwright: string } };
-    expect(given.connectUrls.playwright).toBe('ws://sym-browser:3000/v1/connect/pw?token=abc');
+    expect(f.create).toHaveBeenCalledWith({ type: 'dedicated', egress: { allowedHosts: [] }, metadata: { workerId: 'w1' } });
+    expect(f.connect).not.toHaveBeenCalled();
+    const given = f.connectCDP.mock.calls[0]![0] as { connectUrls: { cdp: string } };
+    expect(given.connectUrls.cdp).toBe('ws://sym-browser:3000/v1/connect/cdp?token=def');
     expect(launched.browser).toBe(f.browser);
     await launched.close();
     await launched.kill();
@@ -52,7 +53,7 @@ describe('fournisseur sym-browser', () => {
 
   it('launchShared : connexion refusée, la session créée est libérée et l’erreur remonte', async () => {
     const f = fakeClient();
-    f.connect.mockRejectedValue(new Error('zz_connect_failed'));
+    f.connectCDP.mockRejectedValue(new Error('zz_connect_failed'));
     await expect(provider(f.client).launchShared()).rejects.toThrow('zz_connect_failed');
     expect(f.release).toHaveBeenCalledWith('sess_1');
   });

@@ -23,10 +23,12 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { ApiKeyAuthenticator, CAPACITY, ConnectTokens, MasterKey, newApiKey } from '../../packages/core/src/index.ts';
-import { createPgSessionStore, insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat } from '../../packages/db/src/index.ts';
+import { createPgSessionEventSink, createPgSessionStore, insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat } from '../../packages/db/src/index.ts';
 import { createGatewayApi, type SessionLauncher } from '../../apps/gateway/src/api/index.ts';
 import { dedicatedLauncher, sessionDir } from '../../apps/node/src/dedicated/index.ts';
-import { createEgressGuard, startSessionEgress, type SessionEgress } from '../../apps/node/src/egress/index.ts';
+import { createEgressGuard, EgressPolicyError, type SessionEgress } from '../../apps/node/src/egress/index.ts';
+import { forwardEgressEvents } from '../../apps/node/src/events/index.ts';
+import { DEFAULT_IP_ECHO_URL, ProxyUnreachableError, startUpstreamSessionEgress, type UpstreamSession } from '../../apps/node/src/egress/upstream/index.ts';
 import { BrowserPool, OwnedProcessGroups, PROVISIONAL_CAPACITY, playwrightLauncher, startClosedLaunchProxy, type AcquireRequest, type ClosedLaunchProxy, type PoolLease } from '../../apps/node/src/pool/index.ts';
 import { createNodeRelay } from '../../apps/node/src/relay/index.ts';
 import { SessionSupervisor } from '../../apps/node/src/sessions/supervisor.ts';
@@ -58,7 +60,16 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-export async function startAllMode(): Promise<AllModeInstance> {
+export type AllModeOptions = {
+  /** Noms résolus en 127.0.0.1 par la garde du nœud, en plus de `site-a.test` (sites de test d'autres suites). */
+  hosts?: readonly string[];
+  /** Point d'écho du test d'un proxy amont (`SYMB_IP_ECHO_URL`) ; défaut : celui du nœud. */
+  ipEchoUrl?: string;
+  /** Adresses privées admises par la garde, proxys de test joints en boucle locale (`SYMB_PRIVATE_HOSTS`). */
+  privateHosts?: readonly string[];
+};
+
+export async function startAllMode(options: AllModeOptions = {}): Promise<AllModeInstance> {
   if (process.getuid?.() === 0) throw new Error('mode all sur vrais Chromium : lance les tests sous un utilisateur non root (bac à sable, 03 § 7).');
   const errors: unknown[] = [];
   const onError = (error: unknown): void => void errors.push(error);
@@ -84,13 +95,16 @@ export async function startAllMode(): Promise<AllModeInstance> {
     // Site de test (0.5) derrière le nom `site-a.test`.
     const site: SiteHandle = await startSite({ host: '127.0.0.1' });
     cleanups.push(() => site.close());
+    const names = new Set([SITE_HOST, ...(options.hosts ?? [])]);
     const guard = createEgressGuard({
-      privateHosts: [SITE_HOST],
-      resolver: async (host) => (host === SITE_HOST ? [{ address: '127.0.0.1', family: 4 as const }] : Promise.reject(new Error('ENOTFOUND'))),
+      privateHosts: [...names, ...(options.privateHosts ?? [])],
+      resolver: async (host) => (names.has(host) ? [{ address: '127.0.0.1', family: 4 as const }] : Promise.reject(new Error('ENOTFOUND'))),
     });
+    const eventSink = createPgSessionEventSink(db);
 
     // Nœud : egress par session, pool (Chromium chauds sur un proxy de lancement fermé, dédiés sur l'egress de leur session).
     const egresses = new Map<string, SessionEgress>();
+    const upstreams = new Map<string, UpstreamSession>();
     const dataDir = await mkdtemp(join(tmpdir(), 'zz_symb_allmode_'));
     cleanups.push(() => rm(dataDir, { recursive: true, force: true }));
     const closedProxy: ClosedLaunchProxy = await startClosedLaunchProxy();
@@ -129,6 +143,7 @@ export async function startAllMode(): Promise<AllModeInstance> {
               await lease.release();
               const egress = egresses.get(request.sessionId);
               egresses.delete(request.sessionId);
+              upstreams.delete(request.sessionId);
               egress?.shut();
               await egress?.close();
             },
@@ -186,8 +201,19 @@ export async function startAllMode(): Promise<AllModeInstance> {
     // Lanceur du mode `all` : la passerelle démarre, libère et prolonge sur le superviseur du nœud, dans le processus.
     const launcher: SessionLauncher = {
       async launch(request) {
-        const egress = await startSessionEgress((request.options.egress ?? {}) as Parameters<typeof startSessionEgress>[0], { guard, onDenied: () => undefined });
+        // Comme le binaire (gateway/src/runtime/sessions.ts) : egress amont de la session, événements écrits dans session_events.
+        const forward = forwardEgressEvents(request.sessionId, eventSink, onError);
+        const upstream = await startUpstreamSessionEgress((request.options.egress ?? {}) as Parameters<typeof startUpstreamSessionEgress>[0], {
+          guard,
+          tenantId: request.tenantId,
+          echoUrl: options.ipEchoUrl ?? DEFAULT_IP_ECHO_URL,
+          onEvent: forward.onEvent,
+          onDenied: () => undefined,
+          blockedWindowMs: 10,
+        });
+        const egress = upstream.egress;
         egresses.set(request.sessionId, egress);
+        upstreams.set(request.sessionId, upstream);
         const now = Date.now();
         const outcome = await supervisor.start({
           sessionId: request.sessionId,
@@ -199,6 +225,7 @@ export async function startAllMode(): Promise<AllModeInstance> {
         });
         if (outcome.ok) return { ok: true };
         egresses.delete(request.sessionId);
+        upstreams.delete(request.sessionId);
         egress.shut();
         await egress.close();
         return { ok: false, code: 'launch_failed' };
@@ -215,8 +242,15 @@ export async function startAllMode(): Promise<AllModeInstance> {
         return egress === undefined ? { ok: false, code: 'not_held' } : { ok: true, state: egress.state() };
       },
       async replaceEgress(sessionId, policy) {
-        const egress = egresses.get(sessionId);
-        return egress === undefined ? { ok: false, code: 'not_held' } : { ok: true, state: egress.replace(policy) };
+        const upstream = upstreams.get(sessionId);
+        if (upstream === undefined) return { ok: false, code: 'not_held' };
+        try {
+          return { ok: true, state: await upstream.replace(policy) };
+        } catch (error) {
+          if (error instanceof EgressPolicyError) return { ok: false, code: 'invalid_option', field: error.field, reason: error.message };
+          if (error instanceof ProxyUnreachableError) return { ok: false, code: 'proxy_unreachable', reason: error.details.reason };
+          throw error;
+        }
       },
     };
 

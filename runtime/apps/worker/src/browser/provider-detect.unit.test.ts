@@ -88,11 +88,11 @@ describe('worker_starts_without_browser', () => {
   it('un run navigateur attend SYM Browser (1 s puis doublement) et aboutit une fois le service démarré', async () => {
     const sleeps: number[] = [];
     let calls = 0;
-    const session = { id: 's', state: 'running', type: 'shared', connectUrls: { playwright: 'ws://b:3000/v1/connect/pw', cdp: null, bidi: null } };
+    const session = { id: 's', state: 'running', type: 'dedicated', connectUrls: { playwright: 'ws://b:3000/v1/connect/pw', cdp: 'ws://b:3000/v1/connect/cdp', bidi: null } };
     const client = {
       version: () => (++calls <= 3 ? Promise.reject(new TypeError('fetch failed')) : Promise.resolve(VERSION)),
       sessions: { create: () => Promise.resolve({ ...session, release: () => Promise.resolve(session) }), release: () => Promise.resolve(session) },
-      connect: () => Promise.resolve({ isConnected: () => true }),
+      connectCDP: () => Promise.resolve({ isConnected: () => true }),
     } as unknown as SymBrowserLike;
     const provider = await detectProvider({ ...env, BROWSER_URL: 'http://b:3000' }, down, deps({ createClient: () => client, sleep: (ms) => (sleeps.push(ms), Promise.resolve()) }));
     const launched = await provider.launchShared();

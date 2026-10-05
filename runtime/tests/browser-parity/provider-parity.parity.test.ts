@@ -88,6 +88,8 @@ beforeAll(async () => {
     hits.push({ host: (req.headers.host ?? '').replace(/:\d+$/, ''), method: req.method ?? 'GET', path });
     const html = (body: string) => res.writeHead(200, { 'content-type': 'text/html' }).end(body);
     switch (path) {
+      case '/__ip':
+        return res.writeHead(200, { 'content-type': 'application/json' }).end('{"ip":"127.0.0.1"}');
       case '/page':
         return html('<title>fixture</title><p id="v">conforme</p>');
       case '/prive/page':
@@ -145,7 +147,8 @@ beforeAll(async () => {
   launchProxy = await startEgressProxy({ guard: guard(), refuseAll: true });
   SymBrowser = (await import('../../modules/browser/packages/sdk/src/index.ts')).SymBrowser;
   const { startAllMode } = await import('../../modules/browser/tests/helpers/all-mode.ts');
-  symInstance = await startAllMode();
+  // Noms de test résolus par la garde du nœud, proxy BYO et point d'écho joints en boucle locale (SYMB_PRIVATE_HOSTS).
+  symInstance = await startAllMode({ hosts: [A, B], privateHosts: ['127.0.0.1'], ipEchoUrl: `http://${A}:${sitePort}/__ip` });
 }, 300_000);
 
 afterAll(async () => {
