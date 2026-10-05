@@ -72,7 +72,7 @@ export class ExtensionError extends Error {
   }
 }
 
-const KEYS = { pairing: 'pairing', consents: 'consents', deviceId: 'device_id', revoked: 'pairing_revoked' } as const;
+const KEYS = { pairing: 'pairing', consents: 'consents', deviceId: 'device_id', revoked: 'pairing_revoked', pushed: 'pushed_fingerprints' } as const;
 
 /** Domaine connecté, tel que l'instance le connaît (`GET /api/extension/session`). */
 type RemoteSite = { domain: string; serverUseAllowed: boolean; hasServerCookies: boolean; consentedAt?: string };
@@ -151,6 +151,7 @@ export class ExtensionController {
     }
     await this.#deps.storage.remove(KEYS.pairing);
     await this.#deps.storage.remove(KEYS.consents);
+    await this.#deps.storage.remove(KEYS.pushed);
   }
 
   async #dropConsent(domain: string): Promise<void> {
@@ -158,6 +159,7 @@ export class ExtensionController {
     delete consents[domain];
     await this.#deps.storage.set(KEYS.consents, consents);
     await this.#deps.permissions.remove(originPatterns(domain));
+    await this.#forgetFingerprint(domain);
   }
 
   /** Domaines connectés selon l'instance ; lève si l'instance est injoignable ou en erreur. */
@@ -180,6 +182,7 @@ export class ExtensionController {
       if (!site) {
         delete consents[domain];
         await this.#deps.permissions.remove(originPatterns(domain));
+        await this.#forgetFingerprint(domain);
         changed = true;
       } else if (consent.mode === 'server' && !site.serverUseAllowed) {
         consents[domain] = { ...consent, mode: 'tunnel', recipient: null };
@@ -316,7 +319,7 @@ export class ExtensionController {
    * s'il est en mode tunnel, s'il nomme un autre destinataire que l'instance appairée, ou si la permission d'hôte
    * n'est pas accordée. Renvoie vrai si des cookies sont partis.
    */
-  async capture(domain: string): Promise<boolean> {
+  async capture(domain: string, options: { skipIfUnchanged?: boolean } = {}): Promise<boolean> {
     const pairing = await this.#pairing();
     if (!pairing) throw new ExtensionError('not_paired', 'This browser is not paired with an instance.');
     const consent = (await this.#consents())[domain];
@@ -327,6 +330,10 @@ export class ExtensionController {
     }
     if (!(await this.#deps.permissions.contains(originPatterns(domain)))) throw new ExtensionError('permission_required', `Access to ${domain} is not granted.`);
     const cookies = await this.#readCookies(domain);
+    // Poussée idempotente (B2) : on ne repousse pas une session identique à la dernière poussée réussie, et on ne remplace
+    // jamais la session de l'instance par une liste vide (déconnexion locale du site : l'instance garde la sienne).
+    const fingerprint = options.skipIfUnchanged ? await fingerprintOf(cookies) : null;
+    if (options.skipIfUnchanged && (cookies.length === 0 || (await this.#pushedFingerprints())[domain] === fingerprint)) return false;
     const { status } = await this.#api('PUT', `/api/extension/sites/${encodeURIComponent(domain)}/cookies`, { cookies });
     if (status === 404) {
       // Domaine déconnecté sur l'instance entre-temps : plus aucune lecture ici.
@@ -334,7 +341,47 @@ export class ExtensionController {
       throw new ExtensionError('site_disconnected', `${domain} is no longer connected on your instance.`);
     }
     if (status !== 204) throw new ExtensionError('instance_error', `Instance error (HTTP ${status}).`);
+    await this.#rememberFingerprint(domain, fingerprint ?? (await fingerprintOf(cookies)));
     return cookies.length > 0;
+  }
+
+  async #pushedFingerprints(): Promise<Record<string, string>> {
+    return ((await this.#deps.storage.get(KEYS.pushed)) as Record<string, string> | undefined) ?? {};
+  }
+
+  /** Empreinte seule (hash), jamais une valeur de cookie. */
+  async #rememberFingerprint(domain: string, fingerprint: string): Promise<void> {
+    await this.#deps.storage.set(KEYS.pushed, { ...(await this.#pushedFingerprints()), [domain]: fingerprint });
+  }
+
+  async #forgetFingerprint(domain: string): Promise<void> {
+    const all = await this.#pushedFingerprints();
+    if (!(domain in all)) return;
+    delete all[domain];
+    await this.#deps.storage.set(KEYS.pushed, all);
+  }
+
+  /**
+   * Domaines que le rafraîchissement peut repousser : usage serveur, destinataire = instance appairée, permission d'hôte
+   * accordée (B2). Aucun cookie n'est lu ici.
+   */
+  async refreshableDomains(): Promise<string[]> {
+    const pairing = await this.#pairing();
+    if (!pairing) return [];
+    const out: string[] = [];
+    for (const c of Object.values(await this.#consents())) {
+      if (c.mode === 'server' && c.recipient === pairing.origin && (await this.#deps.permissions.contains(originPatterns(c.domain)))) out.push(c.domain);
+    }
+    return out;
+  }
+
+  /** Signal de l'instance (B1) : domaines dont elle attend une session neuve. Lève si injoignable ; [] si non appairé. */
+  async refreshRequests(): Promise<string[]> {
+    if (!(await this.#pairing())) return [];
+    const { status, data } = await this.#api('GET', '/api/extension/refresh-requests');
+    if (status !== 200) throw new ExtensionError('instance_error', `Instance error (HTTP ${status}).`);
+    const items = (data as { items?: { domain?: unknown }[] } | null)?.items;
+    return Array.isArray(items) ? items.flatMap((i) => (typeof i.domain === 'string' ? [i.domain] : [])) : [];
   }
 
   /**
@@ -440,3 +487,10 @@ const unpairWarning = (reason: string) =>
 
 const disconnectWarning = (domain: string, reason: string) =>
   `${domain} is disconnected in this browser, but your instance could not be reached to delete it and its cookies (${reason}). Disconnect it again once the instance is back.`;
+
+/** Empreinte SHA-256 du contenu d'une session (domaine, chemin, nom, valeur, expiration), calculée ici, jamais journalisée. */
+async function fingerprintOf(cookies: readonly BrowserCookie[]): Promise<string> {
+  const lines = cookies.map((c) => [c.domain, c.path, c.name, c.value, c.expirationDate ?? ''].join('\u0000')).sort();
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(lines.join('\n')));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}

@@ -431,3 +431,61 @@ describe('capture : tous les cookies de session du domaine', () => {
     expect(names).toEqual(['app_sid', 'parent', 'sid']);
   });
 });
+
+describe('B2 : poussée idempotente, empreinte seule dans le stockage (assert_extension_refresh_idempotent)', () => {
+  const CANARY = 'zz_test_canary_cookie_value_b2';
+  const jarOf = (value: string): BrowserCookie[] => [{ name: 'sid', value, domain: SHOP, path: '/', secure: true, httpOnly: true, sameSite: 'lax', expirationDate: 1_900_000_000 }];
+  const puts = (h: { calls: Call[] }) => h.calls.filter((c) => c.method === 'PUT' && c.url.endsWith('/cookies'));
+
+  test('session identique à la dernière poussée réussie : pas de repoussée ; session changée : une poussée', async () => {
+    const jar = jarOf(CANARY);
+    const h = await paired({ granted: patterns(SHOP), jar });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    expect(puts(h)).toHaveLength(1);
+    expect(await h.controller.capture(SHOP, { skipIfUnchanged: true })).toBe(false);
+    expect(puts(h)).toHaveLength(1);
+    jar[0] = { ...jar[0]!, value: `${CANARY}_rotated` };
+    expect(await h.controller.capture(SHOP, { skipIfUnchanged: true })).toBe(true);
+    expect(puts(h)).toHaveLength(2);
+    expect(await h.controller.capture(SHOP, { skipIfUnchanged: true })).toBe(false);
+  });
+
+  test('liste vide : rien n’est poussé (la session de l’instance n’est jamais écrasée par du vide)', async () => {
+    const jar = jarOf(CANARY);
+    const h = await paired({ granted: patterns(SHOP), jar });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    jar.length = 0;
+    expect(await h.controller.capture(SHOP, { skipIfUnchanged: true })).toBe(false);
+    expect(puts(h)).toHaveLength(1);
+  });
+
+  test('canari : le stockage ne contient que l’empreinte (hash), jamais la valeur du cookie', async () => {
+    const h = await paired({ granted: patterns(SHOP), jar: jarOf(CANARY) });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    const stored = JSON.stringify([...h.store.entries()]);
+    expect(stored).not.toContain(CANARY);
+    expect((h.store.get('pushed_fingerprints') as Record<string, string>)[SHOP]).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('refreshRequests lit le signal ; refreshableDomains : usage serveur + permission accordée seulement', async () => {
+    const h = await paired({
+      granted: patterns(SHOP),
+      jar: jarOf(CANARY),
+      statusFor: (c) => defaultStatus(c),
+    });
+    expect(await h.controller.refreshableDomains()).toEqual([]);
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    expect(await h.controller.refreshableDomains()).toEqual([SHOP]);
+    h.granted.clear();
+    expect(await h.controller.refreshableDomains()).toEqual([]);
+    expect(await h.controller.refreshRequests()).toEqual([]);
+    expect(h.calls.at(-1)).toMatchObject({ method: 'GET', url: `${ORIGIN}/api/extension/refresh-requests` });
+  });
+
+  test('déconnexion du site : l’empreinte est oubliée, la prochaine connexion repousse', async () => {
+    const h = await paired({ granted: patterns(SHOP), jar: jarOf(CANARY) });
+    await h.controller.connectSite({ domain: SHOP, mode: 'server', now: NOW });
+    await h.controller.disconnectSite(SHOP);
+    expect(h.store.get('pushed_fingerprints')).toEqual({});
+  });
+});
