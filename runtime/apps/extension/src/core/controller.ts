@@ -65,6 +65,7 @@ export class ExtensionError extends Error {
       | 'site_disconnected'
       | 'unauthorized'
       | 'extension_outdated'
+      | 'server_use_not_allowed'
       | 'instance_error',
     message: string,
   ) {
@@ -334,7 +335,23 @@ export class ExtensionController {
     // jamais la session de l'instance par une liste vide (déconnexion locale du site : l'instance garde la sienne).
     const fingerprint = options.skipIfUnchanged ? await fingerprintOf(cookies) : null;
     if (options.skipIfUnchanged && (cookies.length === 0 || (await this.#pushedFingerprints())[domain] === fingerprint)) return false;
-    const { status } = await this.#api('PUT', `/api/extension/sites/${encodeURIComponent(domain)}/cookies`, { cookies });
+    // L'appairage lu au début fait foi pour toute la poussée : si l'utilisateur s'est appairé à une autre instance entre-temps,
+    // les cookies déjà lus ne partent nulle part (ni vers l'ancienne, ni vers la nouvelle), sans retentative.
+    const current = await this.#pairing();
+    if (!current || current.origin !== pairing.origin || current.token !== pairing.token) {
+      throw new ExtensionError('not_paired', 'Pairing changed during the push: nothing was sent.');
+    }
+    const res = await this.#send(pairing, 'PUT', `/api/extension/sites/${encodeURIComponent(domain)}/cookies`, { cookies });
+    const status = res.status;
+    if (status === 401) {
+      const now = await this.#pairing();
+      if (now && now.origin === pairing.origin && now.token === pairing.token) await this.#forget();
+      throw new ExtensionError('unauthorized', 'Pairing revoked or expired: pair again.');
+    }
+    if (status === 409) {
+      // Domaine passé en mode tunnel sur l'instance : refus définitif, aucune retentative.
+      throw new ExtensionError('server_use_not_allowed', `${domain} is in tunnel mode on your instance: no cookies are accepted.`);
+    }
     if (status === 404) {
       // Domaine déconnecté sur l'instance entre-temps : plus aucune lecture ici.
       await this.#dropConsent(domain);
