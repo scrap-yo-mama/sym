@@ -612,7 +612,9 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     const rung = strategy.network === 'tunnel' ? rungs[0] : rungs.find((r) => r.mode === strategy.network);
     if (rung === undefined) return null;
     const check = validateDeclarativeSpec(strategy.spec, { outputSchema: target.api.outputSchema });
-    if (!check.ok || check.spec.request.method !== 'GET' || check.spec.request.body !== undefined) return null;
+    // Lecture seule (V1) : la requête principale ET chaque étape en GET sans corps, contrôlées sur la spec validée
+    // effectivement exécutée. Une écriture (étape POST, corps) n'emporte jamais la session : repli d'avant.
+    if (!check.ok || ![check.spec.request, ...(check.spec.steps ?? []).map((s) => s.request)].every((r) => r.method === 'GET' && r.body === undefined)) return null;
     const declared = target.api.requires.session_domain;
     const verdict = checkSiteDomain(typeof declared === 'string' && declared !== '' ? declared : new URL(check.spec.request.url).hostname);
     if (!verdict.ok) return null;

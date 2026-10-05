@@ -207,6 +207,7 @@ import {
   recordAccessReport,
   recordSessionUse,
   siteCookiesForRun,
+  RunSessionNotFoundError,
   recordMemoryRefs,
   resolveRulesForApi,
   saveInvestigationState,
@@ -651,7 +652,11 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const declaredDomain = target.api.requires.session_domain;
       const sessionVerdict = checkSiteDomain(typeof declaredDomain === 'string' && declaredDomain !== '' ? declaredDomain : host);
       if (sessionVerdict.ok) {
-        const found = await siteCookiesForRun(deps.pool, deps.siteSessions.kek, { runId: ctx.runId, domain: sessionVerdict.domain }).catch(() => null);
+        const found = await siteCookiesForRun(deps.pool, deps.siteSessions.kek, { runId: ctx.runId, domain: sessionVerdict.domain }).catch((error: unknown) => {
+          // Seul refus attendu : run introuvable. Toute autre erreur (base, scellement) remonte, sans valeur de secret.
+          if (error instanceof RunSessionNotFoundError) return null;
+          throw error;
+        });
         if (found?.ok === true) serverSession = createSessionCookies(sessionVerdict.domain, found.cookies);
       }
     }
