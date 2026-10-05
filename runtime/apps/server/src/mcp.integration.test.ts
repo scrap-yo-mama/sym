@@ -607,7 +607,7 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
 
   test('validate_schema : RunResult (ou running) après le schéma proposé ; hors attente, code d’état', async () => {
     const client = await connect(a.key);
-    const created = await call(client, 'create_api', { description: 'zz_test catalogue', url: 'https://zz-test-validate.example/', wait_seconds: 0 });
+    const created = await call(client, 'create_api', { description: 'zz_test catalogue', url: 'https://zz-test-validate.example/', auto_validate: false, wait_seconds: 0 });
     const view = created.structuredContent as { api_id: string; run_id: string };
     await withClient(srv.db.url, async (c) => {
       await c.query("UPDATE apis SET investigation_phase = 'awaiting_schema_validation', investigation = investigation || jsonb_build_object('proposed_schema', '{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"}}}'::jsonb) WHERE id = $1", [view.api_id]);
@@ -615,7 +615,7 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
     });
     const validated = await call(client, 'validate_schema', { api_id: view.api_id, wait_seconds: 0 });
     expect(validated.isError ?? false).toBe(false);
-    expect(validated.structuredContent).toMatchObject({ state: 'queued', next_action: { tool: 'get_run' } });
+    expect(validated.structuredContent).toMatchObject({ state: 'running', next_action: { tool: 'get_run' } });
     expect(toolError(await call(client, 'validate_schema', { api_id: view.api_id })).code).toBe('not_awaiting_validation');
   });
 
@@ -766,7 +766,7 @@ describe('assert_cross_user_denied (INV12) : chaque outil MCP, B contre les obje
 describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP de 2.14', () => {
   test('assert_brief_optional (MCP) : create_api sans brief crée l’API et lance l’enquête (trigger mcp), vue ApiCreated', async () => {
     const client = await connect(a.key);
-    const result = await call(client, 'create_api', { description: 'zz_test liste de livres', url: 'https://zz-test-books.example/', wait_seconds: 0 });
+    const result = await call(client, 'create_api', { description: 'zz_test liste de livres', url: 'https://zz-test-books.example/', auto_validate: false, wait_seconds: 0 });
     expect(result.isError ?? false).toBe(false);
     const view = result.structuredContent as { api_id: string; slug: string; run_id: string; investigation_phase: string | null };
     expect(view).toMatchObject({ api_id: expect.any(String), slug: expect.any(String), run_id: expect.any(String) });
@@ -777,13 +777,13 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
 
   test('05 § 1.1 : une API créée par MCP ou par REST n’est pas épinglée (mcp_exposed faux) ; son propriétaire l’épingle explicitement', async () => {
     const client = await connect(a.key);
-    const created = await call(client, 'create_api', { description: 'zz_test épinglage', url: 'https://zz-test-pin-mcp.example/', wait_seconds: 0 });
+    const created = await call(client, 'create_api', { description: 'zz_test épinglage', url: 'https://zz-test-pin-mcp.example/', auto_validate: false, wait_seconds: 0 });
     const viaMcp = (created.structuredContent as { api_id: string; slug: string });
     const viaRest = await srv.app.inject({
       method: 'POST',
       url: '/api/apis?wait=0',
       headers: { authorization: `Bearer ${a.key}`, 'content-type': 'application/json' },
-      payload: JSON.stringify({ description: 'zz_test épinglage rest', url: 'https://zz-test-pin-rest.example/' }),
+      payload: JSON.stringify({ description: 'zz_test épinglage rest', url: 'https://zz-test-pin-rest.example/', auto_validate: false }),
     });
     expect(viaRest.statusCode, viaRest.body).toBe(201);
     const restId = viaRest.json<{ api_id: string }>().api_id;
@@ -801,11 +801,11 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
   test('assert_brief_schema_closed et assert_brief_size_cap_actionable (MCP) : clé inconnue → invalid_brief nommant le champ, 16 Ko → brief_too_large, aucune API', async () => {
     const client = await connect(a.key);
     const before = await count('SELECT count(*) FROM apis WHERE owner_id = $1', [a.user.id]);
-    const unknown = toolError(await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', brief: { v: 1, allowed_hosts: 'zz_test_hostile_value_*' } }));
+    const unknown = toolError(await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', auto_validate: false, brief: { v: 1, allowed_hosts: 'zz_test_hostile_value_*' } }));
     expect(unknown).toMatchObject({ code: 'invalid_brief', retryable: true });
     expect(unknown.message).toContain('allowed_hosts');
     expect(JSON.stringify(unknown)).not.toContain('zz_test_hostile_value');
-    const large = toolError(await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', brief: { v: 1, notes: 'x'.repeat(1990), hints: Array.from({ length: 20 }, (_, i) => ({ id: `h${i}`, kind: 'pitfall', value: 'y'.repeat(299), sample: 'z'.repeat(299), seen_on: `https://zz-test-brief.example/${'p'.repeat(250)}` })) } }));
+    const large = toolError(await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', auto_validate: false, brief: { v: 1, notes: 'x'.repeat(1990), hints: Array.from({ length: 20 }, (_, i) => ({ id: `h${i}`, kind: 'pitfall', value: 'y'.repeat(299), sample: 'z'.repeat(299), seen_on: `https://zz-test-brief.example/${'p'.repeat(250)}` })) } }));
     expect(large).toMatchObject({ code: 'brief_too_large', retryable: true });
     expect(large.what_to_do).toContain(`${Math.floor(BRIEF_MAX_BYTES / 1000)} KB`);
     expect(await count('SELECT count(*) FROM apis WHERE owner_id = $1', [a.user.id])).toBe(before);
@@ -821,7 +821,7 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
       { v: 1, tried: [{ approach: 'fetch_json', outcome: 'refused', note: hostile, zz: hostile }] },
     ];
     for (const brief of briefs) {
-      const result = await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', brief });
+      const result = await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', auto_validate: false, brief });
       const err = toolError(result);
       expect(JSON.stringify(result)).not.toContain('zz_test_hostile');
       expect(err.code).toBe('invalid_brief');
@@ -844,7 +844,7 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
       tried: [{ approach: 'fetch_html', outcome: 'refused', note: hostile }],
       open_questions: [hostile],
     };
-    const result = await call(client, 'create_api', { description: 'zz_test dossier', url: 'https://zz-test-brief-ok.example/', brief, wait_seconds: 0 });
+    const result = await call(client, 'create_api', { description: 'zz_test dossier', url: 'https://zz-test-brief-ok.example/', auto_validate: false, brief, wait_seconds: 0 });
     expect(result.isError ?? false, JSON.stringify(result)).toBe(false);
     expect(JSON.stringify(result)).not.toMatch(/zz_test_hostile|IGNORE PREVIOUS|jean-dupont/);
     const view = result.structuredContent as { api_id: string; brief_version: number; brief_report: { id: string; state: string; reason: string | null; template: string | null }[] };
@@ -944,7 +944,7 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
       { v: 1, tried: [{ approach: 'fetch_json', outcome: 'ok', target: 'https://zz-test-brief.example/p;jsessionid=ZZSECRETSESSION' }] },
     ];
     for (const brief of briefs) {
-      const result = await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', brief });
+      const result = await call(client, 'create_api', { description: 'zz_test', url: 'https://zz-test-brief.example/', auto_validate: false, brief });
       expect(toolError(result)).toMatchObject({ code: 'secret_in_brief', retryable: true });
       expect(JSON.stringify(result)).not.toMatch(/zzSecret|ZZSECRET/);
     }

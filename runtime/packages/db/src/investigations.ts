@@ -10,7 +10,7 @@
 // lisible des membres par `instance_read` (visibilité instance, sans session) : elle ne doit figurer dans AUCUNE projection
 // servie à un non-propriétaire (REST, MCP, console : 3.x), seulement dans celles du propriétaire.
 import { assertInputSchema, assertSchemaAcceptable, EXECUTIONS, SchemaError, type MemoryRef, type Execution, type InvestigationPhase, type JobQueue, type Network, type RunTrigger, type StrategyRuleRow, type StrategySource } from '@runtime/core';
-import type { InvestigationProposal, NotApplied, SchemaChanges, StoredCandidate } from '@runtime/core/investigation';
+import type { InvestigationGate, InvestigationProposal, NotApplied, SchemaChanges, StoredCandidate } from '@runtime/core/investigation';
 import { checkValidationSource, INVESTIGATION_DEFAULTS, normalizeValidationInstructions, schemaValidationReport, VALIDATION_SOURCE_ID } from '@runtime/core/investigation';
 import type pg from 'pg';
 import { withActor } from './rls.js';
@@ -26,6 +26,8 @@ export type InvestigationRequest = {
   readonly auto_validate: boolean;
   readonly budget_usd: number;
   readonly timeout_s: number;
+  /** Nom lisible choisi par l'appelant (`create_api`, UX-08) : 1 à 80 caractères, sans saut de ligne ; absent, il est tiré de la description. */
+  readonly name?: string;
 };
 
 /** État persistant d'une enquête (`apis.investigation`). */
@@ -81,6 +83,8 @@ export type InvestigationState = {
    * plafond du mode et du budget du jour). Jamais posé par une enquête ordinaire ; une nouvelle enquête repart sans lui.
    */
   readonly budget_cap_usd?: number;
+  /** Porte posée avec `awaiting_schema_validation` (ambiguïté réelle ou coût au-delà du seuil) ; `null` : aucune. */
+  readonly gate?: InvestigationGate | null;
 };
 
 /** Validation par l'appelant (`InvestigationState.validation`). */
@@ -182,6 +186,7 @@ export function normalizeInvestigationRequest(input: {
   auto_validate?: boolean;
   budget_usd?: number;
   timeout_s?: number;
+  name?: string;
 }): InvestigationRequest {
   let url: URL;
   try {
@@ -202,7 +207,11 @@ export function normalizeInvestigationRequest(input: {
   if (!Number.isFinite(budget) || budget < 0 || budget > 100) throw new InvestigationStateError('invalid_request', 'investigation_budget_usd entre 0 et 100 attendu');
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 3600) throw new InvestigationStateError('invalid_request', 'investigation_timeout_s entre 1 et 3600 attendu');
   url.hash = '';
-  return { url: url.href, description, auto_validate: input.auto_validate === true, budget_usd: budget, timeout_s: timeout };
+  // Nom (UX-08) : texte court sur une ligne ; vide, il n'est pas gardé.
+  // eslint-disable-next-line no-control-regex
+  const name = input.name === undefined ? '' : input.name.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  if (name.length > 80) throw new InvestigationStateError('invalid_request', 'name : 1 à 80 caractères attendus');
+  return { url: url.href, description, auto_validate: input.auto_validate === true, budget_usd: budget, timeout_s: timeout, ...(name === '' ? {} : { name }) };
 }
 
 /**

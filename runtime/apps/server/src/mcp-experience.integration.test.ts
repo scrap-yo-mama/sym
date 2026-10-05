@@ -243,7 +243,7 @@ describe('récit et timeline (05 § 1.2)', () => {
   test('assert_text_only_sufficient : client sans capacité optionnelle, le texte seul donne phases, essais, coût, stratégie et prochaine action', async () => {
     const client = await connect(a.key);
     const sim = simulateFirstInvestigation(a);
-    const created = await call(client, 'create_api', { description: 'zz_test livres', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const created = await call(client, 'create_api', { description: 'zz_test livres', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     const simulated = await sim;
     expect(created.isError ?? false).toBe(false);
     const first = text(created);
@@ -281,7 +281,7 @@ describe('récit et timeline (05 § 1.2)', () => {
   test('assert_narrative_matches_structured : le texte et structuredContent citent les mêmes essais, coûts et durées', async () => {
     const client = await connect(a.key);
     const sim = simulateFirstInvestigation(a, 60);
-    const created = await call(client, 'create_api', { description: 'zz_test livres bis', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const created = await call(client, 'create_api', { description: 'zz_test livres bis', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     const { apiId } = await sim;
     const trials = simulateTrials(a, 60);
     const validated = await call(client, 'validate_schema', { api_id: apiId, wait_seconds: 5 });
@@ -316,7 +316,7 @@ describe('récit et timeline (05 § 1.2)', () => {
   test('récit localisé : ?lang=fr rend le récit en français, structuredContent inchangé (codes) et message_locale', async () => {
     const client = await connect(a.key, { lang: 'fr' });
     const sim = simulateFirstInvestigation(a, 40);
-    const created = await call(client, 'create_api', { description: 'zz_test livres fr', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const created = await call(client, 'create_api', { description: 'zz_test livres fr', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     await sim;
     const body = text(created);
     expect(body).toMatch(/^Enquête /m);
@@ -334,7 +334,7 @@ describe('récit et timeline (05 § 1.2)', () => {
     expect(byName(prompts)).toEqual(byName(asked));
     expect(byName(prompts)).not.toEqual(byName(english));
     const sim = simulateFirstInvestigation(frAccount, 40);
-    const created = await call(own, 'create_api', { description: 'zz_test livres du compte fr', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const created = await call(own, 'create_api', { description: 'zz_test livres du compte fr', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     await sim;
     const body = text(created);
     expect(body).toMatch(/^Enquête /m);
@@ -349,7 +349,7 @@ describe('récit et timeline (05 § 1.2)', () => {
   test('get_run d’une enquête : le même récit (timeline non vide) ; run ordinaire : phrase et JSON, timeline vide', async () => {
     const client = await connect(a.key);
     const sim = simulateFirstInvestigation(a, 30);
-    const created = await call(client, 'create_api', { description: 'zz_test livres get_run', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const created = await call(client, 'create_api', { description: 'zz_test livres get_run', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     const { runId } = await sim;
     const got = await call(client, 'get_run', { run_id: runId });
     expect((got.structuredContent as { timeline: unknown[] }).timeline.length).toBeGreaterThan(3);
@@ -367,7 +367,7 @@ describe('récit et timeline (05 § 1.2)', () => {
   test('B ne lit ni l’enquête ni le récit de A (INV12) : get_run répond comme pour un objet inexistant', async () => {
     const client = await connect(a.key);
     const sim = simulateFirstInvestigation(a, 20);
-    await call(client, 'create_api', { description: 'zz_test livres privé', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    await call(client, 'create_api', { description: 'zz_test livres privé', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     const { runId } = await sim;
     const other = await call(await connect(b.key), 'get_run', { run_id: runId });
     expect(other.isError).toBe(true);
@@ -381,7 +381,7 @@ describe('progression (05 § 1.2) : notifications/progress facultatif, stricteme
       const client = await connect(a.key, { era });
       const seen: { progress: number; message?: string }[] = [];
       const sim = simulateFirstInvestigation(a, 150);
-      const created = await call(client, 'create_api', { description: `zz_test livres progress ${era}`, url: 'https://zz-books.example/catalogue/', wait_seconds: 5 }, { onprogress: (p) => seen.push(p) });
+      const created = await call(client, 'create_api', { description: `zz_test livres progress ${era}`, url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 }, { onprogress: (p) => seen.push(p) });
       await sim;
       expect(created.isError ?? false).toBe(false);
       expect(seen.length, JSON.stringify(seen)).toBeGreaterThanOrEqual(3);
@@ -394,7 +394,7 @@ describe('progression (05 § 1.2) : notifications/progress facultatif, stricteme
   test('sans jeton de progression, aucune notification n’est envoyée et le résultat est le même', async () => {
     const client = await connect(a.key, { era: 'modern' });
     const sim = simulateFirstInvestigation(a, 40);
-    const created = await call(client, 'create_api', { description: 'zz_test livres sans progress', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const created = await call(client, 'create_api', { description: 'zz_test livres sans progress', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     await sim;
     expect(text(created)).toMatch(/^1\. Access report:/m);
   });
@@ -408,7 +408,7 @@ describe('élicitation de la validation du schéma (05 § 1.3) : question plate,
     const client = await connect(a.key, { era: 'modern', elicit });
     const sim = simulateFirstInvestigation(a, 40);
     const before = await count("SELECT count(*) FROM runs WHERE owner_id = $1 AND kind = 'investigation'", [a.user.id]);
-    const result = call(client, 'create_api', { description: 'zz_test livres élicitation oui', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const result = call(client, 'create_api', { description: 'zz_test livres élicitation oui', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     const { apiId } = await sim;
     // Après l'acceptation, le client rejoue l'appel : validate_schema crée l'enquête d'essais ; le worker simulé la termine.
     const trials = simulateTrials(a, 40);
@@ -433,7 +433,7 @@ describe('élicitation de la validation du schéma (05 § 1.3) : question plate,
     const client = await connect(a.key, { era: 'modern', elicit });
     const sim = simulateFirstInvestigation(a, 40);
     const before = await count("SELECT count(*) FROM runs WHERE owner_id = $1 AND kind = 'investigation'", [a.user.id]);
-    const final = await call(client, 'create_api', { description: 'zz_test livres élicitation non', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const final = await call(client, 'create_api', { description: 'zz_test livres élicitation non', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     const { apiId } = await sim;
     expect(elicit.seen).toHaveLength(1);
     expect(text(final)).toContain('did not validate the schema');
@@ -449,7 +449,7 @@ describe('élicitation de la validation du schéma (05 § 1.3) : question plate,
     const client = await connect(a.key, { era: 'modern', elicit });
     const sim = simulateFirstInvestigation(a, 40);
     const before = await count("SELECT count(*) FROM runs WHERE owner_id = $1 AND kind = 'investigation'", [a.user.id]);
-    const final = await call(client, 'create_api', { description: 'zz_test livres élicitation modifier', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const final = await call(client, 'create_api', { description: 'zz_test livres élicitation modifier', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     await sim;
     expect(text(final)).toContain('remark from the user, not from the site): zz_test renomme price en prix');
     expect(text(final)).toContain('Next step: adjust the schema to the remark');
@@ -460,7 +460,8 @@ describe('élicitation de la validation du schéma (05 § 1.3) : question plate,
   test('repli : client sans élicitation (ères 2025 et 2026-07-28), ou client 2025 sans état : awaiting_schema_validation et validate_schema', async () => {
     for (const client of [await connect(a.key, { era: 'modern' }), await connect(a.key), await connect(a.key, { elicit: elicitBy(() => ({ action: 'accept', content: { decision: 'validate' } })) })]) {
       const sim = simulateFirstInvestigation(a, 30);
-      const result = await call(client, 'create_api', { description: 'zz_test livres repli', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+      // `force_new` : la même demande, répétée par trois clients, serait sinon reconnue (une demande, une enquête, UXI8).
+      const result = await call(client, 'create_api', { description: 'zz_test livres repli', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
       const { apiId } = await sim;
       expect(result.isError ?? false).toBe(false);
       expect(result.structuredContent).toMatchObject({ api_id: apiId, investigation_phase: 'awaiting_schema_validation', next_action: { tool: 'validate_schema' } });
@@ -473,12 +474,12 @@ describe('élicitation de la validation du schéma (05 § 1.3) : question plate,
     const elicit = elicitBy(() => ({ action: 'decline' }));
     const client = await connect(a.key, { era: 'modern', elicit });
     // Sans la case « j'ai lu » (17 § 11), auto_validate est refusé par la route REST : une erreur, jamais une question.
-    const refused = await call(client, 'create_api', { description: 'zz_test livres auto', url: 'https://zz-books.example/catalogue/', auto_validate: true, wait_seconds: 0 });
+    const refused = await call(client, 'create_api', { description: 'zz_test livres auto', url: 'https://zz-books.example/catalogue/', auto_validate: true, force_new: true, wait_seconds: 0 });
     expect(refused.isError).toBe(true);
     expect(text(refused)).toContain('responsible_use_ack_required');
     await withClient(srv.db.url, (c) => c.query("INSERT INTO responsible_use_acks (user_id, version) VALUES ($1, '2026-10-01') ON CONFLICT DO NOTHING", [a.user.id]));
     // L'enquête ne se termine pas pendant l'attente (aucun worker) : le résultat est « running », jamais une question.
-    const result = await call(client, 'create_api', { description: 'zz_test livres auto', url: 'https://zz-books.example/catalogue/', auto_validate: true, wait_seconds: 0 });
+    const result = await call(client, 'create_api', { description: 'zz_test livres auto', url: 'https://zz-books.example/catalogue/', auto_validate: true, force_new: true, wait_seconds: 0 });
     expect(elicit.seen).toHaveLength(0);
     expect(result.isError ?? false).toBe(false);
   });
@@ -492,7 +493,7 @@ describe('UX-04 / UX-07 : le récit porte la cause nommée d’un run arrêté (
       await stopRun(runId, api.id, 'instance_contact_missing', 'instance_contact_missing');
       const result = await call(await connect(party.key), 'get_run', { run_id: runId });
       const body = text(result);
-      expect(result.structuredContent).toMatchObject({ state: 'failed', status: 'action_requise', error: { code: 'instance_contact_missing', retryable: true } });
+      expect(result.structuredContent).toMatchObject({ state: 'action_required', status: 'action_requise', error: { code: 'instance_contact_missing', retryable: true } });
       expect(body).toContain('The run could not start (instance_contact_missing)');
       expect(body).toContain(actionTemplate(locale, 'instance_contact_missing'));
       expect(body).toContain('/settings/robot');
@@ -503,7 +504,7 @@ describe('UX-04 / UX-07 : le récit porte la cause nommée d’un run arrêté (
   test('create_api : enquête arrêtée pendant l’attente, le texte commence par l’état réel (UX-07) et le récit dit la cause dans la langue du compte', async () => {
     const client = await connect(frAccount.key);
     const before = await queuedInvestigations(frAccount);
-    const pending = call(client, 'create_api', { description: 'zz_test contact absent', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    const pending = call(client, 'create_api', { description: 'zz_test contact absent', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     const { runId, apiId } = await nextInvestigation(frAccount, 10_000, before);
     await stopRun(runId, apiId, 'instance_contact_missing', 'instance_contact_missing');
     const result = await pending;
@@ -519,7 +520,7 @@ describe('UX-04 / UX-07 : le récit porte la cause nommée d’un run arrêté (
     const client = await connect(a.key);
     const before = await queuedInvestigations(a);
     const sim = simulateFirstInvestigation(a, 30, before);
-    await call(client, 'create_api', { description: 'zz_test prix absent', url: 'https://zz-books.example/catalogue/', wait_seconds: 5 });
+    await call(client, 'create_api', { description: 'zz_test prix absent', url: 'https://zz-books.example/catalogue/', auto_validate: false, force_new: true, wait_seconds: 5 });
     const { apiId } = await sim;
     const pending = call(client, 'validate_schema', { api_id: apiId, wait_seconds: 5 });
     const trial = await nextInvestigation(a, 10_000, before);

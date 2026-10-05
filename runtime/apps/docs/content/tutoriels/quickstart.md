@@ -152,8 +152,10 @@ Puis la création de l'API :
 ```bash
 curl -fsS -b cookies.txt -X POST http://localhost:3100/api/apis \
   -H 'content-type: application/json' -H 'origin: http://localhost:3100' \
-  -d '{"description":"Les produits du catalogue, avec titre et prix","url":"http://zz_test_ssr.localhost:4010/"}'
+  -d '{"description":"Les produits du catalogue, avec titre et prix","url":"http://zz_test_ssr.localhost:4010/","auto_validate":false}'
 ```
+
+Par défaut, SYM valide le schéma lui-même (`auto_validate` vaut `true`, ce qui exige d'avoir coché « j'ai lu » dans [Usage responsable](../explications/usage-responsable.md)) et s'arrête seulement sur une vraie ambiguïté. Ce tutoriel garde la porte du schéma (`"auto_validate":false`) pour que vous le voyiez avant les essais.
 
 L'agent enquête d'abord par un rapport d'accès (signaux d'usage, conditions du site), puis essaie les méthodes de la moins chère à la plus chère, et propose un schéma de sortie à valider. Une fois validé, l'API entre au catalogue et se rejoue à coût de code. Voir [Architecture](../explications/architecture.md).
 

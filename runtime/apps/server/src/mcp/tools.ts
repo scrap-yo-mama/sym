@@ -41,7 +41,7 @@ export const estimateTokens = (text: string): number => Math.ceil(text.length / 
  */
 export const MCP_INSTRUCTIONS =
   'SYM turns a data request on a website into a reusable API. To get data: list_apis first; if an API fits, call it ' +
-  '(run_api or its api_<slug> tool); otherwise create_api, then show the proposed schema to the user before validate_schema. ' +
+  '(run_api or its api_<slug> tool); otherwise create_api: SYM validates the schema and returns the items; put its question, if any, to the user, then validate_schema with choice. ' +
   'Before create_api, put what you found in brief. ' +
   'Status: sain = healthy, warning = works, mention the warning; bloquee = the site refused automated access: tell the user, ' +
   'never retry, never look for another way in; erreur and action_requise come with what_to_do. ' +
@@ -65,7 +65,7 @@ const EXECUTE: Annotations = { readOnlyHint: false, destructiveHint: false, open
 
 const UUID_STRING = { type: 'string', format: 'uuid', maxLength: 36 } as const;
 const SLUG = { type: 'string', minLength: 1, maxLength: 63 } as const;
-const WAIT = { type: 'integer', minimum: 0, maximum: 25, description: 'Seconds to wait for the result (default and max 25); beyond, poll get_run.' } as const;
+const WAIT = { type: 'integer', minimum: 0, maximum: 50, description: 'Seconds to wait for the result (default and max: the instance limit, 50 at most); beyond, poll get_run with wait_seconds.' } as const;
 
 /**
  * Enveloppe `RunResult` (05 § 4.1) : sortie de toute exécution et `outputSchema` des outils `api_<slug>`. Items conformes
@@ -77,8 +77,6 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
   required: ['run_id', 'state', 'status', 'items', 'total', 'truncated', 'next_cursor', 'message', 'next_action', 'poll_after_seconds', 'console_url'],
   properties: {
     run_id: { type: 'string' },
-    api_id: { type: 'string', description: 'create_api only: the created API.' },
-    slug: { type: 'string', description: 'create_api only: the slug of the created API.' },
     state: { type: 'string' },
     status: { type: 'string' },
     items: { type: 'array', maxItems: 20, items: { type: 'object' } },
@@ -92,7 +90,19 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
     error: { type: 'object', description: 'Named cause of a failed run: { code, message, what_to_do, retryable }.' },
     next_action: { type: ['object', 'null'] },
     poll_after_seconds: { type: ['integer', 'null'] },
-    progress: { type: ['object', 'null'], description: 'While an investigation runs: phase, strategies tried, and a sentence on what SYM is doing.' },
+    progress: { type: ['object', 'null'], description: 'While an investigation runs: step (1 to 4), label, phase, strategies tried, and a sentence on what SYM is doing.' },
+    // Bloc de résultat d'une enquête (03 § 10.2) : présent pour create_api, get_run et validate_schema d'une enquête.
+    api_id: { type: 'string' },
+    slug: { type: 'string' },
+    name: { type: 'string' },
+    existing: { type: 'boolean' },
+    phase: { type: 'string' },
+    question: { type: 'object', description: 'The single closed question SYM asks when state is awaiting_decision: reason, text, options[{ id, label }].' },
+    proposed_output_schema: { type: ['object', 'null'] },
+    fields_found: { type: 'array', items: { type: 'string' } },
+    items_total: { type: ['integer', 'null'] },
+    items_preview: { type: 'array', items: { type: 'object' } },
+    items_cursor: { type: ['string', 'null'] },
     timeline: { type: 'array' },
     attempts: { type: 'array' },
     cost: { type: 'object' },
@@ -149,7 +159,7 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     toolset: 'build',
     scope: 'apis:write',
     description:
-      'Create a new API from a description and a start URL: SYM investigates the site (access report, cheapest strategy first) and proposes an output schema. Show the proposed schema to the user, then call validate_schema. SYM does the extraction itself, every page included: do not fetch the site yourself; follow the run with get_run every poll_after_seconds. Use only when list_apis has no API that fits.',
+      'Create a new API from a description and a start URL: SYM investigates the site (access report, cheapest strategy first), validates the output schema itself and returns the items in the same conversation. SYM does the extraction itself, every page included: do not fetch the site yourself; follow the run with get_run every poll_after_seconds (with wait_seconds) until state is succeeded, and show the user the items SYM returns. Only if SYM asks a question (state awaiting_decision), put it to the user, then call validate_schema with choice. Use only when list_apis has no API that fits.',
     annotations: EXECUTE,
     inputSchema: {
       type: 'object',
@@ -160,7 +170,9 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
         url: { type: 'string', minLength: 1, maxLength: 2048, description: 'Absolute start URL (https://…).' },
         example_output: { type: ['object', 'array'], description: 'Optional example of one item or a list of items.' },
         brief: BRIEF_SCHEMA,
-        auto_validate: { type: 'boolean', description: 'Validate the proposed schema without asking (default false).' },
+        auto_validate: { type: 'boolean', default: true, description: 'SYM validates the proposed schema itself (default true) and stops only on a real doubt; false: stop at the schema.' },
+        name: { type: 'string', minLength: 1, maxLength: 80, description: 'Short name of the API (optional); SYM proposes one otherwise.' },
+        force_new: { type: 'boolean', default: false, description: 'Create a new API even if the same request is already known (same URL and description, running or done in the last 24 hours).' },
         network_policy: NETWORK_POLICY,
         wait_seconds: WAIT,
       },
@@ -191,11 +203,7 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     name: 'validate_schema',
     toolset: 'build',
     scope: 'apis:write',
-    description:
-      'Validate the output schema proposed by create_api, after the user agreed. SYM then tries the strategies, cheapest first, and returns a RunResult. ' +
-      'To apply corrections: send the corrected output_schema (rename, add or remove properties; each property description says what goes in the field) ' +
-      'and, for what a schema cannot say (which list, a prefix to drop), the user\'s instructions. source_id limits the trials to one source of the reconnaissance. ' +
-      'schema_validation in the answer shows the retained schema, what changed and what was not applied.',
+    description: 'Answer the question SYM asked (state awaiting_decision) with choice, the id of the option the user picked (default continue), or validate a corrected output_schema (each property description says what goes in the field; instructions carry what a schema cannot say, source_id limits the trials to one source of the reconnaissance; schema_validation in the answer shows the retained schema, what changed and what was not applied). SYM then tries the strategies, cheapest first, and returns the items.',
     annotations: EXECUTE,
     inputSchema: {
       type: 'object',
@@ -206,6 +214,7 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
         output_schema: { type: 'object', description: 'Corrected JSON Schema of one item (optional).' },
         instructions: { type: 'string', maxLength: 2000, description: 'Corrections from the user, in plain words (optional).' },
         source_id: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,64}$', description: 'Id of a source found by the reconnaissance (optional).' },
+        choice: { type: 'string', maxLength: 64, description: 'Id of the option the user picked among those of the question (continue validates the proposed schema).' },
         wait_seconds: WAIT,
       },
     },
@@ -235,9 +244,9 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     name: 'get_run',
     toolset: 'run',
     scope: 'runs:read',
-    description: 'Read the state and first items of one of your runs (RunResult). Poll it after a running answer, every poll_after_seconds; progress says what SYM is doing.',
+    description: 'Read the state and first items of one of your runs (RunResult). Poll it after a running answer, every poll_after_seconds, with wait_seconds: SYM holds the call until the run ends or needs a decision; progress says what SYM is doing.',
     annotations: READ,
-    inputSchema: { type: 'object', additionalProperties: false, required: ['run_id'], properties: { run_id: UUID_STRING } },
+    inputSchema: { type: 'object', additionalProperties: false, required: ['run_id'], properties: { run_id: UUID_STRING, wait_seconds: WAIT } },
     outputSchema: RUN_RESULT_SCHEMA,
   },
   {

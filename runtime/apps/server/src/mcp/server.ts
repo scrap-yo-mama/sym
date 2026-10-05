@@ -42,14 +42,16 @@ import type { ServerContext } from '../context.js';
 import { readApiById, readApiBySlug } from '../rest/apis.js';
 import { datasetItems } from '../rest/export.js';
 import { runErrorFor } from '../rest/run-error.js';
-import { buildRunResult, decodeItemsCursor, itemsCursor, readRunRow, runMetadataForAdmin } from '../rest/runs.js';
+import { buildRunResult, decodeItemsCursor, itemsCursor, readRunRow, runMetadataForAdmin, type RunRow } from '../rest/runs.js';
 import { investigationProgressOf, type TimelineEntry } from '../rest/timeline.js';
 import { waitSecondsOf } from '../rest/shared.js';
 import { UUID } from '../routes/account-helpers.js';
 import { createdView, waitApiLeavesEnquete } from '../routes/apis.js';
 import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
+import { journeyTexts } from './journey-texts.js';
 import { attemptsOf, createdSummary, renderNarrative, schemaValidationLines } from './narrative.js';
 import { createProgressSink, progressMessage, type ProgressSink } from './progress.js';
+import { blockHead, buildResultBlock, firstRunDue, firstRunGateOf, readFirstRunRequested, type FirstRunGate, milestoneText, PROGRESS_HEARTBEAT_MS, questionOf, readFirstRun, readGate, stepOf, type Question, type ResultBlock } from './result-block.js';
 import { promptBody, PROMPT_ARG_SCHEMAS } from './prompts.js';
 import { actionTemplate, blockedTemplate, elicitationCatalog, parseLang, PROMPT_ARGS, PROMPT_MENU, PROMPT_NAMES, type McpLocale } from './texts.js';
 import {
@@ -266,14 +268,6 @@ const query = (params: Record<string, string | number | undefined>): string => {
 
 /** Lignes du récit du dossier (19c § 7) produites par le code : gabarits fermés, jamais un texte du dossier. */
 const narrativeLines = (v: unknown): string[] => (Array.isArray(v) ? v.filter((l): l is string => typeof l === 'string') : []);
-const pickBrief = (v: Json): Json => Object.fromEntries(['brief_version', 'brief_report'].filter((k) => v[k] !== undefined).map((k) => [k, v[k]]));
-/** Récit du dossier en tête du texte d'une réponse (sans dossier, aucune ligne de plus). */
-const withBriefLines = (result: CallToolResult, lines: readonly string[]): CallToolResult => {
-  const first = result.content[0];
-  if (lines.length === 0 || first === undefined || first.type !== 'text') return result;
-  return { ...result, content: [{ ...first, text: `${lines.join('\n')}\n${first.text}` }, ...result.content.slice(1)] };
-};
-
 /** RunResult d'un run de l'acteur (lecture sous RLS) ; null si inexistant ou d'autrui. */
 async function runResultOf(ctx: ServerContext, actor: Actor, runId: string): Promise<Json | null> {
   if (!UUID.test(runId)) return null;
@@ -314,20 +308,100 @@ async function executionAnswer(ctx: ServerContext, caller: McpCaller, call: Call
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const ACTIVE_RUN = new Set<string>(['queued', 'running', 'waiting_tunnel']);
+
+/** Fenêtre après la fin d'une enquête pendant laquelle SYM lance son premier run complet (le client suit l'enquête dans ce délai). */
+const FIRST_RUN_WINDOW_MS = 15 * 60_000;
+
+/** Premiers runs en cours de création, par API : un seul lancement même si deux appels se croisent (instance unique, 03 § 2). La marque durable est le run lui-même (`readFirstRun`). */
+const firstRunLaunches = new Map<string, Promise<void>>();
+
+/** `read` : lecture pure, ne lance jamais ; `launch` : outil d'écriture, lance si demandé et sous le seuil de coût ; `confirmed` : la personne a confirmé le coût. */
+type FirstRunMode = 'read' | 'launch' | 'confirmed';
+type FirstRunState = { run: RunRow | null; gate: FirstRunGate | null; pending: boolean };
+const NO_FIRST_RUN: FirstRunState = { run: null, gate: null, pending: false };
+
+/**
+ * Premier run complet d'une enquête réussie (03 § 2 : « les éléments sont dans le dataset du run », toutes les pages) : l'enquête
+ * a validé la stratégie sur un échantillon de pages ; SYM lance lui-même le run ordinaire qui lit tout, avec la même clé (mêmes
+ * gardes, mêmes plafonds, canal `mcp`). Idempotent : un run ordinaire déjà lancé après l'enquête est repris, jamais doublé.
+ * Il ne part que d'un outil d'écriture (`create_api`, `validate_schema`), pour une enquête qui l'a demandé (`request.first_run`,
+ * posé par `create_api`), et jamais au-delà de `CONFIRM_ABOVE_USD` ni sans prix connu : la porte de coût est alors rendue.
+ */
+async function ensureFirstRun(ctx: ServerContext, caller: McpCaller, inv: RunRow, mode: FirstRunMode): Promise<FirstRunState> {
+  if (inv.kind !== 'investigation' || inv.state !== 'succeeded' || inv.finished_at === null) return NO_FIRST_RUN;
+  const api = await withActor(ctx.pool, caller.actor, (db) => readApiById(db, inv.api_id));
+  if (api === null || api.owner_id !== caller.actor.userId) return NO_FIRST_RUN;
+  const existing = await readFirstRun(ctx, caller.actor, api.id, inv.finished_at);
+  if (existing !== null) return { run: existing, gate: null, pending: false };
+  if (!firstRunDue(inv, api) || !(await readFirstRunRequested(ctx, caller.actor, api.id))) return NO_FIRST_RUN;
+  const gate = mode === 'confirmed' ? null : await firstRunGateOf(ctx, caller.actor, api, ctx.confirmAboveUsd ?? 0.1);
+  if (gate !== null) return { run: null, gate, pending: false };
+  // Seulement dans la foulée de l'enquête : relire plus tard une très ancienne enquête ne lance jamais un run (et sa dépense).
+  if (mode === 'read' || (mode === 'launch' && Date.now() - inv.finished_at.getTime() > FIRST_RUN_WINDOW_MS)) return { run: null, gate: null, pending: true };
+  let launch = firstRunLaunches.get(api.id);
+  if (launch === undefined) {
+    launch = (async () => {
+      if ((await readFirstRun(ctx, caller.actor, api.id, inv.finished_at!)) !== null) return;
+      await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(api.slug)}/runs${query({ wait: 0 })}`, { input: {} });
+    })()
+      .catch((error: unknown) => caller.request.log.warn({ err: error }, 'mcp : premier run complet non lancé'))
+      .finally(() => firstRunLaunches.delete(api.id));
+    firstRunLaunches.set(api.id, launch);
+  }
+  await launch;
+  return { run: await readFirstRun(ctx, caller.actor, api.id, inv.finished_at), gate: null, pending: false };
+}
+
+/** Pose (`true`) ou lève (`false`) la demande de premier run complet de l'enquête de cette API, par son propriétaire. */
+async function setFirstRunRequested(ctx: ServerContext, caller: McpCaller, apiId: string, requested: boolean): Promise<void> {
+  await withActor(ctx.pool, caller.actor, (db) =>
+    db.query("UPDATE apis SET investigation = jsonb_set(investigation, '{request,first_run}', $3::jsonb) WHERE id = $1 AND owner_id = $2 AND investigation #> '{request}' IS NOT NULL", [apiId, caller.actor.userId, JSON.stringify(requested)]),
+  );
+}
+
 /**
  * Attend un run jusqu'à son état terminal, une pause ou l'échéance (comme l'attente de l'API REST) ; pour une enquête, chaque
  * relève publie la progression (numéro du dernier événement de `investigation_events`, strictement croissant) si le client
- * l'a demandée. Rend la dernière lecture (null si le run a disparu).
+ * l'a demandée, et un battement toutes les `progressHeartbeatMs` sans événement (03 § 5 : un jalon libellé toutes les 5 s au
+ * plus, dans la langue de la personne). Une enquête réussie est suivie de son premier run complet (`ensureFirstRun`, lancé seulement si
+ * `launchFirstRun`, donc par un outil d'écriture), attendu dans la même échéance. Rend la dernière lecture du run d'enquête (null si le run a disparu).
  */
-async function waitRun(ctx: ServerContext, caller: McpCaller, call: Call, runId: string, seconds: number) {
+async function waitRun(ctx: ServerContext, caller: McpCaller, call: Call, runId: string, seconds: number, launchFirstRun = false) {
   const deadline = Date.now() + seconds * 1000;
+  const beatMs = ctx.rest.progressHeartbeatMs ?? PROGRESS_HEARTBEAT_MS;
+  let lastSeq = 0;
+  let beats = 0;
+  let sentAt = Date.now();
   for (;;) {
     const row = await withActor(ctx.pool, caller.actor, (db) => readRunRow(db, runId));
     if (row !== null && call.progress !== null && row.kind === 'investigation') {
       const progress = await investigationProgressOf(ctx, caller.actor, runId, row.api_slug ?? '');
-      if (progress !== null) await call.progress(progress.seq, progressMessage(progress.timeline, call.locale));
+      if (progress !== null && progress.seq > lastSeq) {
+        lastSeq = progress.seq;
+        beats = 0;
+        sentAt = Date.now();
+        await call.progress(progress.seq, progressMessage(progress.timeline, call.locale));
+      } else if (Date.now() - sentAt >= beatMs && (!isTerminalRunState(row.state) || row.state === 'succeeded')) {
+        // Battement : rien de nouveau dans le journal, mais SYM travaille ; le jalon courant et la durée mesurée, jamais une durée devinée.
+        const phase = (await withActor(ctx.pool, caller.actor, (db) => db.query<{ investigation_phase: string | null }>('SELECT investigation_phase FROM apis WHERE id = $1', [row.api_id]))).rows[0]?.investigation_phase ?? null;
+        const { step } = stepOf(row.state === 'succeeded' ? 'testing' : phase);
+        beats += 1;
+        sentAt = Date.now();
+        await call.progress(lastSeq + beats / 1000, journeyTexts(call.locale).heartbeat(step, milestoneText(step, call.locale), Math.max(0, Math.round((Date.now() - row.created_at.getTime()) / 1000))));
+      }
     }
-    if (row === null || isTerminalRunState(row.state) || row.paused_at !== null || Date.now() >= deadline || call.signal.aborted) return row;
+    const finished = row === null || isTerminalRunState(row.state) || row.paused_at !== null;
+    if (row !== null && row.state === 'succeeded' && row.kind === 'investigation' && !call.signal.aborted) {
+      // Premier run complet : lancé ici, puis attendu tant qu'il reste de l'attente.
+      const first = (await ensureFirstRun(ctx, caller, row, launchFirstRun ? 'launch' : 'read')).run;
+      if (first !== null && ACTIVE_RUN.has(first.state) && first.paused_at === null && Date.now() < deadline) {
+        await sleep(Math.min(ctx.rest.pollMs, Math.max(1, deadline - Date.now())));
+        continue;
+      }
+      return row;
+    }
+    if (finished || Date.now() >= deadline || call.signal.aborted) return row;
     await sleep(Math.min(ctx.rest.pollMs, Math.max(1, deadline - Date.now())));
   }
 }
@@ -384,8 +458,9 @@ async function validationOf(ctx: ServerContext, actor: Actor, apiId: string): Pr
  * proposition, ce qui n'est pas appliqué (jamais tu), consignes reçues et transmises au rôle `investigate`, source choisie ; et
  * la même chose en texte, dans la langue de la personne, en tête de la réponse.
  */
-function withSchemaValidation(result: CallToolResult, validated: { schema: unknown; validation: Json } | null, locale: McpLocale): CallToolResult {
-  if (validated === null || result.isError === true) return result;
+function withSchemaValidation(output: ToolOutput, validated: { schema: unknown; validation: Json } | null, locale: McpLocale): ToolOutput {
+  if (validated === null || !('content' in output) || output.isError === true) return output;
+  const result = output as CallToolResult;
   const v = validated.validation;
   const instructions = typeof v['instructions'] === 'string' ? v['instructions'] : null;
   const block: Json = {
@@ -400,6 +475,22 @@ function withSchemaValidation(result: CallToolResult, validated: { schema: unkno
   const first = result.content[0];
   const content = first !== undefined && first.type === 'text' ? [{ ...first, text: `${lines.join('\n')}\n\n${first.text}` }, ...result.content.slice(1)] : [{ type: 'text' as const, text: lines.join('\n') }, ...result.content];
   return { ...result, content, structuredContent: { ...(result.structuredContent ?? {}), schema_validation: block } };
+}
+
+/** Question unique et fermée d'une porte (03 § 4 et § 9) : une option à valeurs stables (identifiants), une remarque libre. */
+function questionElicitation(question: Question, locale: McpLocale) {
+  const c = elicitationCatalog(locale);
+  return inputRequired.elicit({
+    message: question.text,
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        choice: { type: 'string', title: c.decision, enum: question.options.map((o) => o.id), enumNames: question.options.map((o) => o.label) },
+        remark: { type: 'string', title: c.remark, maxLength: 500 },
+      },
+      required: ['choice'],
+    } as never,
+  });
 }
 
 /** Remarque de la personne : texte court, sans caractères de contrôle ; une donnée, jamais une consigne. */
@@ -419,6 +510,65 @@ function checkBrief(ctx: ServerContext, brief: unknown): CallToolResult | null {
   return out.ok ? null : toolError(out.code, out.message);
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Une demande, une enquête (03 § 9, UXI8)
+// ---------------------------------------------------------------------------------------------------------------
+
+/** URL comparée sans fragment, avec hôte en minuscules, sans barre finale ni ordre de paramètres. */
+function normalizeUrl(raw: string): string {
+  const url = URL.parse(raw);
+  if (url === null) return raw.trim();
+  url.hash = '';
+  url.searchParams.sort();
+  url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+  return url.href;
+}
+
+/** Description comparée sans casse ni espaces superflus (l'empreinte de la demande). */
+const normalizeText = (text: string): string => text.trim().replace(/\s+/g, ' ').toLowerCase();
+
+/** Demandes en cours d'enregistrement : deux appels identiques qui se croisent n'en créent qu'une (instance unique). */
+const requestChain = new Map<string, Promise<void>>();
+
+/** Prend la file de cette demande ; la fonction rendue la libère. */
+async function lockRequest(key: string): Promise<() => void> {
+  const previous = requestChain.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => mine);
+  requestChain.set(key, tail);
+  await previous;
+  return () => {
+    release();
+    if (requestChain.get(key) === tail) requestChain.delete(key);
+  };
+}
+
+/**
+ * API du propriétaire née de la même demande, dont l'enquête est en cours ou finie depuis moins de 24 h (une enquête annulée par
+ * la personne ne compte pas) : son dernier run d'enquête. Lecture sous RLS ET filtrée sur le propriétaire (jamais l'API d'autrui, même en visibilité instance).
+ */
+async function findExistingRequest(ctx: ServerContext, actor: Actor, url: string, description: string): Promise<{ apiId: string; runId: string } | null> {
+  const rows = await withActor(ctx.pool, actor, async (db) =>
+    (
+      await db.query<{ api_id: string; run_id: string; url: string | null; description: string | null }>(
+        `SELECT a.id AS api_id, r.id AS run_id, a.investigation #>> '{request,url}' AS url, a.investigation #>> '{request,description}' AS description
+         FROM apis a
+         JOIN LATERAL (SELECT id, state, finished_at FROM runs WHERE api_id = a.id AND kind = 'investigation' ORDER BY created_at DESC LIMIT 1) r ON true
+         WHERE a.owner_id = $1 AND a.investigation IS NOT NULL AND r.state <> 'cancelled' AND (r.finished_at IS NULL OR r.finished_at > now() - interval '24 hours')
+         ORDER BY a.created_at DESC LIMIT 50`,
+        [actor.userId],
+      )
+    ).rows,
+  );
+  const wantedUrl = normalizeUrl(url);
+  const wantedText = normalizeText(description);
+  const hit = rows.find((r) => r.url !== null && r.description !== null && normalizeUrl(r.url) === wantedUrl && normalizeText(r.description) === wantedText);
+  return hit === undefined ? null : { apiId: hit.api_id, runId: hit.run_id };
+}
+
 type Handler = (args: Json, caller: McpCaller, call: Call) => Promise<ToolOutput>;
 
 function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
@@ -426,60 +576,205 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
   /** Lecture directe sous RLS : la permission de rôle de la route REST équivalente s'applique aussi. */
   const allowed = (caller: McpCaller, permission: Permission) => can(caller.actor.role, permission);
 
-  /**
-   * Valide le schéma proposé (sans correction ou corrigé), attend les essais et rend le RunResult : le récit des essais, leur
-   * progression si le client l'a demandée.
-   */
-  const validateFlow = async (apiId: string, body: Json, args: Json, caller: McpCaller, call: Call): Promise<ToolOutput> => {
-    const answer = await rest(ctx, caller, 'POST', `/api/apis/${apiId}/validate-schema${query({ wait: 0 })}`, body);
-    const runId = answer.body['run_id'];
-    if ((answer.status === 202 || answer.status === 200) && typeof runId === 'string') {
-      // Ce qui a été validé (constat Barnes), lu AVANT l'attente : schéma retenu, changements, non appliqué, consignes, source.
-      const validated = await validationOf(ctx, caller.actor, apiId);
-      await waitRun(ctx, caller, call, runId, wait(args));
-      const envelope = await runResultOf(ctx, caller.actor, runId);
-      if (envelope !== null) return withSchemaValidation(runResultAnswer(envelope, call), validated, call.locale);
+  /** Suite d'un parcours selon l'état du bloc (spec 03 § 2 et § 8) : toujours un outil SYM, jamais un appel au site. */
+  const nextActionOf = (block: ResultBlock, apiStatus: string): Json | null => {
+    const runId = String(block.fields['run_id']);
+    switch (block.state) {
+      case 'running':
+        return { tool: 'get_run', args: { run_id: runId, wait_seconds: ctx.rest.maxWaitSeconds } };
+      case 'awaiting_decision':
+        // Jamais de `choice` ici : la réponse à une question est un acte de la personne, pas une suite suivie à la lettre.
+        return { tool: 'validate_schema', args: { api_id: block.fields['api_id'] } };
+      case 'succeeded':
+        // Premier run complet demandé mais pas lancé : la suite est l'outil d'écriture, jamais une lecture.
+        if (block.firstRunPending) return { tool: 'validate_schema', args: { api_id: block.fields['api_id'] } };
+        return block.items?.cursor !== undefined && block.items.cursor !== null && block.datasetId !== null ? { tool: 'get_items', args: { dataset_id: block.datasetId, cursor: block.items.cursor } } : null;
+      case 'failed':
+        // Après un échec : la suite proposée par SYM (ré-enquête par le propriétaire), jamais un nouveau create_api (UXI8).
+        return apiStatus === 'erreur' ? { tool: 'run_api', args: { slug: block.fields['slug'], force_investigate: true } } : null;
+      default:
+        return null;
     }
-    return restError(answer);
   };
 
-  /** Réponse de `create_api` : récit en texte, mêmes faits en données (`timeline`, `attempts`, `cost`, `console_url`), schéma proposé. */
-  const createdAnswer = (view: Json, envelope: Json, call: Call, extra: { note?: string; schemaRemark?: boolean; userRemark?: string } = {}): CallToolResult => {
-    const timeline = envelope['timeline'] as TimelineEntry[];
-    const consoleUrl = `${ctx.publicUrl}/apis/${String(view['slug'])}`;
-    const cost = envelope['cost'] as { total_usd?: number | null };
-    const error = errorOf(view) ?? errorOf(envelope);
-    const { brief_narrative: briefNarrative, ...viewData } = view;
-    const briefLines = narrativeLines(briefNarrative);
-    const structured: Json = {
-      ...viewData,
-      timeline,
-      attempts: attemptsOf(timeline),
-      cost: envelope['cost'],
-      console_url: consoleUrl,
-      next_action: envelope['next_action'] ?? null,
-      message_locale: call.locale,
-      ...(extra.userRemark === undefined ? {} : { user_remark: extra.userRemark }),
+  /** Schéma proposé et question d'une API dont l'enquête attend une décision ; null sinon (ou API d'autrui). */
+  const awaitingExtras = async (apiId: string, caller: McpCaller, call: Call): Promise<Json | null> => {
+    if (!UUID.test(apiId)) return null;
+    const api = await withActor(ctx.pool, caller.actor, (db) => readApiById(db, apiId));
+    if (api === null || api.owner_id !== caller.actor.userId || api.investigation_phase !== 'awaiting_schema_validation') return null;
+    const run = await withActor(ctx.pool, caller.actor, async (db) => (await db.query<{ id: string }>("SELECT id FROM runs WHERE api_id = $1 AND kind = 'investigation' ORDER BY created_at DESC LIMIT 1", [apiId])).rows[0]);
+    if (run === undefined) return null;
+    const view = (await createdView(ctx, caller.actor, apiId, run.id)) as unknown as Json;
+    const proposed = view['proposed_output_schema'];
+    if (proposed === null || proposed === undefined) return null;
+    const properties = (proposed as { properties?: Json }).properties;
+    const info = await readGate(ctx, caller.actor, apiId);
+    const question = questionOf(info.gate, call.locale);
+    return {
+      proposed_output_schema: proposed,
+      sample: view['sample'] ?? [],
+      fields_found: info.columns ?? (properties === undefined ? [] : Object.keys(properties)),
+      ...(question === null ? {} : { question }),
+      next_action: { tool: 'validate_schema', args: { api_id: apiId } },
     };
+  };
+
+  type AnswerOptions = { launchFirstRun?: boolean; existing?: boolean; note?: string; schemaRemark?: boolean; userRemark?: string; created?: boolean; briefLines?: readonly string[]; nextAction?: Json | null };
+
+  /**
+   * Réponse d'un run d'ENQUÊTE (create_api, get_run, validate_schema, ré-enquête) : le bloc de résultat de 03 § 10.2 dans
+   * `structuredContent`, et en texte le succès chiffré avec son aperçu (ou la question unique), le récit, les identifiants.
+   * Le premier run complet qui suit une enquête réussie n'est lancé ici que par un outil d'écriture (`opts.launchFirstRun`) ; get_run reste une lecture.
+   */
+  const investigationAnswer = async (runId: string, caller: McpCaller, call: Call, opts: AnswerOptions = {}): Promise<ToolOutput> => {
+    const row = await withActor(ctx.pool, caller.actor, (db) => readRunRow(db, runId));
+    if (row === null) return notFoundError();
+    const first = await ensureFirstRun(ctx, caller, row, opts.launchFirstRun === true ? 'launch' : 'read');
+    const block = await buildResultBlock({ ctx, actor: caller.actor, locale: call.locale, runId, existing: opts.existing === true, firstRun: first.run, firstRunGate: first.gate, firstRunPending: first.pending });
+    const base = await runResultOf(ctx, caller.actor, runId);
+    if (base === null) return notFoundError();
+    if (block === null) return runResultAnswer(base, call);
+    const apiId = String(block.fields['api_id']);
+    const awaiting = block.state === 'awaiting_decision';
+    const view = awaiting || opts.created === true ? ((await createdView(ctx, caller.actor, apiId, runId)) as unknown as Json) : null;
+    const { brief_narrative: briefNarrative, ...viewData } = view ?? {};
+    const status = String(base['status'] ?? '');
+    const object = (v: unknown): Json => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Json) : {});
+    const proposed = awaiting && view !== null ? (view['proposed_output_schema'] ?? null) : null;
+    const envelope: Json = {
+      ...base,
+      // `state` est celui du parcours (03 § 10.2) ; l'état brut du run d'enquête reste lisible dans `run_state`.
+      run_state: base['state'],
+      ...block.fields,
+      progress: { ...object(base['progress']), ...object(block.fields['progress']) },
+      cost: { ...object(base['cost']), ...object(block.fields['cost']) },
+      ...(block.items === null ? {} : { items: block.items.preview, total: block.items.total, next_cursor: block.items.cursor, truncated: block.items.cursor !== null, dataset_id: block.datasetId }),
+      next_action: opts.nextAction !== undefined ? opts.nextAction : nextActionOf(block, status),
+      ...(proposed === null ? {} : { proposed_output_schema: proposed, sample: view!['sample'] ?? [], fields_found: block.proposedColumns ?? Object.keys(object(object(proposed)['properties'])) }),
+    };
+    const timeline = envelope['timeline'] as TimelineEntry[];
+    const consoleUrl = String(envelope['console_url']);
+    const cost = envelope['cost'] as { total_usd?: number | null };
+    const error = errorOf(view ?? {}) ?? errorOf(envelope);
+    const structured: Json = {
+      ...(view === null ? {} : viewData),
+      ...envelope,
+      attempts: attemptsOf(timeline),
+      message_locale: call.locale,
+      ...(opts.userRemark === undefined ? {} : { user_remark: opts.userRemark }),
+    };
+    const nextAction = envelope['next_action'] as { tool: string } | null;
     const narrative = renderNarrative(
       {
         timeline,
         totalUsd: cost?.total_usd ?? null,
-        state: String(envelope['state'] ?? ''),
+        state: block.state,
         error,
         consoleUrl,
-        nextAction: (envelope['next_action'] as { tool: string } | null) ?? null,
+        nextAction,
         pollAfterSeconds: typeof envelope['poll_after_seconds'] === 'number' ? envelope['poll_after_seconds'] : null,
-        ...(extra.schemaRemark === true ? { schemaRemark: true } : {}),
+        ...(opts.schemaRemark === true ? { schemaRemark: true } : {}),
       },
       call.locale,
     );
-    // Identifiants dans le texte (assert_text_only_sufficient) : un client qui n'affiche que `content` appelle la suite avec eux.
-    const ids = JSON.stringify({ api_id: view['api_id'], run_id: view['run_id'], slug: view['slug'], next_action: structured['next_action'], ...(error === null ? {} : { error }) });
-    // État réel de l'enquête (UX-07) en tête, pour le modèle ; puis le récit, dans la langue de la personne.
-    const headline = createdSummary(view);
-    const briefBlock = briefLines.length === 0 ? '' : `${briefLines.join('\n')}\n`;
-    return { content: [{ type: 'text', text: `${extra.note === undefined ? '' : `${extra.note}\n\n`}${briefBlock}${headline}\n\n${narrative}\n\n${ids}${schemaSection(view)}` }], structuredContent: structured };
+    const ids = JSON.stringify({ api_id: apiId, run_id: runId, slug: block.fields['slug'], next_action: nextAction, ...(error === null ? {} : { error }) });
+    const idsForItems = block.items?.cursor !== undefined && block.items.cursor !== null && block.datasetId !== null ? `dataset_id ${block.datasetId}, cursor ${block.items.cursor}` : null;
+    const t = journeyTexts(call.locale);
+    // Aide pour le modèle (anglais) : l'état réel d'abord (UX-07), la cause nommée quand l'enquête a échoué (UX-04).
+    const lead =
+      block.state === 'succeeded' || (block.state === 'awaiting_decision' && block.question !== null)
+        ? ''
+        : block.state === 'running' && opts.created === true
+          ? `API ${String(block.fields['slug'])} created; the investigation is running: call get_run with run_id and wait_seconds until state is succeeded.`
+          : opts.created === true && view !== null
+            ? createdSummary(view)
+            : error === null
+              ? ''
+              : String(base['message'] ?? '');
+    const briefLines = opts.briefLines ?? narrativeLines(briefNarrative);
+    const parts = [
+      opts.note,
+      opts.existing === true ? t.existing : undefined,
+      briefLines.length === 0 ? undefined : briefLines.join('\n'),
+      blockHead(block, call.locale, { nextItemsIds: idsForItems }) || undefined,
+      lead === '' ? undefined : lead,
+      narrative,
+      ids,
+      proposed === null ? undefined : schemaSection(view!).trimStart(),
+    ].filter((p): p is string => p !== undefined && p !== '');
+    return { content: [{ type: 'text', text: parts.join('\n\n') }], structuredContent: structured };
+  };
+
+  /** Valide le schéma proposé (sans correction ou corrigé), attend les essais et rend le bloc de résultat. */
+  const validateFlow = async (apiId: string, body: Json, args: Json, caller: McpCaller, call: Call): Promise<ToolOutput> => {
+    // Consignes de l'utilisateur et source choisie (constat Barnes) : transmises quelle que soit la voie (schéma corrigé ou choix).
+    const corrections: Json = {};
+    for (const key of ['instructions', 'source_id'] as const) if (args[key] !== undefined) corrections[key] = args[key];
+    const answer = await rest(ctx, caller, 'POST', `/api/apis/${apiId}/validate-schema${query({ wait: 0 })}`, { ...corrections, ...body });
+    const runId = answer.body['run_id'];
+    if ((answer.status === 202 || answer.status === 200) && typeof runId === 'string') {
+      // Ce qui a été validé (constat Barnes), lu AVANT l'attente : schéma retenu, changements, non appliqué, consignes, source.
+      const validated = await validationOf(ctx, caller.actor, apiId);
+      await waitRun(ctx, caller, call, runId, wait(args), true);
+      return withSchemaValidation(await investigationAnswer(runId, caller, call, { launchFirstRun: true }), validated, call.locale);
+    }
+    return restError(answer);
+  };
+
+  /**
+   * Suite d'une enquête déjà validée dont le premier run complet est demandé mais pas lancé : porte de coût (confirmation explicite,
+   * `continue` ou `cancel`, jamais par défaut) ou simple reprise (`validate_schema` sans question lance le run). Null : rien de tel.
+   */
+  const chooseFirstRun = async (apiId: string, choice: string | undefined, args: Json, caller: McpCaller, call: Call): Promise<ToolOutput | null> => {
+    if (!UUID.test(apiId)) return null;
+    const api = await withActor(ctx.pool, caller.actor, (db) => readApiById(db, apiId));
+    if (api === null || api.owner_id !== caller.actor.userId || api.investigation_phase === 'awaiting_schema_validation') return null;
+    const latest = await withActor(ctx.pool, caller.actor, async (db) => {
+      const id = (await db.query<{ id: string }>("SELECT id FROM runs WHERE api_id = $1 AND kind = 'investigation' ORDER BY created_at DESC LIMIT 1", [apiId])).rows[0]?.id;
+      return id === undefined ? null : readRunRow(db, id);
+    });
+    if (latest === null) return null;
+    const state = await ensureFirstRun(ctx, caller, latest, 'read');
+    if (state.gate === null && !state.pending) return null;
+    const t = journeyTexts(call.locale);
+    const valid = state.gate === null ? ['continue'] : ['continue', 'cancel'];
+    if (state.gate !== null && choice === undefined) return toolError('invalid_input', t.choice.required(valid.join(', ')));
+    if (choice !== undefined && !valid.includes(choice)) return toolError('invalid_input', t.choice.unknown(valid.join(', ')));
+    if (choice === 'cancel') {
+      await setFirstRunRequested(ctx, caller, apiId, false);
+      return investigationAnswer(latest.id, caller, call, { note: t.choice.declined, created: true, nextAction: null });
+    }
+    // Coût confirmé (ou aucune porte) : le premier run complet part, attendu dans l'échéance.
+    await ensureFirstRun(ctx, caller, latest, 'confirmed');
+    await waitRun(ctx, caller, call, latest.id, wait(args));
+    return investigationAnswer(latest.id, caller, call);
+  };
+
+  /**
+   * Réponse à la question unique (03 § 4 et § 9)
+ : « continuer » valide le schéma proposé et lance les essais ; les autres
+   * options ne lancent rien ici : « ne rien lancer » s'arrête, les autres repartent d'une nouvelle demande précisée
+   * (`next_action: create_api` avec `force_new`), puisque l'ancienne reste dans le catalogue.
+   */
+  const choose = async (apiId: string, choice: string | undefined, remark: string, args: Json, caller: McpCaller, call: Call): Promise<ToolOutput> => {
+    const settled = await chooseFirstRun(apiId, choice, args, caller, call);
+    if (settled !== null) return settled;
+    const info = await readGate(ctx, caller.actor, apiId);
+    const question = questionOf(info.gate, call.locale);
+    const valid = question === null ? ['continue'] : question.options.map((o) => o.id);
+    const t = journeyTexts(call.locale);
+    // Une question posée : la personne répond, la réponse n'a pas de valeur par défaut (UXI9 : jamais de dépense confirmée par omission).
+    if (question !== null && choice === undefined) return toolError('invalid_input', t.choice.required(valid.join(', ')));
+    if (choice === undefined || choice === 'continue') return validateFlow(apiId, {}, args, caller, call);
+    if (!valid.includes(choice)) return toolError('invalid_input', t.choice.unknown(valid.join(', ')));
+    // Dernier run d'enquête de l'API : le bloc de résultat (la question reste lisible) accompagne la réponse.
+    const latest = await withActor(ctx.pool, caller.actor, async (db) => (await db.query<{ id: string }>("SELECT id FROM runs WHERE api_id = $1 AND kind = 'investigation' ORDER BY created_at DESC LIMIT 1", [apiId])).rows[0]);
+    if (latest === undefined) return notFoundError();
+    if (choice === 'cancel') return investigationAnswer(latest.id, caller, call, { note: t.choice.declined, created: true, nextAction: null });
+    const hint = choice === 'other_list' ? (call.locale === 'fr' ? 'prends l’autre liste de la page' : 'take the other list of the page') : choice === 'look_details' ? (call.locale === 'fr' ? 'regarde aussi les pages de détail' : 'also look at the detail pages') : remark === '' ? (call.locale === 'fr' ? 'selon ma remarque' : 'as I remarked') : remark;
+    const description = `${info.description} (${hint})`.slice(0, 2000);
+    const next = info.url === null ? null : { tool: 'create_api', args: { description, url: info.url, force_new: true } };
+    return investigationAnswer(latest.id, caller, call, { note: t.choice.rerun(hint), created: true, nextAction: next });
   };
 
   /** Tour suivant d'une élicitation : valider (essais lancés), modifier (rien lancé), refuser ou annuler (rien lancé). */
@@ -489,15 +784,17 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     if (api.investigation_phase !== 'awaiting_schema_validation') return toolError('not_awaiting_validation', 'cette API n’attend pas de validation de schéma');
     const answer = inputResponse(call.inputResponses, 'validate_schema');
     const c = elicitationCatalog(call.locale);
-    const decision = answer.kind === 'elicit' && answer.action === 'accept' ? answer.content?.['decision'] : undefined;
+    const accepted = answer.kind === 'elicit' && answer.action === 'accept';
+    // Question unique d'une porte (ambiguïté, coût) : la réponse porte l'identifiant de l'option choisie.
+    const picked = accepted ? answer.content?.['choice'] : undefined;
+    if (typeof picked === 'string') return choose(state.apiId, picked, cleanRemark(answer.kind === 'elicit' ? answer.content?.['remark'] : undefined), args, caller, call);
+    const decision = accepted ? answer.content?.['decision'] : undefined;
     if (decision === 'validate') return validateFlow(state.apiId, {}, args, caller, call);
-    const [view, envelope] = await Promise.all([createdView(ctx, caller.actor, state.apiId, state.runId), runResultOf(ctx, caller.actor, state.runId)]);
-    if (envelope === null) return notFoundError();
     if (decision === 'modify') {
       const remark = cleanRemark(answer.kind === 'elicit' ? answer.content?.['remark'] : undefined);
-      return createdAnswer(view as unknown as Json, envelope, call, { note: c.modifyAsked(remark), schemaRemark: true, userRemark: remark });
+      return investigationAnswer(state.runId, caller, call, { note: c.modifyAsked(remark), schemaRemark: true, userRemark: remark, created: true });
     }
-    return createdAnswer(view as unknown as Json, envelope, call, { note: c.declined });
+    return investigationAnswer(state.runId, caller, call, { note: c.declined, created: true });
   };
 
   const runApi = async (slug: string, input: Json, args: Json, caller: McpCaller, call: Call): Promise<ToolOutput> => {
@@ -507,12 +804,25 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       const runId = answer.body['run_id'];
       if ((answer.status === 202 || answer.status === 200) && typeof runId === 'string') {
         await waitRun(ctx, caller, call, runId, wait(args));
-        const envelope = await runResultOf(ctx, caller.actor, runId);
-        if (envelope !== null) return runResultAnswer(envelope, call);
+        return investigationAnswer(runId, caller, call);
       }
       return executionAnswer(ctx, caller, call, answer, runNextAction(slug), slug);
     }
-    const answer = await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(slug)}/runs${query({ wait: wait(args) })}`, { input });
+    return runAndWait(slug, { input }, wait(args), caller, call);
+  };
+
+  /**
+   * Lance un run ordinaire et l'attend jusqu'à `seconds` (jusqu'à 50, plus que le `wait` de la route REST, 25 au plus) : la
+   * route répond sans attendre, l'attente est ici (progression et annulation du client comprises).
+   */
+  const runAndWait = async (slug: string, payload: Json, seconds: number, caller: McpCaller, call: Call): Promise<ToolOutput> => {
+    const answer = await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(slug)}/runs${query({ wait: 0 })}`, payload);
+    const runId = answer.body['run_id'];
+    if ((answer.status === 202 || answer.status === 200) && typeof runId === 'string') {
+      if (seconds > 0) await waitRun(ctx, caller, call, runId, seconds);
+      const envelope = await runResultOf(ctx, caller.actor, runId);
+      if (envelope !== null) return runResultAnswer(envelope, call);
+    }
     return executionAnswer(ctx, caller, call, answer, runNextAction(slug), slug);
   };
 
@@ -521,49 +831,52 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       // Tour suivant d'une élicitation : l'API existe déjà, on ne la recrée pas.
       const resumed = decodeState(call.requestState);
       if (resumed !== null) return resumeSchemaDecision(resumed, args, caller, call);
-      const body: Json = { description: args['description'], url: args['url'] };
-      for (const key of ['example_output', 'auto_validate', 'network_policy', 'brief'] as const) if (args[key] !== undefined) body[key] = args[key];
-      // Création sans attente : l'attente (et la progression) sont ici, pour que le client voie l'enquête avancer.
-      const answer = await rest(ctx, caller, 'POST', `/api/apis${query({ wait: 0 })}`, body);
-      if (answer.status !== 201) return restError(answer);
-      // Récit du dossier (19c § 7) : gabarits fermés du code, en tête du texte ; `brief_report[]` dans structuredContent ; aucun texte du dossier.
-      const apiId = String(answer.body['api_id']);
-      const runId = String(answer.body['run_id']);
-      const row = await waitRun(ctx, caller, call, runId, wait(args));
+      const description = String(args['description']);
+      const url = String(args['url']);
+      // Une demande, une enquête (03 § 9, UXI8) : la même demande (propriétaire, URL normalisée, description) pendant une enquête ou
+      // dans les 24 h après sa fin rend l'API existante et son run, sans nouvelle dépense. `force_new` crée une nouvelle API.
+      const release = await lockRequest(`${caller.actor.userId}|${normalizeUrl(url)}|${normalizeText(description)}`);
+      let target: { apiId: string; runId: string; existing: boolean };
+      try {
+        const found = args['force_new'] === true ? null : await findExistingRequest(ctx, caller.actor, url, description);
+        if (found !== null) target = { ...found, existing: true };
+        else {
+          const body: Json = { description, url };
+          for (const key of ['example_output', 'auto_validate', 'network_policy', 'brief', 'name'] as const) if (args[key] !== undefined) body[key] = args[key];
+          // Création sans attente : l'attente (et la progression) sont ici, pour que le client voie l'enquête avancer.
+          const answer = await rest(ctx, caller, 'POST', `/api/apis${query({ wait: 0 })}`, body);
+          if (answer.status !== 201) return restError(answer);
+          // Le premier run complet suit cette demande-là seulement (créée par l'outil d'écriture) : drapeau durable dans la demande.
+          await setFirstRunRequested(ctx, caller, String(answer.body['api_id']), true);
+          target = { apiId: String(answer.body['api_id']), runId: String(answer.body['run_id']), existing: false };
+        }
+      } finally {
+        release();
+      }
+      const row = await waitRun(ctx, caller, call, target.runId, wait(args), true);
       // UX-07 : le worker clôt le run PUIS applique le statut (transaction suivante) : on attend (borné) qu'il en découle.
-      if (row?.state === 'failed') await waitApiLeavesEnquete(ctx, caller.actor, apiId, Date.now() + 2_000, call.signal);
-      const terminal = row !== null && isTerminalRunState(row.state);
-      // Validation automatique terminée : l'enveloppe RunResult (05 § 4.1).
-      if (args['auto_validate'] === true && terminal) {
-        const envelope = await runResultOf(ctx, caller.actor, runId);
-        if (envelope !== null) {
-          // Accusé du dossier aussi dans l'enveloppe RunResult : version, rapport et récit du code.
-          const { brief_narrative: runNarrative, ...runBrief } = ((await createdView(ctx, caller.actor, apiId, runId)) as unknown as Json);
-          const briefLines = narrativeLines(runNarrative);
-          // `api_id` et `slug` toujours (banc réel, passage 2) : le client suit l'API créée sans relire le run.
-          const identity: Json = { api_id: apiId, slug: runBrief['slug'] };
-          return withBriefLines(runResultAnswer(briefLines.length === 0 ? { ...envelope, ...identity } : { ...envelope, ...identity, ...pickBrief(runBrief) }, call), briefLines);
+      if (row?.state === 'failed') await waitApiLeavesEnquete(ctx, caller.actor, target.apiId, Date.now() + 2_000, call.signal);
+      // Décision due (ambiguïté réelle, coût au-delà du seuil, ou `auto_validate: false`) : élicitation si le client la déclare.
+      const api = await withActor(ctx.pool, caller.actor, (db) => readApiById(db, target.apiId));
+      if (api?.investigation_phase === 'awaiting_schema_validation' && row?.state === 'succeeded' && call.canElicit) {
+        const view = (await createdView(ctx, caller.actor, target.apiId, target.runId)) as unknown as Json;
+        if (view['proposed_output_schema'] !== null && view['proposed_output_schema'] !== undefined) {
+          const question = questionOf((await readGate(ctx, caller.actor, target.apiId)).gate, call.locale);
+          return inputRequired({
+            inputRequests: { validate_schema: question === null ? schemaElicitation(view, call.locale) : questionElicitation(question, call.locale) },
+            requestState: encodeState(target.apiId, target.runId),
+          });
         }
       }
-      const view = (await createdView(ctx, caller.actor, apiId, runId)) as unknown as Json;
-      const envelope = await runResultOf(ctx, caller.actor, runId);
-      if (envelope === null) {
-        const { brief_narrative: lone, ...rest } = view;
-        const loneLines = narrativeLines(lone);
-        return success(loneLines.length === 0 ? createdSummary(view) : `${loneLines.join('\n')}\n${createdSummary(view)}`, rest);
-      }
-      if (terminal && args['auto_validate'] !== true && view['investigation_phase'] === 'awaiting_schema_validation' && view['proposed_output_schema'] !== null && view['proposed_output_schema'] !== undefined && call.canElicit) {
-        return inputRequired({ inputRequests: { validate_schema: schemaElicitation(view, call.locale) }, requestState: encodeState(apiId, runId) });
-      }
-      return createdAnswer(view, envelope, call);
+      return investigationAnswer(target.runId, caller, call, { existing: target.existing, created: true, launchFirstRun: true });
     },
 
     async validate_schema(args, caller, call) {
       const apiId = String(args['api_id']);
       if (!UUID.test(apiId)) return notFoundError();
-      const body: Json = {};
-      for (const key of ['output_schema', 'instructions', 'source_id'] as const) if (args[key] !== undefined) body[key] = args[key];
-      return validateFlow(apiId, body, args, caller, call);
+      // Schéma corrigé : la personne a tranché, les essais partent. Sinon `choice` répond à la question unique (obligatoire quand une question est posée ; « continue » seulement sans question).
+      if (args['output_schema'] !== undefined) return validateFlow(apiId, { output_schema: args['output_schema'] }, args, caller, call);
+      return choose(apiId, typeof args['choice'] === 'string' ? args['choice'] : undefined, '', args, caller, call);
     },
 
     async run_api(args, caller, call) {
@@ -583,6 +896,11 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     async get_run(args, caller, call) {
       if (!allowed(caller, 'runs:read')) return toolError('forbidden', 'action non autorisée');
       const runId = String(args['run_id']);
+      // `wait_seconds` tenu (UX-14, 03 § 3) : retour avant l'échéance seulement si le run finit, ou attend une décision.
+      const seconds = typeof args['wait_seconds'] === 'number' ? waitSecondsOf(ctx, args['wait_seconds']) : 0;
+      const known = UUID.test(runId) ? await withActor(ctx.pool, caller.actor, (db) => readRunRow(db, runId)) : null;
+      if (known !== null && seconds > 0) await waitRun(ctx, caller, call, runId, seconds);
+      if (known !== null && known.kind === 'investigation') return investigationAnswer(runId, caller, call);
       const envelope = await runResultOf(ctx, caller.actor, runId);
       if (envelope !== null) return runResultAnswer(envelope, call);
       // assert_no_impersonation (05 § 4.4, INV5) : l'admin et l'owner lisent les métadonnées du run d'autrui (état, coût,
@@ -677,10 +995,13 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
       return success(`${apis.length} APIs${next === null ? '.' : '; more with cursor.'}`, { apis, next_cursor: next });
     },
 
-    async get_api(args, caller) {
+    async get_api(args, caller, call) {
       const answer = await rest(ctx, caller, 'GET', `/api/apis/${encodeURIComponent(String(args['slug']))}${query({ response_format: args['response_format'] as string | undefined })}`);
       if (answer.status !== 200) return restError(answer);
-      return success(`API ${String(answer.body['slug'])}: status ${String(answer.body['status'])}.`, answer.body);
+      // Enquête en attente d'une décision (UX-18, UX-36) : le schéma proposé, l'échantillon, les champs trouvés et la question
+      // unique, comme `get_run` (03 § 3). Propriétaire seulement (la porte et la proposition sont à lui).
+      const awaiting = await awaitingExtras(String(answer.body['id'] ?? ''), caller, call);
+      return success(`API ${String(answer.body['slug'])}: status ${String(answer.body['status'])}.${awaiting === null ? '' : ' A schema is waiting for a decision: see proposed_output_schema and question.'}`, awaiting === null ? answer.body : { ...answer.body, ...awaiting });
     },
 
     async report_problem(args, caller) {
@@ -858,8 +1179,7 @@ export async function buildMcpServer(ctx: ServerContext, caller: McpCaller, vers
           scopeChallenge: requireScopes('apis:run'),
         },
         guarded(api.name, async (input, call) => {
-          const answer = await rest(ctx, caller, 'POST', `/api/apis/${encodeURIComponent(api.slug)}/runs${query({ wait: waitSecondsOf(ctx, ctx.rest.maxWaitSeconds) })}`, { input });
-          return executionAnswer(ctx, caller, call, answer, runNextAction(api.slug), api.slug);
+          return all.run_api({ slug: api.slug, input }, caller, call);
         }),
       );
     }

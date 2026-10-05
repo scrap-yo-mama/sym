@@ -201,15 +201,17 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
       url: 'https://zz-test-books.example/catalogue',
       network_policy: { allow: ['direct'] },
       example_output: [{ title: 'x', price: 1 }],
+      auto_validate: false,
     });
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({ investigation_phase: 'access_check', proposed_output_schema: null, sample: [], access_report: null });
-    expect(created.body['slug']).toMatch(/^les-livres-catalogue-test/);
+    // UX-08 : slug court « objet-domaine » (les deux premiers mots utiles de la demande, puis le domaine), suffixé d'un aléa.
+    expect(created.body['slug']).toMatch(/^livres-catalogue-zz-test-books-[0-9a-f]{6}$/);
     const runId = created.body['run_id'] as string;
     expect(await count("SELECT count(*) FROM runs WHERE id = $1 AND kind = 'investigation' AND state = 'queued' AND job_id IS NOT NULL", [runId])).toBe(1);
     // L'exemple de sortie va dans l'entrée du run, jamais dans l'état de l'API (17 § 6).
     expect(await count("SELECT count(*) FROM runs WHERE id = $1 AND input -> 'example_output' IS NOT NULL", [runId])).toBe(1);
-    const second = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'Les livres du catalogue zz test, avec titre et prix', url: 'https://zz-test-books.example/' });
+    const second = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'Les livres du catalogue zz test, avec titre et prix', url: 'https://zz-test-books.example/', auto_validate: false });
     expect(second.body['slug']).not.toBe(created.body['slug']);
 
     const detail = await api(a, 'GET', `/api/apis/${created.body['slug']}`, '/api/apis/{slug}');
@@ -240,6 +242,7 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
       description: 'Les romans du catalogue zz domaine, avec titre',
       url: 'https://Romans.ZZ-Test-Domaine.example/liste?page=1',
       network_policy: { allow: ['direct'] },
+      auto_validate: false,
     });
     expect(created.status).toBe(201);
     const seeded = await seedApi(srv.db.url, a.user.id);
@@ -257,9 +260,9 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
   });
 
   test('POST /api/apis refuse : URL à jeton, politique réseau inconnue, corps hors schéma (400) ; validation automatique sans « j’ai lu » (403)', async () => {
-    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/?token=abc' })).body).toMatchObject({ error: { code: 'invalid_request' } });
-    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', network_policy: { allow: ['dc_proxy'], proxy_ids: { dc_proxy: 'zz-unknown' } } })).body).toMatchObject({ error: { code: 'invalid_network_policy' } });
-    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', zz_unknown: true })).status).toBe(400);
+    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/?token=abc', auto_validate: false })).body).toMatchObject({ error: { code: 'invalid_request' } });
+    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', auto_validate: false, network_policy: { allow: ['dc_proxy'], proxy_ids: { dc_proxy: 'zz-unknown' } } })).body).toMatchObject({ error: { code: 'invalid_network_policy' } });
+    expect((await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', auto_validate: false, zz_unknown: true })).status).toBe(400);
     expect((await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'https://zz-test.example/', auto_validate: true })).body).toMatchObject({ error: { code: 'responsible_use_ack_required' } });
   });
 
@@ -356,15 +359,15 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
 
   test('assert_slug_no_existence_hint : slug : jamais d’indice qu’une API invisible porte un slug (13 § 3) ; URL illisible → 400 invalid_request, jamais 500', async () => {
     // Une API PRIVÉE de B porte le slug que la description de A donnerait.
-    await seedApi(srv.db.url, b.user.id, { slug: 'oracle-probe-target' });
-    const taken = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle probe target', url: 'https://zz-test-slug.example/' });
-    const free = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle probe unused', url: 'https://zz-test-slug.example/' });
+    await seedApi(srv.db.url, b.user.id, { slug: 'oracle-target-zz-test-slug' });
+    const taken = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle target', url: 'https://zz-test-slug.example/', auto_validate: false });
+    const free = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'oracle unused', url: 'https://zz-test-slug.example/', auto_validate: false });
     expect(taken.status).toBe(201);
     expect(free.status).toBe(201);
     // Même forme, que la base soit prise par une API invisible ou libre : rien ne distingue les deux cas.
-    expect(taken.body['slug']).toMatch(/^oracle-probe-target-[0-9a-f]{6}$/);
-    expect(free.body['slug']).toMatch(/^oracle-probe-unused-[0-9a-f]{6}$/);
-    const bad = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'zz-pas-une-url' });
+    expect(taken.body['slug']).toMatch(/^oracle-target-zz-test-slug-[0-9a-f]{6}$/);
+    expect(free.body['slug']).toMatch(/^oracle-unused-zz-test-slug-[0-9a-f]{6}$/);
+    const bad = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz', url: 'zz-pas-une-url', auto_validate: false });
     expect(bad.status).toBe(400);
     expect(bad.body).toMatchObject({ error: { code: 'invalid_request' } });
   });
@@ -398,12 +401,12 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
   });
 
   test('assert_brief_optional (REST) : `POST /api/apis` accepte `brief` (05 § 4.2, 19c) ; sans dossier, aucune clé de dossier dans la réponse', async () => {
-    const without = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test sans dossier', url: 'https://zz-test-nobrief.example/' });
+    const without = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test sans dossier', url: 'https://zz-test-nobrief.example/', auto_validate: false });
     expect(without.status).toBe(201);
     expect(without.body).not.toHaveProperty('brief_report');
     expect(await count('SELECT count(*) FROM api_briefs WHERE api_id = $1', [without.body.api_id])).toBe(0);
     const brief = { v: 1, hints: [{ id: 'h1', kind: 'endpoint', value: 'GET https://zz-test-brief-rest.example/api/items', confidence: 'high' }], tried: [{ approach: 'fetch_html', outcome: 'empty' }] };
-    const withBrief = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test avec dossier', url: 'https://zz-test-brief-rest.example/', brief });
+    const withBrief = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test avec dossier', url: 'https://zz-test-brief-rest.example/', auto_validate: false, brief });
     expect(withBrief.status).toBe(201);
     expect(withBrief.body).toMatchObject({ brief_version: 1, brief_report: [{ id: 'h1', kind: 'endpoint', state: 'unverified', template: 'zz-test-brief-rest.example/api/items' }] });
     // Session console : `via = console` (une clé d'API : `rest`, MCP : `mcp`).
@@ -411,7 +414,7 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
   });
 
   test('assert_authz_matrix (dossier d’enquête) : GET /api/apis/{slug}/brief au propriétaire ; 404 uniforme pour un membre, même sur une API partagée d’instance', async () => {
-    const created = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test dossier partagé', url: 'https://zz-test-brief-shared.example/', visibility: 'instance', brief: { v: 1, notes: 'zz_test_brief_note_of_a', hints: [{ id: 'h1', kind: 'pitfall', value: 'zz_test_brief_value_of_a' }] } });
+    const created = await api(a, 'POST', '/api/apis?wait=0', '/api/apis', { description: 'zz_test dossier partagé', url: 'https://zz-test-brief-shared.example/', auto_validate: false, visibility: 'instance', brief: { v: 1, notes: 'zz_test_brief_note_of_a', hints: [{ id: 'h1', kind: 'pitfall', value: 'zz_test_brief_value_of_a' }] } });
     expect(created.status).toBe(201);
     const slug = created.body.slug as string;
     const mine = await api(a, 'GET', `/api/apis/${slug}/brief`, '/api/apis/{slug}/brief');
@@ -497,7 +500,7 @@ describe('assert_persistence_opt_in_only : PATCH /api/apis/{slug} (D-49, mode «
 
 describe('assert_responsible_use_ack : 17 § 11, case « j’ai lu » et API à données personnelles', () => {
   test('sans la case, la validation d’un schéma `x-personal` est refusée ; cochée, elle passe', async () => {
-    const created = await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annuaire', url: 'https://zz-test-people.example/' });
+    const created = await api(b, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annuaire', url: 'https://zz-test-people.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const personal = { type: 'object', additionalProperties: false, properties: { name: { type: 'string', 'x-personal': true } } };
     // Worker simulé : schéma proposé, phase d'attente de validation, run d'enquête terminé.
@@ -528,7 +531,7 @@ describe('assert_responsible_use_ack : 17 § 11, case « j’ai lu » et API à 
 describe('validation du schéma : case « j’ai lu » non contournable, ordre déclaré des colonnes', () => {
   /** API créée par `party`, worker simulé : schéma proposé, phase d'attente de validation, run d'enquête terminé. */
   const awaitingValidation = async (party: Party, proposed: Record<string, unknown>) => {
-    const created = await api(party, 'POST', '/api/apis', '/api/apis', { description: 'zz_test validation du schéma', url: 'https://zz-test-schema.example/' });
+    const created = await api(party, 'POST', '/api/apis', '/api/apis', { description: 'zz_test validation du schéma', url: 'https://zz-test-schema.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     await withClient(srv.db.url, async (c) => {
       await c.query(
@@ -859,7 +862,7 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
 
   test('cancel d’une enquête sans worker (en file ou en pause) : l’API quitte `enquete` par la machine (transition 2), phase close', async () => {
     for (const paused of [false, true]) {
-      const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: `zz_test enquête annulée ${paused ? 'en pause' : 'en file'}`, url: 'https://zz-test-cancel.example/' });
+      const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: `zz_test enquête annulée ${paused ? 'en pause' : 'en file'}`, url: 'https://zz-test-cancel.example/', auto_validate: false });
       const runId = created.body['run_id'] as string;
       if (paused) expect((await api(a, 'POST', `/api/runs/${runId}/pause`, '/api/runs/{id}/pause')).status).toBe(202);
       const res = await api(a, 'POST', `/api/runs/${runId}/cancel`, '/api/runs/{id}/cancel');
@@ -874,7 +877,7 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
   });
 
   test('assert_cancel_reinvestigation_restores_status : cancel d’une RÉ-enquête d’une API saine : retour au statut d’avant (transition 21), stratégie gardée, run accepté ensuite (INV3)', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete annulee', url: 'https://zz-test-recancel.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete annulee', url: 'https://zz-test-recancel.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const slug = created.body['slug'] as string;
     // Worker simulé : première enquête conforme (stratégie v1), API saine.
@@ -897,7 +900,7 @@ describe('assert_run_cancel_pause_resume : annulation, pause, reprise (05 § 4.4
   });
 
   test('cancel d’une enquête : annulation et transition au MÊME COMMIT ; si la transition échoue, rien n’est écrit (jamais `enquete` sans run)', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annulation atomique', url: 'https://zz-test-atomic-cancel.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test annulation atomique', url: 'https://zz-test-atomic-cancel.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const runId = created.body['run_id'] as string;
     expect(apiId).toMatch(/^[0-9a-f-]{36}$/);
@@ -996,7 +999,7 @@ describe('aperçu des règles résolues (19 § 2, 19b § 2, tâche 2.10)', () =>
 
 describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () => {
   test('investigate : 19/20 depuis sain, 18 depuis bloquee, 17 depuis action_requise ; 409 si une enquête tourne ; demande inconnue → 409', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete', url: 'https://zz-test-re.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete', url: 'https://zz-test-re.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const slug = created.body['slug'] as string;
     expect((await api(a, 'POST', `/api/apis/${slug}/investigate`, '/api/apis/{slug}/investigate', {})).body).toMatchObject({ error: { code: 'investigation_in_progress' } });
@@ -1019,7 +1022,7 @@ describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () 
   });
 
   test('investigate : transition et enquête au MÊME COMMIT ; l’enquête refusée ne laisse jamais l’API en `enquete` sans run', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete atomique', url: 'https://zz-test-re-atomic.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test reenquete atomique', url: 'https://zz-test-re-atomic.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const slug = created.body['slug'] as string;
     // Première enquête terminée, API saine ; la demande gardée devient illisible (refusée par startInvestigation).
@@ -1042,7 +1045,7 @@ describe('ré-enquête, versions et chronologie (05 § 4.2, 06 § 2, INV3)', () 
   });
 
   test('assert_blocked_reinvestigation_human_only : clé d’API sur une API `bloquee` → 403 human_confirmation_required, aucune transition, aucun run (04 § 6, transition 18)', async () => {
-    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test bloquee par cle', url: 'https://zz-test-blocked-key.example/' });
+    const created = await api(a, 'POST', '/api/apis', '/api/apis', { description: 'zz_test bloquee par cle', url: 'https://zz-test-blocked-key.example/', auto_validate: false });
     const apiId = created.body['api_id'] as string;
     const slug = created.body['slug'] as string;
     await withClient(srv.db.url, async (c) => {

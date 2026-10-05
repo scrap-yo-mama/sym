@@ -6,7 +6,7 @@ import pg from 'pg';
 import { pino } from 'pino';
 import { describe, expect, test } from 'vitest';
 import { loadWorkerConfig } from '../config.js';
-import { INVESTIGATION_LLM_ROLES, productionExecutorFactory } from './factory.js';
+import { confirmAboveUsdFromEnv, INVESTIGATION_LLM_ROLES, productionExecutorFactory } from './factory.js';
 
 const logger = pino({ level: 'silent' });
 const checked = { status: 'ok' as const, version: 1, fingerprint: 'zz_test' };
@@ -151,5 +151,14 @@ describe('productionExecutorFactory', () => {
 
   test('rôles de l’enquête : sans `judge` (résolu à part, erreurs ignorées) — un rôle judge illisible ne fait jamais échouer l’enquête', () => {
     expect([...INVESTIGATION_LLM_ROLES]).toEqual(['investigate', 'extract', 'agent']);
+  });
+});
+
+describe('CONFIRM_ABOVE_USD (lot A du CDC UX, 09 § 9)', () => {
+  test('défaut 0,10 $ ; valeur lue ; valeur invalide ou hors bornes : le défaut', () => {
+    expect(confirmAboveUsdFromEnv({})).toBe(0.1);
+    expect(confirmAboveUsdFromEnv({ CONFIRM_ABOVE_USD: ' 0.25 ' })).toBe(0.25);
+    expect(confirmAboveUsdFromEnv({ CONFIRM_ABOVE_USD: '0' })).toBe(0);
+    for (const bad of ['', 'abc', '-1', '101', 'NaN']) expect(confirmAboveUsdFromEnv({ CONFIRM_ABOVE_USD: bad }), bad).toBe(0.1);
   });
 });

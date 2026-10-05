@@ -18,7 +18,7 @@ function filled() {
 describe('saisie', () => {
   test('saisie minimale valide : description nettoyée, URL, politique réseau directe', () => {
     const { build, errors } = filled();
-    expect(build()).toEqual({ description: 'Titres des annonces', url: 'https://www.exemple.test/liste', network_policy: { allow: ['direct'] } });
+    expect(build()).toEqual({ description: 'Titres des annonces', url: 'https://www.exemple.test/liste', network_policy: { allow: ['direct'] }, auto_validate: false });
     expect(errors.value).toEqual({});
   });
 

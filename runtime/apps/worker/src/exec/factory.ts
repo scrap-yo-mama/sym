@@ -10,6 +10,7 @@ import { briefConfigFromEnv } from '@runtime/core';
 import { costCapsFromEnv, DomainPacer, rejectionThresholdsFromEnv, type SandboxEngine } from '@runtime/core';
 import { SsrfGuard, ssrfPolicyFromEnv, startEgressProxy, type EgressProxy } from '@runtime/core/net';
 import { STAGEHAND_VERSION, StagehandEngine } from '@runtime/agent';
+import { confirmAboveUsdFromEnv } from '@runtime/core/investigation';
 import { identityFromEnv, instanceContactEnvInvalid, resolveIdentifyInstance, resolveInstanceContact } from '@runtime/core/access';
 import { PgPacingStore, publishRobotEngine, readIdentifyInstanceSetting, readInstanceContactSetting, readLlmSettings, scheduleRunJudge, secretStore } from '@runtime/db';
 import { createLlmClient, llmConfigFromSettings, roleProblems, roleTarget, type LlmConfig, type LlmNote } from '@runtime/llm';
@@ -32,6 +33,7 @@ import { createStrategyRuntime, type AgentPorts } from './strategy-executor.js';
  * Rôles résolus pour l'enquête (schéma, prix des couples E4 et E6). Le rôle `judge` n'en fait PAS partie (revue 2.12) :
  * il est résolu à part (`judgeLlm`), et une erreur de ses réglages n'empêche jamais l'enquête.
  */
+export { confirmAboveUsdFromEnv };
 export const INVESTIGATION_LLM_ROLES = ['investigate', 'extract', 'agent'] as const;
 
 /** Version du prompt du moteur : celui de Stagehand, non modifié (mesuré tel quel au spike 0.6a). */
@@ -256,6 +258,8 @@ export function productionExecutorFactory(env: Readonly<Record<string, string | 
       strategy,
       // Dossier d'enquête (2.14) : bornes BRIEF_* (sondes, part du budget, mémoire négative, budget du prompt).
       briefConfig: briefConfigFromEnv(process.env),
+      // Coût annoncé avant dépense (CDC UX, U1.9) : au-delà de `CONFIRM_ABOVE_USD`, la validation automatique attend la confirmation.
+      confirmAboveUsd: confirmAboveUsdFromEnv(process.env),
       // Session requise ou tunnel seul (04 §4) : étape 0 et reconnaissance par l'extension du propriétaire.
       tunnel,
       agentic: true,

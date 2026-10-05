@@ -20,6 +20,7 @@ import {
   type PersistencePolicy,
 } from '@runtime/core';
 import { briefConfigFromEnv, type BriefConfig } from '@runtime/core';
+import { confirmAboveUsdFromEnv } from '@runtime/core/investigation';
 import { ssrfPolicyFromEnv, type SsrfPolicy } from '@runtime/core/net';
 import { supportedLocales } from './i18n.js';
 import type { McpConfig } from './mcp/runtime.js';
@@ -67,6 +68,8 @@ export type ServerConfig = {
   /** Serveur MCP (tâche 3.2, 05 § 1 et § 3). */
   mcp: McpConfig;
   /** Dossier d'enquête (tâche 2.14, 19c § 9.2) : variables `BRIEF_*` bornées. */
+  /** `CONFIRM_ABOVE_USD` : seuil de dépense estimée au-delà duquel une confirmation précède tout run facturé lancé par SYM. */
+  confirmAboveUsd: number;
   brief?: BriefConfig;
   /**
    * Mode « SYM ne lâche pas » (2.16, D-49) : `PERSISTENCE_*` (14 § 2), mêmes valeurs que le worker. Le serveur s'en sert
@@ -136,7 +139,7 @@ function loadMcpConfig(env: NodeJS.ProcessEnv, publicUrl: string): McpConfig {
 
 /** Bornes de l'API REST (05 § 2, 14 § 2). */
 type RestConfig = {
-  /** `MAX_WAIT_SECONDS` (défaut 25) : plafond du paramètre `wait` (REST, MCP). */
+  /** `MAX_WAIT_SECONDS` (défaut 50) : plafond du paramètre `wait` (REST, MCP). */
   maxWaitSeconds: number;
   /** `MAX_CONCURRENT_RUNS` (défaut 50, à valider) : runs actifs de l'instance au-delà desquels la création répond 429 `queue_full`. */
   maxConcurrentRuns: number;
@@ -337,7 +340,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     tunnel: loadTunnelConfig(env, databaseUrl),
     persistence,
     rest: {
-      maxWaitSeconds: positiveInteger(env, 'MAX_WAIT_SECONDS', 25, 25),
+      maxWaitSeconds: positiveInteger(env, 'MAX_WAIT_SECONDS', 50, 50),
       maxConcurrentRuns: positiveInteger(env, 'MAX_CONCURRENT_RUNS', 50, 100_000),
       maxActiveRunsPerUser: positiveInteger(env, 'MAX_ACTIVE_RUNS_PER_USER', 20, 100_000),
       maxRunsPerKeyPerMinute: positiveInteger(env, 'MAX_RUNS_PER_KEY_PER_MINUTE', 60, 100_000),
@@ -345,5 +348,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     },
     mcp: loadMcpConfig(env, publicUrl),
     brief: briefConfigFromEnv(env),
+    confirmAboveUsd: confirmAboveUsdFromEnv(env),
   };
 }

@@ -361,4 +361,37 @@ const jobsGroupedSite: SiteFactory = () => {
   };
 };
 
-export const CASE_SITES: SiteFactory[] = [books, searchGuarded, htmlList, cataloguePages, tablePages, wikiTable, agencyDupes, jobsGroupedSite];
+// ---------------------------------------------------------------- lot A du CDC UX : deux listes comparables sur la même page
+/** Biens « à vendre » et biens « vendus » dans les données de la même page : deux tableaux comparables, champs différents (`multiple_lists`). */
+export const TWO_LISTS_SALE = 12;
+export const TWO_LISTS_SOLD = 10;
+const twoLists: SiteFactory = () => {
+  const forSale = Array.from({ length: TWO_LISTS_SALE }, (_, k) => {
+    const n = k + 1;
+    return { reference: `ZZV${pad(n, 3)}`, title: `Maison Zztest n°${pad(n, 3)} à vendre`, price: 150_000 + n * 7_000, surface: 80 + n * 3 };
+  });
+  const sold = Array.from({ length: TWO_LISTS_SOLD }, (_, k) => {
+    const n = k + 1;
+    return { sale_id: `ZZS${pad(n, 3)}`, label: `Maison Zztest vendue n°${pad(n, 3)}`, sold_on: `2025-${pad(1 + (n % 12), 2)}-1${n % 9}`, buyer: `Acquereur zz${pad(n, 2)}` };
+  });
+  const data = { props: { pageProps: { forSale, sold, page: 1 } }, page: '/biens', query: {}, buildId: 'zz_test_build', isFallback: false };
+  return {
+    id: 'two_lists',
+    lot: 'cases',
+    description: `Lot A du CDC UX : deux listes comparables dans les données de la même page (${TWO_LISTS_SALE} biens à vendre : référence, titre, prix, surface ; ${TWO_LISTS_SOLD} biens vendus : identifiant, libellé, date de vente, acquéreur), sans pagination`,
+    hosts: ['zz_test_two_lists.localhost'],
+    smoke: { path: '/biens/', status: 200 },
+    handle(req) {
+      if (req.path === '/biens/' || req.path === '/biens') {
+        const items = (list: { title?: string; label?: string }[]): string => list.map((i) => `<li>${esc(i.title ?? i.label ?? '')}</li>`).join('');
+        return html(
+          200,
+          page('Biens Zztest', `<h1>Nos biens (zz_test)</h1><section><h2>À vendre</h2><ul>${items(forSale)}</ul></section><section><h2>Vendus</h2><ul>${items(sold)}</ul></section>`, `<script id="__NEXT_DATA__" type="application/json">${safeJson(data)}</script>`),
+        );
+      }
+      return html(404, page('Introuvable', '<h1>Introuvable</h1>'));
+    },
+  };
+};
+
+export const CASE_SITES: SiteFactory[] = [books, searchGuarded, htmlList, cataloguePages, tablePages, wikiTable, agencyDupes, jobsGroupedSite, twoLists];

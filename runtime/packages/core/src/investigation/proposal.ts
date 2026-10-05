@@ -115,6 +115,10 @@ export const INVESTIGATION_PROPOSAL_SCHEMA = {
     // les filtre par l'ensemble autorisé (`applyRulePlan`) ; ils ne peuvent rien élargir.
     plan: { type: ['array', 'null'], maxItems: 24, items: RULE_PLAN_COUPLE },
     excluded: { type: ['array', 'null'], maxItems: 24, items: RULE_PLAN_COUPLE },
+    // Ambiguïté réelle (lot A du CDC UX, `ambiguity.ts`) : facultatifs, `null` ou absents dans le cas général. Le code vérifie chaque
+    // affirmation (existence, taille et champs de la liste ; noms absents du schéma) avant de poser la moindre question.
+    unmatched_fields: { type: ['array', 'null'], maxItems: 8, items: { type: 'string', pattern: FIELD_NAME } },
+    other_lists: { type: ['array', 'null'], maxItems: 4, items: { type: 'string', pattern: '^c[0-9]{1,2}$' } },
   },
 } as const;
 
@@ -134,6 +138,10 @@ export type InvestigationProposal = {
   readonly sources: readonly ProposalSource[];
   readonly plan?: readonly ProposalCouple[] | null;
   readonly excluded?: readonly ProposalCouple[] | null;
+  /** Champs que la demande nomme et qu'aucun gisement ne porte (noms en snake_case) ; sert `requested_field_missing`. */
+  readonly unmatched_fields?: readonly string[] | null;
+  /** Autres gisements aussi pertinents pour la demande que ceux des sources ; sert `multiple_lists`. */
+  readonly other_lists?: readonly string[] | null;
 };
 
 /** Plafond dur de pages d'une stratégie proposée (`hard_max_pages`, 04b §2). */

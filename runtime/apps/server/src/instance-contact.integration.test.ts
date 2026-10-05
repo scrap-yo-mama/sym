@@ -69,7 +69,7 @@ afterAll(async () => {
 describe('UX-04 : create_api vérifie le contact d’instance avant de créer', () => {
   test('MCP : refus instance_contact_missing avec message, what_to_do et retryable ; ni API ni run créés', async () => {
     const before = { apis: await count('apis'), runs: await count('runs') };
-    const result = await call('create_api', { description: 'zz_test citations', url: 'https://zz-test-quotes.example/', wait_seconds: 0 });
+    const result = await call('create_api', { description: 'zz_test citations', url: 'https://zz-test-quotes.example/', auto_validate: false, wait_seconds: 0 });
     expect(result.isError).toBe(true);
     expect(result).not.toHaveProperty('structuredContent');
     const body = JSON.parse(result.content[0]!.text!) as Record<string, unknown>;
@@ -80,7 +80,7 @@ describe('UX-04 : create_api vérifie le contact d’instance avant de créer', 
 
   test('REST : 409 instance_contact_missing, même message, what_to_do et retryable ; rien n’est créé', async () => {
     const before = { apis: await count('apis'), runs: await count('runs') };
-    const res = await rest('POST', '/api/apis', { description: 'zz_test citations', url: 'https://zz-test-quotes.example/' });
+    const res = await rest('POST', '/api/apis', { description: 'zz_test citations', url: 'https://zz-test-quotes.example/', auto_validate: false });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: { code: 'instance_contact_missing', message: CONTACT_MISSING.message, retryable: true } });
     expect(String((res.json() as { error: { what_to_do: unknown } }).error.what_to_do)).toContain('/settings/robot');
@@ -108,13 +108,13 @@ describe('UX-04 : create_api vérifie le contact d’instance avant de créer', 
   test('UX-05 : contact posé mais invalide (variable du worker ou réglage) → 409 instance_contact_missing qui dit de le corriger, jamais « renseigne »', async () => {
     await publish(null, true);
     try {
-      const res = await rest('POST', '/api/apis', { description: 'zz_test contact invalide', url: 'https://zz-test-bad.example/' });
+      const res = await rest('POST', '/api/apis', { description: 'zz_test contact invalide', url: 'https://zz-test-bad.example/', auto_validate: false });
       expect(res.statusCode).toBe(409);
       const error = (res.json() as { error: { code: string; message: string; what_to_do: string } }).error;
       expect(error.code).toBe('instance_contact_missing');
       expect(error.message).toContain('invalide');
       expect(error.message).not.toMatch(/^Renseigne/);
-      const tool = await call('create_api', { description: 'zz_test contact invalide', url: 'https://zz-test-bad.example/', wait_seconds: 0 });
+      const tool = await call('create_api', { description: 'zz_test contact invalide', url: 'https://zz-test-bad.example/', auto_validate: false, wait_seconds: 0 });
       const body = JSON.parse(tool.content[0]!.text!) as Record<string, unknown>;
       expect(body).toMatchObject({ code: 'instance_contact_missing', message: error.message, retryable: true });
       expect(String(body['what_to_do'])).toContain('fix');
@@ -123,7 +123,7 @@ describe('UX-04 : create_api vérifie le contact d’instance avant de créer', 
     }
     await sql("INSERT INTO settings (key, value) VALUES ('instance_contact', '\"ops @zz-test.example\"'::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
     try {
-      const res = await rest('POST', '/api/apis', { description: 'zz_test réglage invalide', url: 'https://zz-test-bad.example/' });
+      const res = await rest('POST', '/api/apis', { description: 'zz_test réglage invalide', url: 'https://zz-test-bad.example/', auto_validate: false });
       expect(res.statusCode).toBe(409);
       expect((res.json() as { error: { message: string } }).error.message).toContain('invalide');
     } finally {
@@ -133,16 +133,16 @@ describe('UX-04 : create_api vérifie le contact d’instance avant de créer', 
 
   test('le contact posé (réglage de la console), la création passe ; retiré, elle est refusée de nouveau', async () => {
     await setContact('ops@zz-test.example');
-    const created = await rest('POST', '/api/apis', { description: 'zz_test avec contact', url: 'https://zz-test-ok.example/' });
+    const created = await rest('POST', '/api/apis', { description: 'zz_test avec contact', url: 'https://zz-test-ok.example/', auto_validate: false });
     expect(created.statusCode, created.body).toBe(201);
     await setContact(null);
-    expect((await rest('POST', '/api/apis', { description: 'zz_test sans contact', url: 'https://zz-test-ko.example/' })).statusCode).toBe(409);
+    expect((await rest('POST', '/api/apis', { description: 'zz_test sans contact', url: 'https://zz-test-ko.example/', auto_validate: false })).statusCode).toBe(409);
   });
 
   test('le contact fourni par l’environnement du worker (publié avec son moteur) suffit', async () => {
     await publish('mailto:env@zz-test.example');
     try {
-      expect((await rest('POST', '/api/apis', { description: 'zz_test contact env', url: 'https://zz-test-env.example/' })).statusCode).toBe(201);
+      expect((await rest('POST', '/api/apis', { description: 'zz_test contact env', url: 'https://zz-test-env.example/', auto_validate: false })).statusCode).toBe(201);
     } finally {
       await publish(null);
     }
@@ -164,7 +164,8 @@ describe('UX-04 / UX-05 : la cause d’un run arrêté pour contact absent', () 
     expect(result.isError).toBeUndefined();
     expect(result.structuredContent).toMatchObject({
       run_id: runId,
-      state: 'failed',
+      state: 'action_required',
+      run_state: 'failed',
       status: 'action_requise',
       error: { code: 'instance_contact_missing', message: CONTACT_MISSING.message, retryable: true },
     });
@@ -223,7 +224,7 @@ describe('UX-04 / UX-05 : la cause d’un run arrêté pour contact absent', () 
 describe('UX-07 : create_api dit l’état réel de l’enquête', () => {
   test('enquête en cours : état du run et phrase « running » cohérents', async () => {
     await setContact('ops@zz-test.example');
-    const result = await call('create_api', { description: 'zz_test en cours', url: 'https://zz-test-running.example/', wait_seconds: 0 });
+    const result = await call('create_api', { description: 'zz_test en cours', url: 'https://zz-test-running.example/', auto_validate: false, wait_seconds: 0 });
     expect(result.isError).toBeUndefined();
     expect(result.structuredContent).toMatchObject({ run_state: 'queued', status: 'enquete' });
     expect(textOf(result)).toContain('the investigation is running');
@@ -246,7 +247,7 @@ describe('UX-07 : create_api dit l’état réel de l’enquête', () => {
 
   test('enquête échouée pendant l’attente : état failed avec sa cause, jamais « running »', async () => {
     await setContact('ops@zz-test.example');
-    const pending = call('create_api', { description: 'zz_test échec pendant l’attente', url: 'https://zz-test-failed.example/', wait_seconds: 3 });
+    const pending = call('create_api', { description: 'zz_test échec pendant l’attente', url: 'https://zz-test-failed.example/', auto_validate: false, wait_seconds: 3 });
     // Le worker simulé arrête l'enquête (contact retiré entre-temps) et la machine passe l'API en action_requise.
     // Le run de CET appel, sans ambiguïté : celui de l’API créée avec cette description (les tests précédents laissent d’autres
     // enquêtes en file, faute de worker).

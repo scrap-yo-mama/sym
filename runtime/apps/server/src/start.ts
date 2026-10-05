@@ -60,7 +60,7 @@ export type PrepareOptions = {
   /** Passerelle tunnel : périodes de sondage, de revalidation et délai d'inactivité (tests ; défauts de production). */
   tunnel?: { pollMs?: number; revalidateMs?: number; idleMs?: number };
   /** API REST : relecture des attentes et du flux SSE, ping, plafond de flux (tests ; défauts de production). */
-  rest?: { pollMs?: number; pingMs?: number; maxStreamsPerUser?: number; revalidateMs?: number };
+  rest?: { pollMs?: number; pingMs?: number; maxStreamsPerUser?: number; revalidateMs?: number; progressHeartbeatMs?: number };
   /** Serveur MCP : relecture et plafonds des flux subscriptions/listen (tests ; défauts de production). */
   mcp?: McpListenTuning;
   /** Statut « modèle validé » : autre fichier que eval/validated-models.json (tests). */
@@ -209,6 +209,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
         pingMs: options.rest?.pingMs ?? 15_000,
         maxStreamsPerUser: options.rest?.maxStreamsPerUser ?? 5,
         revalidateMs: options.rest?.revalidateMs ?? 30_000,
+        ...(options.rest?.progressHeartbeatMs === undefined ? {} : { progressHeartbeatMs: options.rest.progressHeartbeatMs }),
         maxActiveRunsPerUser: config.rest.maxActiveRunsPerUser,
         maxRunsPerKeyPerMinute: config.rest.maxRunsPerKeyPerMinute,
         userBudgetDailyUsd: config.rest.userBudgetDailyUsd,
@@ -216,6 +217,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       },
       mcp: config.mcp.disabled ? null : createMcpRuntime(pool, config.mcp, options.mcp),
       ...(config.brief === undefined ? {} : { brief: config.brief }),
+      confirmAboveUsd: config.confirmAboveUsd,
       persistence: { policy: config.persistence, ...(options.persistence?.negativeMemory === undefined ? {} : { negativeMemory: options.persistence.negativeMemory }) },
       ...(options.extraCa ? { extraCa: options.extraCa } : {}),
       ...(options.oidcAllowHttp ? { oidcAllowHttp: true } : {}),

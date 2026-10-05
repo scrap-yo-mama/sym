@@ -4169,7 +4169,13 @@ components:
         example_output:
           description: Exemple de sortie facultatif (objet ou tableau JSON).
         auto_validate:
+          description: Validation automatique du schéma proposé (défaut `true`, Q2 du CDC UX) ; `false` garde la porte du schéma (`validate_schema`).
           type: boolean
+        name:
+          description: Nom lisible de l'API (1 à 80 caractères) ; il court le slug. Absent, SYM le tire de la demande.
+          type: string
+          minLength: 1
+          maxLength: 80
         network_policy:
           $ref: '#/components/schemas/NetworkPolicy'
         wait_seconds:

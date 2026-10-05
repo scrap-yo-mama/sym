@@ -8,6 +8,7 @@ export * from './proposal.js';
 export * from './candidates.js';
 export * from './trials.js';
 export * from './events.js';
+export * from './ambiguity.js';
 export * from './milestones.js';
 export * from './html-compile.js';
 export * from './dom.js';
