@@ -31,7 +31,7 @@ describe('assert_consent_before_capture (contrôle statique)', () => {
   test('l’API cookies n’est appelée qu’à un seul endroit : le câblage du service worker vers le noyau', () => {
     const users = sources.filter((f) => /\b(browser|chrome)\.cookies\b/.test(code(f)));
     expect(users.map((f) => f.slice(SRC.length))).toEqual(['entrypoints/background.ts']);
-    expect(code(join(SRC, 'entrypoints/background.ts')).match(/\b(browser|chrome)\.cookies\.\w+/g)).toEqual(['browser.cookies.getAll']);
+    expect(code(join(SRC, 'entrypoints/background.ts')).match(/\b(browser|chrome)\.cookies\.\w+/g)).toEqual(['browser.cookies.getAll', 'browser.cookies.onChanged']); // onChanged : domaine et sens du changement, jamais la valeur (B2)
   });
 
   test('dans le noyau, `cookies.getAll` n’est appelé que par #readCookies, lui-même appelé par capture() après ses contrôles', () => {

@@ -3233,6 +3233,24 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
+  /api/extension/refresh-requests:
+    get:
+      operationId: listExtensionRefreshRequests
+      security:
+        - deviceToken: []
+      tags: [tunnel]
+      summary: Domaines dont la session est à rafraîchir par l'extension (CDC V1 sym-sessions, B1)
+      responses:
+        '200':
+          description: Domaines pour lesquels le serveur attend une session neuve (un refresh_requested sans refreshed derrière).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtensionRefreshRequestList'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
   /api/extension/devices:
     get:
       operationId: listExtensionDevices
@@ -3285,7 +3303,66 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+  /api/sites/{id}/check:
+    post:
+      operationId: checkConnectedSite
+      security:
+        - sessionCookie: []
+      tags: [tunnel]
+      summary: Test de validité d'une session de site (une requête légère, GET seul, par le worker)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Test terminé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectedSiteCheck'
+        '202':
+          description: Test en file, pas encore rendu par le worker ; relire GET /api/sites.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectedSiteCheck'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /api/sites/{id}:
+    patch:
+      operationId: updateConnectedSite
+      security:
+        - sessionCookie: []
+      tags: [tunnel]
+      summary: Étiquette du compte d'une session de site
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectedSiteLabel'
+      responses:
+        '200':
+          description: Session avec son étiquette.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectedSite'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
     delete:
       operationId: disconnectConnectedSite
       security:
@@ -7643,7 +7720,7 @@ components:
     ConnectedSite:
       type: object
       additionalProperties: false
-      required: [id, domain, serverUseAllowed, hasServerCookies, consentedAt, capturedAt, expiresAt]
+      required: [id, domain, serverUseAllowed, hasServerCookies, consentedAt, capturedAt, expiresAt, state, stateLabel, lastUsedAt, lastCheckedAt, lastCheckOutcome, refreshRequested, accountLabel]
       properties:
         id:
           type: string
@@ -7664,6 +7741,76 @@ components:
         expiresAt:
           type: [string, 'null']
           format: date-time
+        state:
+          description: >-
+            État de la session calculé par le serveur (CDC V1 sym-sessions, B1) ; jamais une valeur de secret. expiree : aucun cookie vivant,
+            expiration passée ou dernier test « morte » ; a_renouveler : rafraîchissement demandé et pas encore arrivé, ou expiration sous 24 h ;
+            active : preuve de vie (test vivant ou rejeu réussi) de moins de 7 jours, postérieure à la dernière capture ; a_verifier : sinon.
+            Nul en mode tunnel (aucune session côté serveur).
+          type: [string, 'null']
+          enum: [active, a_renouveler, expiree, a_verifier, null]
+        stateLabel:
+          description: Libellé français de l'état (« Active », « À renouveler », « Expirée », « À vérifier »).
+          type: [string, 'null']
+        lastUsedAt:
+          description: Dernier rejeu serveur de la session.
+          type: [string, 'null']
+          format: date-time
+        lastCheckedAt:
+          description: Dernier test de validité.
+          type: [string, 'null']
+          format: date-time
+        lastCheckOutcome:
+          description: Code court du dernier test (alive, dead_http_401, dead_http_403, dead_login_redirect, dead_expired, dead_no_session, inconclusive_*), jamais une valeur du site.
+          type: [string, 'null']
+        refreshRequested:
+          description: Le serveur a demandé un rafraîchissement à l'extension et la session neuve n'est pas encore arrivée.
+          type: boolean
+        accountLabel:
+          description: Étiquette libre du compte, choisie par l'utilisateur.
+          type: [string, 'null']
+          maxLength: 120
+    ConnectedSiteLabel:
+      type: object
+      additionalProperties: false
+      required: [accountLabel]
+      properties:
+        accountLabel:
+          description: Étiquette du compte (120 caractères au plus, sans caractère de contrôle) ; nulle ou vide pour l'effacer.
+          type: [string, 'null']
+          maxLength: 120
+    ConnectedSiteCheck:
+      type: object
+      additionalProperties: false
+      required: [site, check]
+      properties:
+        site:
+          $ref: '#/components/schemas/ConnectedSite'
+        check:
+          description: Résultat du test (code court) ; nul tant que le worker ne l'a pas rendu (réponse 202).
+          type: [object, 'null']
+          additionalProperties: false
+          required: [outcome]
+          properties:
+            outcome:
+              type: string
+    ExtensionRefreshRequestList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [domain, requestedAt]
+            properties:
+              domain:
+                type: string
+              requestedAt:
+                type: string
+                format: date-time
     ConnectedSiteList:
       type: object
       additionalProperties: false

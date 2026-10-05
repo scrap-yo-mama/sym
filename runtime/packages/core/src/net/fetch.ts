@@ -81,6 +81,12 @@ export type GuardedFetchOptions = {
   allowHost?: (host: string) => boolean;
   /** Appelé avant chaque envoi (chaque saut compte) : contrôle du plafond de coût du run, qui lève pour refuser. */
   beforeRequest?: () => void;
+  /**
+   * Cookies de session (A2) : `Cookie` recalculé à CHAQUE saut pour l'URL du saut (hôte, chemin, secure), retiré hors du
+   * domaine de la session. Tout `Cookie` posé par l'appelant est écarté. Jamais posé sur une requête qui
+   * n'est pas un GET sans corps.
+   */
+  cookieFor?: (url: URL) => string | null;
 };
 
 type Init = Omit<RequestInit, 'dispatcher' | 'redirect'>;
@@ -101,6 +107,12 @@ export async function guardedFetch(input: string | URL, init: Init, options: Gua
   for (let hop = 0; ; hop++) {
     guard.checkUrlStatic(url);
     if (options.allowHost !== undefined && !options.allowHost(url.hostname)) throw new DomainNotAllowedError(url.hostname);
+    if (options.cookieFor !== undefined) {
+      headers.delete('cookie');
+      // Défense en profondeur (V1 : lecture seule) : jamais de Cookie sur une écriture (méthode autre que GET, ou corps).
+      const cookie = method === 'GET' && body === undefined || body === null ? options.cookieFor(url) : null;
+      if (cookie !== null) headers.set('cookie', cookie);
+    }
     options.beforeRequest?.();
     let response: Response;
     try {

@@ -358,7 +358,7 @@ export function dataRoutes(): ApiRoutes {
       body: { items: [{ id: UUID(850), deviceLabel: 'Chrome du bureau', createdAt: '2026-09-25T08:00:00.000Z', lastSeenAt: '2026-10-01T07:00:00.000Z', expiresAt: '2026-12-25T08:00:00.000Z', revokedAt: null }] } satisfies Schemas['ExtensionDeviceList'],
     },
     'GET /api/sites': {
-      body: { items: [{ id: UUID(860), domain: 'monsite.example', serverUseAllowed: false, hasServerCookies: false, consentedAt: '2026-09-26T08:00:00.000Z', capturedAt: '2026-09-26T08:05:00.000Z', expiresAt: null }] } satisfies Schemas['ConnectedSiteList'],
+      body: { items: [{ id: UUID(860), domain: 'monsite.example', serverUseAllowed: false, hasServerCookies: false, consentedAt: '2026-09-26T08:00:00.000Z', capturedAt: '2026-09-26T08:05:00.000Z', expiresAt: null, state: null, stateLabel: null, lastUsedAt: null, lastCheckedAt: null, lastCheckOutcome: null, refreshRequested: false, accountLabel: null }] } satisfies Schemas['ConnectedSiteList'],
     },
   };
 }

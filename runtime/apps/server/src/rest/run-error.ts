@@ -50,6 +50,16 @@ const RUN_ERRORS: Record<string, Omit<RunError, 'code'> & { code?: string; inves
       'Ask the user to fix the robot contact (an e-mail address or an http(s) URL) in the console (Settings > Robot identity, /settings/robot) or the INSTANCE_CONTACT variable, then call again: nothing was fetched and nothing was spent.',
     retryable: true,
   },
+  // B1 (F2, R7) : session de site consentie mais morte (absente, expirée, refusée par la cible). Détail `session_to_refresh:<domaine>` :
+  // le run s'arrête sans requête (ou dès le refus de la cible), statut de l'API inchangé, aucune réparation. Le code est la raison
+  // `cookie_expired` déjà connue de la console et du MCP ; l'extension reçoit le signal et repousse la session.
+  session_to_refresh: {
+    code: 'cookie_expired',
+    message: 'La session de {domain} est à rafraîchir : ouvre {domain} dans ton navigateur avec l’extension SYM, puis relance.',
+    what_to_do:
+      'Ask the user to open {domain} in their browser with the SYM extension to refresh the session (the extension pushes the fresh session by itself), then call again: the session is no longer accepted, nothing was repaired and the API was not changed.',
+    retryable: true,
+  },
   // D-123 : run d'une API sans plafond par run, coupé par sa borne, le budget du jour restant de l'utilisateur.
   user_budget_daily_usd: {
     code: 'budget_exceeded',
@@ -117,6 +127,9 @@ const REASON_CODE = /^[a-z][a-z0-9_]{0,39}$/;
 /** Nom de modèle publiable (identifiants de fournisseurs : `claude-opus-4-8`, `zai-org/GLM-5.3`, `qwen3:8b`) : jamais un détail libre (INV8). */
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 
+/** Domaine de session publiable (nom d'hôte en minuscules) : jamais un détail libre (INV8). */
+const SESSION_DOMAIN = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/;
+
 function describe(code: string, detail: string): RunError | null {
   const known = Object.hasOwn(RUN_ERRORS, code) ? RUN_ERRORS[code] : undefined;
   if (known === undefined) return null;
@@ -125,7 +138,12 @@ function describe(code: string, detail: string): RunError | null {
   const suffix = detail.slice(code.length + 1);
   const model = detail.startsWith(`${code}:`) && MODEL_NAME.test(suffix) && !/^[a-z]+:\/\//i.test(suffix) ? suffix : null;
   const reason = detail.startsWith(`${code}:`) && REASON_CODE.test(suffix) ? suffix : null;
-  const fill = (text: string) => text.replaceAll('{model}', model ?? (text.startsWith('Renseigne') ? 'utilisé' : 'used')).replaceAll('{reason}', reason ?? 'unknown');
+  const domain = code === 'session_to_refresh' && detail.startsWith(`${code}:`) && SESSION_DOMAIN.test(suffix) ? suffix : null;
+  const fill = (text: string) =>
+    text
+      .replaceAll('{model}', model ?? (text.startsWith('Renseigne') ? 'utilisé' : 'used'))
+      .replaceAll('{reason}', reason ?? 'unknown')
+      .replaceAll('{domain}', domain ?? (text.startsWith('La session') ? 'ce site' : 'the site'));
   return { code: known.code ?? code, message: fill(known.message), what_to_do: fill(known.what_to_do), retryable: known.retryable };
 }
 

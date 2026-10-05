@@ -3,7 +3,7 @@
 // (expiration, révocation par l'utilisateur et par l'admin), consentement par domaine, cookies en écriture seule,
 // révocation d'un domaine (0 cookie en base), et résolution des cookies d'un run liée au propriétaire
 // (assert_identity_pinned). Le parcours dans un vrai Chromium est dans apps/extension/e2e (étage E2).
-import { kekFor, MasterKey, type SiteCookie } from '@runtime/core';
+import { kekFor, MasterKey, openSecret, siteSessionAad, type SiteCookie } from '@runtime/core';
 import { decodePairingCode } from '@runtime/core/tunnel';
 import { siteCookiesForRun, withActor } from '@runtime/db';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -477,3 +477,330 @@ describe('désactivation d’un utilisateur : 0 cookie de lui en base, quelle qu
     expect(fn).toEqual([{ prosecdef: true, proconfig: ['search_path=public, pg_temp'] }]);
   });
 });
+
+describe('A1 (CDC V1 sym-sessions) : rejeu serveur pour le propriétaire, secret scellé, journal d’usage', () => {
+  const pool = () => srv.started.ctx.pool;
+
+  test('assert_server_replay_owner_only (INV5) : cookies rendus seulement si run, API et session ont le même propriétaire et le consentement serveur', async () => {
+    const domain = 'zz-test-replay-owner.example';
+    const tunnelDomain = 'zz-test-replay-tunnel.example';
+    const a = await createUser(srv, 'zz_test_replay_a@example.test');
+    const b = await createUser(srv, 'zz_test_replay_b@example.test');
+    const ta = (await pairUser(a, await signIn(srv, a), 'zz_test_dev_replay_a')).token;
+    const tb = (await pairUser(b, await signIn(srv, b), 'zz_test_dev_replay_b')).token;
+    for (const t of [ta, tb]) expect((await extCall(t, 'PUT', `/api/extension/sites/${domain}`, { serverUseAllowed: true })).statusCode).toBe(201);
+    expect((await extCall(ta, 'PUT', `/api/extension/sites/${domain}/cookies`, { cookies: [cookie('sid', 'zz_test_replay_value_of_a', domain)] })).statusCode).toBe(204);
+    expect((await extCall(ta, 'PUT', `/api/extension/sites/${tunnelDomain}`, { serverUseAllowed: false })).statusCode).toBe(201);
+    const resolve = (runId: string, d = domain) => withClient(srv.db.url, (c) => siteCookiesForRun(c, kek(), { runId, domain: d }));
+
+    // Le propriétaire, consentement serveur : sa session est rejouée.
+    expect(await resolve(await runFor(a.id))).toMatchObject({ ok: true, ownerId: a.id, cookies: [{ name: 'sid', value: 'zz_test_replay_value_of_a' }] });
+    // Un autre utilisateur lançant l'API de A (même domaine) : refus, ni la session de A ni celle de B.
+    const foreign = await resolve(await runFor(a.id, b.id));
+    expect(foreign).toEqual({ ok: false, reason: 'auth_required' });
+    expect(JSON.stringify(foreign)).not.toContain('zz_test_replay_value_of_a');
+    // B lançant sa propre API sur le même domaine, sans cookies de lui : rien (jamais ceux de A).
+    expect(await resolve(await runFor(b.id))).toEqual({ ok: false, reason: 'auth_required' });
+    // Le propriétaire en mode tunnel : pas de rejeu serveur.
+    expect(await resolve(await runFor(a.id), tunnelDomain)).toEqual({ ok: false, reason: 'tunnel_only' });
+    // Un run dont le propriétaire est A mais l'API est à B (appelant ≠ propriétaire de l'API) : refus.
+    expect(await resolve(await runFor(b.id, a.id))).toEqual({ ok: false, reason: 'auth_required' });
+  });
+
+  test('assert_token_sealed_like_cookie (INV8) : secret scellé, AAD liée propriétaire + domaine + version, nature `cookie` seule admise', async () => {
+    const domain = 'zz-test-sealed-kind.example';
+    const a = await createUser(srv, 'zz_test_sealed_a@example.test');
+    const b = await createUser(srv, 'zz_test_sealed_b@example.test');
+    const ta = (await pairUser(a, await signIn(srv, a), 'zz_test_dev_sealed_a')).token;
+    expect((await extCall(ta, 'PUT', `/api/extension/sites/${domain}`, { serverUseAllowed: true })).statusCode).toBe(201);
+    expect((await extCall(ta, 'PUT', `/api/extension/sites/${domain}/cookies`, { cookies: [cookie('sid', 'zz_test_sealed_plain_value', domain)] })).statusCode).toBe(204);
+    const row = (
+      await sql<{ ciphertext: Buffer; nonce: Buffer; dek_wrapped: Buffer; alg: string; key_version: number; secret_kind: string }>(
+        'SELECT ciphertext, nonce, dek_wrapped, alg, key_version, secret_kind FROM site_sessions WHERE owner_id = $1 AND domain = $2',
+        [a.id, domain],
+      )
+    )[0]!;
+    expect(row.secret_kind).toBe('cookie');
+    expect(row.ciphertext.toString('latin1')).not.toContain('zz_test_sealed_plain_value');
+    const sealed = { ciphertext: row.ciphertext, nonce: row.nonce, dekWrapped: row.dek_wrapped, alg: row.alg, kekVersion: row.key_version };
+    const aad = (ownerId: string, d: string, keyVersion = row.key_version) => siteSessionAad({ ownerId, domain: d, keyVersion });
+    expect(openSecret(sealed, kek(), aad(a.id, domain))).toContain('zz_test_sealed_plain_value');
+    expect(() => openSecret(sealed, kek(), aad(b.id, domain))).toThrow();
+    expect(() => openSecret(sealed, kek(), aad(a.id, 'zz-test-other.example'))).toThrow();
+    expect(() => openSecret(sealed, kek(), aad(a.id, domain, row.key_version + 1))).toThrow();
+    // Nature hors liste : refusée par la contrainte ; la vue de session expose la nature.
+    await expect(sql("UPDATE site_sessions SET secret_kind = 'token' WHERE owner_id = $1 AND domain = $2", [a.id, domain])).rejects.toMatchObject({
+      code: '23514',
+      constraint: 'site_sessions_secret_kind',
+    });
+    const view = await srv.app.inject({ method: 'GET', url: '/api/sites', headers: { cookie: await signIn(srv, a) } });
+    expect(view.body).toContain(domain);
+    // Le rôle des requêtes lit la nature (colonne autorisée), jamais le contenu scellé.
+    const kind = await withActor(pool(), { userId: a.id, role: 'member' }, (db) => db.query('SELECT secret_kind FROM site_sessions WHERE domain = $1', [domain]));
+    expect(kind.rows).toEqual([{ secret_kind: 'cookie' }]);
+  });
+
+  test('site_session_events : ajout seul pour le rôle des requêtes, RLS entre utilisateurs, aucune valeur de secret', async () => {
+    const domain = 'zz-test-events.example';
+    const u = await createUser(srv, 'zz_test_events_u@example.test');
+    const v = await createUser(srv, 'zz_test_events_v@example.test');
+    const tu = (await pairUser(u, await signIn(srv, u), 'zz_test_dev_events_u')).token;
+    const tv = (await pairUser(v, await signIn(srv, v), 'zz_test_dev_events_v')).token;
+    for (const t of [tu, tv]) expect((await extCall(t, 'PUT', `/api/extension/sites/${domain}`, { serverUseAllowed: true })).statusCode).toBe(201);
+    const siteOf = async (owner: string) => (await sql<{ id: string }>('SELECT id FROM site_sessions WHERE owner_id = $1 AND domain = $2', [owner, domain]))[0]!.id;
+    const insert = (owner: string, event: string) =>
+      withActor(pool(), { userId: owner, role: 'member' }, async (db) =>
+        db.query('INSERT INTO site_session_events (owner_id, site_session_id, domain, event, outcome) VALUES ($1, $2, $3, $4, $5) RETURNING id', [owner, await siteOf(owner), domain, event, 'ok']),
+      );
+    const own = (await insert(u.id, 'revoked')).rows[0]!.id as string;
+    await insert(v.id, 'refreshed');
+
+    // Le propriétaire lit les siens ; U ne voit pas ceux de V ; un admin ne lit pas ceux d'un autre (assert_no_impersonation).
+    const seen = (userId: string, role: 'member' | 'admin') => withActor(pool(), { userId, role }, (db) => db.query('SELECT owner_id, event FROM site_session_events'));
+    expect((await seen(u.id, 'member')).rows).toEqual([{ owner_id: u.id, event: 'revoked' }]);
+    expect((await seen(v.id, 'member')).rows).toEqual([{ owner_id: v.id, event: 'refreshed' }]);
+    expect((await seen(admin.id, 'admin')).rows).toEqual([]);
+
+    // Ajout seul : UPDATE, DELETE et TRUNCATE refusés au rôle applicatif, même pour son propre événement ou en admin.
+    for (const [actor, role] of [[u.id, 'member'], [admin.id, 'admin']] as const) {
+      for (const text of ["UPDATE site_session_events SET outcome = 'x'", 'DELETE FROM site_session_events', 'TRUNCATE site_session_events']) {
+        await expect(withActor(pool(), { userId: actor, role }, (db) => db.query(text))).rejects.toMatchObject({ code: '42501' });
+      }
+    }
+    // Écrire au nom d'un autre : refusé par la politique ; événement hors liste ou secret en colonne : refusés / inexistants.
+    await expect(
+      withActor(pool(), { userId: u.id, role: 'member' }, (db) => db.query('INSERT INTO site_session_events (owner_id, domain, event) VALUES ($1, $2, $3)', [v.id, domain, 'used'])),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(insert(u.id, 'zz_unknown')).rejects.toMatchObject({ code: '42501' });
+    // Journal fiable (B1) : used, checked et refresh_requested sont écrits par le système ; le rôle des requêtes ne les insère pas.
+    for (const event of ['used', 'checked', 'refresh_requested']) await expect(insert(u.id, event)).rejects.toMatchObject({ code: '42501' });
+    // Le système (identité propriétaire des tables) les écrit, la contrainte de liste restant vérifiée.
+    await sql("INSERT INTO site_session_events (owner_id, site_session_id, domain, event) VALUES ($1, $2, $3, 'used')", [u.id, await siteOf(u.id), domain]);
+    await expect(sql("INSERT INTO site_session_events (owner_id, domain, event) VALUES ($1, $2, 'zz_unknown')", [u.id, domain])).rejects.toMatchObject({ code: '23514' });
+    const columns = await sql<{ column_name: string }>("SELECT column_name FROM information_schema.columns WHERE table_name = 'site_session_events' ORDER BY column_name");
+    expect(columns.map((c) => c.column_name)).toEqual(['created_at', 'domain', 'event', 'id', 'outcome', 'owner_id', 'run_id', 'site_session_id']);
+    expect(await sql('SELECT 1 FROM site_session_events WHERE id = $1', [own])).toHaveLength(1);
+    await sql("DELETE FROM site_session_events WHERE owner_id = $1 AND event = 'used'", [u.id]);
+
+    // La déconnexion du site garde l'événement (rattachement mis à NULL), sans la session.
+    expect((await extCall(tu, 'DELETE', `/api/extension/sites/${domain}`)).statusCode).toBe(204);
+    expect(await sql('SELECT site_session_id, domain FROM site_session_events WHERE id = $1', [own])).toEqual([{ site_session_id: null, domain }]);
+  });
+
+  test('site_session_events_owner_bound (INV5, INV12) : un événement ne se rattache qu’à la session et au run de son propriétaire, même code 42501 sans oracle d’existence', async () => {
+    const domain = 'zz-test-bound.example';
+    const u = await createUser(srv, 'zz_test_bound_u@example.test');
+    const v = await createUser(srv, 'zz_test_bound_v@example.test');
+    const tu = (await pairUser(u, await signIn(srv, u), 'zz_test_dev_bound_u')).token;
+    const tv = (await pairUser(v, await signIn(srv, v), 'zz_test_dev_bound_v')).token;
+    for (const t of [tu, tv]) expect((await extCall(t, 'PUT', `/api/extension/sites/${domain}`, { serverUseAllowed: true })).statusCode).toBe(201);
+    const siteOf = async (owner: string) => (await sql<{ id: string }>('SELECT id FROM site_sessions WHERE owner_id = $1 AND domain = $2', [owner, domain]))[0]!.id;
+    const ghost = '00000000-0000-4000-8000-000000000001';
+    const attach = (actor: string, owner: string, sessionId: string | null, runId: string | null, d = domain) =>
+      withActor(pool(), { userId: actor, role: 'member' }, (db) =>
+        db.query("INSERT INTO site_session_events (owner_id, site_session_id, domain, event, run_id) VALUES ($1, $2, $3, 'revoked', $4)", [owner, sessionId, d, runId]),
+      );
+    const vSession = await siteOf(v.id);
+    const vRun = await runFor(v.id);
+    const uRun = await runFor(u.id);
+    const denied: unknown[] = [];
+    // U attache un événement à la session de V, au run de V, ou à un UUID inexistant : le même 42501, avant la clé étrangère (23503).
+    for (const [session, run] of [[vSession, null], [null, vRun], [ghost, null], [null, ghost], [await siteOf(u.id), vRun]] as const) {
+      const err = await attach(u.id, u.id, session, run).then(() => null, (e: unknown) => e);
+      expect(err).toMatchObject({ code: '42501' });
+      denied.push((err as Error).message);
+    }
+    expect(new Set(denied).size).toBe(1);
+    expect(denied[0]).not.toMatch(/\d{8}-|zz_test/);
+    // Même propriétaire mais autre domaine : refusé.
+    await expect(attach(u.id, u.id, await siteOf(u.id), null, 'zz-test-other-domain.example')).rejects.toMatchObject({ code: '42501' });
+    // Le système (sans RLS) ne contourne pas le contrôle : un rattachement croisé est refusé aussi.
+    await expect(sql("INSERT INTO site_session_events (owner_id, site_session_id, domain, event) VALUES ($1, $2, $3, 'used')", [u.id, vSession, domain])).rejects.toMatchObject({ code: '42501' });
+    // Nominal : U sur sa session et son run.
+    await attach(u.id, u.id, await siteOf(u.id), uRun);
+    expect(await sql('SELECT 1 FROM site_session_events WHERE owner_id = $1 AND run_id = $2', [u.id, uRun])).toHaveLength(1);
+    expect(await sql('SELECT 1 FROM site_session_events WHERE owner_id = $1 AND run_id = $2', [v.id, uRun])).toHaveLength(0);
+  });
+
+  test('assert_no_impersonation (INV5, A1) : un admin ne lit ni le contenu scellé d’une session ni le journal d’usage d’un autre utilisateur', async () => {
+    const domain = 'zz-test-noimp.example';
+    const u = await createUser(srv, 'zz_test_noimp_u@example.test');
+    const tu = (await pairUser(u, await signIn(srv, u), 'zz_test_dev_noimp')).token;
+    expect((await extCall(tu, 'PUT', `/api/extension/sites/${domain}`, { serverUseAllowed: true })).statusCode).toBe(201);
+    expect((await extCall(tu, 'PUT', `/api/extension/sites/${domain}/cookies`, { cookies: [cookie('sid', 'zz_test_noimp_value', domain)] })).statusCode).toBe(204);
+    await sql("INSERT INTO site_session_events (owner_id, domain, event) VALUES ($1, $2, 'used')", [u.id, domain]);
+    for (const col of ['ciphertext', 'nonce', 'dek_wrapped']) {
+      await expect(withActor(pool(), { userId: admin.id, role: 'admin' }, (db) => db.query(`SELECT ${col} FROM site_sessions`))).rejects.toMatchObject({ code: '42501' });
+    }
+    const adminView = await withActor(pool(), { userId: admin.id, role: 'admin' }, async (db) => ({
+      sessions: (await db.query('SELECT id FROM site_sessions WHERE owner_id = $1', [u.id])).rowCount,
+      events: (await db.query('SELECT id FROM site_session_events WHERE owner_id = $1', [u.id])).rowCount,
+    }));
+    expect(adminView).toEqual({ sessions: 0, events: 0 });
+  });
+});
+
+describe('B1 (CDC V1 sym-sessions) : état de session en mots, test de validité, étiquette, signal de rafraîchissement', () => {
+  const pool = () => srv.started.ctx.pool;
+  const IN_30_DAYS = () => Date.now() / 1000 + 30 * 86_400;
+
+  async function userWithSession(slug: string, domain: string, expirationDate = IN_30_DAYS()) {
+    const user = await createUser(srv, `zz_test_b1_${slug}@example.test`);
+    const cookieUi = await signIn(srv, user);
+    const token = (await pairUser(user, cookieUi, `zz_test_dev_b1_${slug}`)).token;
+    expect((await extCall(token, 'PUT', `/api/extension/sites/${domain}`, { serverUseAllowed: true })).statusCode).toBe(201);
+    expect((await extCall(token, 'PUT', `/api/extension/sites/${domain}/cookies`, { cookies: [cookie('sid', `zz_test_b1_canary_${slug}`, domain, { expirationDate })] })).statusCode).toBe(204);
+    const id = (await sql<{ id: string }>('SELECT id FROM site_sessions WHERE owner_id = $1 AND domain = $2', [user.id, domain]))[0]!.id;
+    return { user, cookieUi, token, id, domain };
+  }
+  const uiCall = (cookieUi: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: unknown) =>
+    srv.app.inject({ method, url, headers: { cookie: cookieUi, origin: PUBLIC_URL }, ...(payload === undefined ? {} : { payload: payload as Record<string, unknown> }) });
+  const siteOf = async (cookieUi: string, id: string) => (await uiCall(cookieUi, 'GET', '/api/sites')).json<{ items: Record<string, unknown>[] }>().items.find((s) => s['id'] === id)!;
+  /** Jobs de test en file (la file pg-boss n'existe qu'à son premier usage). */
+  const checkJobs = async (siteId?: string) =>
+    (await sql<{ ok: boolean }>("SELECT to_regclass('pgboss.job') IS NOT NULL AS ok"))[0]!.ok
+      ? sql<{ data: Record<string, unknown> }>("SELECT data FROM pgboss.job WHERE name = 'site-session-check' AND ($1::text IS NULL OR data->>'site_session_id' = $1)", [siteId ?? null])
+      : [];
+  const event = (ownerId: string, domain: string, name: string, outcome: string | null = null, extra = '') =>
+    sql(`INSERT INTO site_session_events (owner_id, domain, event, outcome${extra === '' ? '' : ', created_at'}) VALUES ($1, $2, $3, $4${extra === '' ? '' : `, now() + interval '${extra}'`})`, [ownerId, domain, name, outcome]);
+
+  test('assert_session_live_status : la vue renvoie l’état et son libellé, la dernière vérification, la dernière utilisation et l’étiquette, sans aucune valeur de secret', async () => {
+    const s = await userWithSession('state', 'zz-test-b1-state.example');
+    // Poussée neuve, jamais testée : « À vérifier ».
+    expect(await siteOf(s.cookieUi, s.id)).toMatchObject({ state: 'a_verifier', stateLabel: 'À vérifier', lastCheckedAt: null, lastUsedAt: null, lastCheckOutcome: null, accountLabel: null, refreshRequested: false });
+    // Test « vivante » écrit par le système : « Active ».
+    await sql('UPDATE site_sessions SET last_checked_at = now() WHERE id = $1', [s.id]);
+    await event(s.user.id, s.domain, 'checked', 'alive', '1 second');
+    expect(await siteOf(s.cookieUi, s.id)).toMatchObject({ state: 'active', stateLabel: 'Active', lastCheckOutcome: 'alive' });
+    expect((await siteOf(s.cookieUi, s.id))['lastCheckedAt']).not.toBeNull();
+    // Rafraîchissement demandé : « À renouveler », puis la poussée neuve l’efface (`refreshed`).
+    await event(s.user.id, s.domain, 'refresh_requested', 'http_401', '2 seconds');
+    expect(await siteOf(s.cookieUi, s.id)).toMatchObject({ state: 'a_renouveler', stateLabel: 'À renouveler', refreshRequested: true });
+    // Test « morte » postérieur à la capture : « Expirée ».
+    await event(s.user.id, s.domain, 'checked', 'dead_http_401', '3 seconds');
+    expect(await siteOf(s.cookieUi, s.id)).toMatchObject({ state: 'expiree', stateLabel: 'Expirée', lastCheckOutcome: 'dead_http_401' });
+    // Expiration sous 24 h : « À renouveler » ; expiration passée : « Expirée ».
+    const soon = await userWithSession('soon', 'zz-test-b1-soon.example', Date.now() / 1000 + 6 * 3600);
+    expect(await siteOf(soon.cookieUi, soon.id)).toMatchObject({ state: 'a_renouveler' });
+    await sql("UPDATE site_sessions SET expires_at = now() - interval '1 minute' WHERE id = $1", [soon.id]);
+    expect(await siteOf(soon.cookieUi, soon.id)).toMatchObject({ state: 'expiree', stateLabel: 'Expirée' });
+    // Mode tunnel : aucun état côté serveur.
+    await extCall(s.token, 'PUT', '/api/extension/sites/zz-test-b1-tunnel.example', { serverUseAllowed: false });
+    const tunnel = (await uiCall(s.cookieUi, 'GET', '/api/sites')).json<{ items: Record<string, unknown>[] }>().items.find((x) => x['domain'] === 'zz-test-b1-tunnel.example')!;
+    expect(tunnel).toMatchObject({ state: null, stateLabel: null, serverUseAllowed: false });
+    // L’extension voit la même chose ; aucune valeur de secret dans aucune des deux réponses.
+    const viaExtension = await extCall(s.token, 'GET', '/api/extension/session');
+    expect(viaExtension.json<{ sites: { id: string; state: string }[] }>().sites.find((x) => x.id === s.id)).toMatchObject({ state: 'expiree' });
+    for (const body of [(await uiCall(s.cookieUi, 'GET', '/api/sites')).body, viaExtension.body]) expect(body).not.toMatch(/zz_test_b1_canary|ciphertext|nonce|dek_wrapped/);
+  });
+
+  test('étiquette de compte : bornée, validée, propre à son propriétaire ; V ne liste, ne teste ni ne renomme la session de U (assert_cross_user_denied)', async () => {
+    const u = await userWithSession('label_u', 'zz-test-b1-label.example');
+    const v = await createUser(srv, 'zz_test_b1_label_v@example.test');
+    const cookieV = await signIn(srv, v);
+    const ok = await uiCall(u.cookieUi, 'PATCH', `/api/sites/${u.id}`, { accountLabel: '  Cabinet, compte principal  ' });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(ok.json()).toMatchObject({ accountLabel: 'Cabinet, compte principal' });
+    expect(await siteOf(u.cookieUi, u.id)).toMatchObject({ accountLabel: 'Cabinet, compte principal' });
+    for (const bad of ['x'.repeat(121), 'ligne\nsuivante', 'tab\there']) {
+      const r = await uiCall(u.cookieUi, 'PATCH', `/api/sites/${u.id}`, { accountLabel: bad });
+      expect([400], bad.slice(0, 8)).toContain(r.statusCode);
+    }
+    expect((await uiCall(u.cookieUi, 'PATCH', `/api/sites/${u.id}`, { accountLabel: 'a', extra: 1 })).statusCode).toBe(400);
+    expect((await siteOf(u.cookieUi, u.id))['accountLabel']).toBe('Cabinet, compte principal');
+    // V : liste vide de U, renommage et test refusés (404, comme pour une session inexistante), rien ne change, rien n’est mis en file.
+    expect((await uiCall(cookieV, 'GET', '/api/sites')).json<{ items: unknown[] }>().items).toEqual([]);
+    expect((await uiCall(cookieV, 'PATCH', `/api/sites/${u.id}`, { accountLabel: 'volé' })).statusCode).toBe(404);
+    const before = (await checkJobs()).length;
+    expect((await uiCall(cookieV, 'POST', `/api/sites/${u.id}/check`)).statusCode).toBe(404);
+    expect((await checkJobs()).length).toBe(before);
+    expect((await uiCall(cookieV, 'POST', `/api/sites/${randomUuid()}/check`)).statusCode).toBe(404);
+    expect((await siteOf(u.cookieUi, u.id))['accountLabel']).toBe('Cabinet, compte principal');
+    expect((await sql('SELECT 1 FROM site_session_events WHERE owner_id = $1', [v.id])).length).toBe(0);
+    // Effacer l’étiquette : null ou chaîne vide.
+    expect((await uiCall(u.cookieUi, 'PATCH', `/api/sites/${u.id}`, { accountLabel: null })).json()).toMatchObject({ accountLabel: null });
+    // Le jeton d’appareil n’ouvre ni le test ni l’étiquette (routes de l’interface seulement).
+    expect((await extCall(u.token, 'PUT', `/api/sites/${u.id}`, { accountLabel: 'x' })).statusCode).toBeGreaterThanOrEqual(400);
+    expect((await srv.app.inject({ method: 'POST', url: `/api/sites/${u.id}/check`, headers: ext(u.token) })).statusCode).toBeGreaterThanOrEqual(400);
+  });
+
+  test('test de validité : sans cookie, morte sans requête ; mode tunnel refusé ; sinon mis en file pour le worker et résultat relayé (checked sans valeur)', async () => {
+    const u = await userWithSession('check', 'zz-test-b1-check.example');
+    // Mode tunnel : rien à tester côté serveur.
+    await extCall(u.token, 'PUT', '/api/extension/sites/zz-test-b1-check-tunnel.example', { serverUseAllowed: false });
+    const tunnelId = (await sql<{ id: string }>('SELECT id FROM site_sessions WHERE owner_id = $1 AND domain = $2', [u.user.id, 'zz-test-b1-check-tunnel.example']))[0]!.id;
+    expect((await uiCall(u.cookieUi, 'POST', `/api/sites/${tunnelId}/check`)).statusCode).toBe(409);
+    // Sans cookie stocké : morte, sans passer par le worker.
+    const bare = (await extCall(u.token, 'PUT', '/api/extension/sites/zz-test-b1-check-bare.example', { serverUseAllowed: true })).json<{ id: string }>();
+    const dead = await uiCall(u.cookieUi, 'POST', `/api/sites/${bare.id}/check`);
+    expect(dead.statusCode, dead.body).toBe(200);
+    expect(dead.json()).toMatchObject({ check: { outcome: 'dead_no_session' }, site: { id: bare.id, state: 'expiree' } });
+    // Avec des cookies : un job `site-session-check` (propriétaire, session, domaine, jamais un cookie) ; le worker rend un résultat.
+    const done = (async () => {
+      for (let i = 0; i < 100; i++) {
+        const jobs = await checkJobs(u.id);
+        if (jobs.length > 0) {
+          expect(Object.keys(jobs[0]!.data).sort()).toEqual(['domain', 'owner_id', 'site_session_id']);
+          expect(JSON.stringify(jobs[0]!.data)).not.toContain('zz_test_b1_canary');
+          await sql("UPDATE site_sessions SET last_checked_at = now() WHERE id = $1", [u.id]);
+          await sql("INSERT INTO site_session_events (owner_id, site_session_id, domain, event, outcome) VALUES ($1, $2, $3, 'checked', 'alive')", [u.user.id, u.id, u.domain]);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      throw new Error('aucun job de test mis en file');
+    })();
+    const res = await uiCall(u.cookieUi, 'POST', `/api/sites/${u.id}/check`);
+    await done;
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ check: { outcome: 'alive' }, site: { id: u.id, state: 'active', lastCheckOutcome: 'alive' } });
+    expect(res.body).not.toContain('zz_test_b1_canary');
+  });
+
+  test('assert_session_usage_audited : revocation (console et extension) → event `revoked` sans valeur, session aussitôt non servie ; refreshed seulement à l’arrivée d’une session neuve', async () => {
+    const domain = 'zz-test-b1-audit.example';
+    const u = await userWithSession('audit', domain);
+    const events = () => sql<{ event: string; outcome: string | null; site_session_id: string | null; run_id: string | null }>('SELECT event, outcome, site_session_id, run_id FROM site_session_events WHERE owner_id = $1 AND domain = $2 ORDER BY created_at, id', [u.user.id, domain]);
+    // Resynchronisation d’une session qui fonctionne : rien n’est écrit.
+    expect((await extCall(u.token, 'PUT', `/api/extension/sites/${domain}/cookies`, { cookies: [cookie('sid', 'zz_test_b1_canary_audit2', domain, { expirationDate: IN_30_DAYS() })] })).statusCode).toBe(204);
+    expect(await events()).toEqual([]);
+    // Un rafraîchissement demandé (système), puis la poussée neuve : `refreshed`.
+    const run = await runFor(u.user.id);
+    await sql("INSERT INTO site_session_events (owner_id, site_session_id, domain, event, run_id, outcome) VALUES ($1, $2, $3, 'refresh_requested', $4, 'http_401')", [u.user.id, u.id, domain, run]);
+    expect((await extCall(u.token, 'GET', '/api/extension/refresh-requests')).json()).toMatchObject({ items: [{ domain, requestedAt: expect.any(String) }] });
+    expect((await extCall(u.token, 'PUT', `/api/extension/sites/${domain}/cookies`, { cookies: [cookie('sid', 'zz_test_b1_canary_audit3', domain, { expirationDate: IN_30_DAYS() })] })).statusCode).toBe(204);
+    expect((await extCall(u.token, 'GET', '/api/extension/refresh-requests')).json()).toEqual({ items: [] });
+    expect((await events()).map((e) => e.event)).toEqual(['refresh_requested', 'refreshed']);
+    // Révocation depuis la console : événement `revoked` rattaché au domaine, session supprimée, plus servie.
+    expect((await uiCall(u.cookieUi, 'DELETE', `/api/sites/${u.id}`)).statusCode).toBe(204);
+    const after = await events();
+    expect(after.map((e) => e.event)).toEqual(['refresh_requested', 'refreshed', 'revoked']);
+    expect(after.at(-1)).toMatchObject({ outcome: 'cookies_deleted', site_session_id: null });
+    expect(await withClient(srv.db.url, (c) => siteCookiesForRun(c, kek(), { runId: run, domain }))).toEqual({ ok: false, reason: 'auth_required' });
+    // Depuis l’extension : même trace.
+    expect((await extCall(u.token, 'PUT', `/api/extension/sites/${domain}`, { serverUseAllowed: true })).statusCode).toBe(201);
+    expect((await extCall(u.token, 'DELETE', `/api/extension/sites/${domain}`)).statusCode).toBe(204);
+    expect((await events()).filter((e) => e.event === 'revoked')).toHaveLength(2);
+    expect((await events()).at(-1)).toMatchObject({ outcome: 'consent_removed' });
+    // Aucune valeur de secret dans le journal.
+    expect(JSON.stringify(await sql('SELECT * FROM site_session_events WHERE owner_id = $1', [u.user.id]))).not.toContain('zz_test_b1_canary');
+    // `used`, `checked` et `refresh_requested` restent réservés au système : le rôle des requêtes ne les écrit pas.
+    for (const forbidden of ['used', 'checked', 'refresh_requested']) {
+      await expect(withActor(pool(), { userId: u.user.id, role: 'member' }, (db) => db.query("INSERT INTO site_session_events (owner_id, domain, event) VALUES ($1, $2, $3)", [u.user.id, domain, forbidden]))).rejects.toThrow();
+    }
+  });
+
+  test('assert_audit_append_only : le journal d’usage ne se modifie ni ne s’efface par le rôle des requêtes, révocation comprise', async () => {
+    const domain = 'zz-test-b1-append.example';
+    const u = await userWithSession('append', domain);
+    expect((await uiCall(u.cookieUi, 'DELETE', `/api/sites/${u.id}`)).statusCode).toBe(204);
+    for (const statement of ['UPDATE site_session_events SET outcome = $1', 'DELETE FROM site_session_events WHERE outcome <> $1']) {
+      await expect(withActor(pool(), { userId: u.user.id, role: 'member' }, (db) => db.query(statement, ['x']))).rejects.toMatchObject({ code: '42501' });
+    }
+    expect((await sql('SELECT 1 FROM site_session_events WHERE owner_id = $1 AND event = $2', [u.user.id, 'revoked'])).length).toBe(1);
+  });
+});
+
+function randomUuid(): string {
+  return crypto.randomUUID();
+}

@@ -91,6 +91,7 @@ import { InstanceContactError } from '@runtime/core/access';
 import {
   buildNetworkRungs,
   checkSiteDomain,
+  createSessionCookies,
   loadProxyCredentials,
   openBrowserEgress,
   openNetworkSession,
@@ -101,15 +102,16 @@ import {
   type NetworkRung,
   type NetworkSession,
   type NetworkSessionOptions,
+  type SessionCookies,
   type NetworkUsage,
   type ProxyCredentials,
   type Resolver,
   type SecretReader,
   type SsrfGuard,
 } from '@runtime/core/net';
-import { archivedRepairExists, countSucceededRuns, deleteRejectedItems, inputHash, loadRunTarget, markStrategyCompilable, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, type RunTarget } from '@runtime/db';
+import { consentedSessionForRun, type SiteSessionCheckJob, recordSessionUse, requestSessionRefresh, RunSessionNotFoundError, siteCookiesForRun, archivedRepairExists, countSucceededRuns, deleteRejectedItems, inputHash, loadRunTarget, markStrategyCompilable, readEmbeddedFiles, readValidatedBaseline, saveRunProfile, readProxySettings, readVolumeHistory, saveCompiledStrategy, saveRejectedItems, saveRepairedStrategy, saveRunDataset, saveStepRepairedStrategy, type RunTarget } from '@runtime/db';
 import type { LlmClient, LlmConfig } from '@runtime/llm';
-import { degradedQualitySignals, profileItems, type CostCaps } from '@runtime/core';
+import { degradedQualitySignals, profileItems, type CostCaps, type Kek } from '@runtime/core';
 import type { RunEgress } from '../browser/run-egress.js';
 import type { QualityPorts } from './quality-job.js';
 import type pg from 'pg';
@@ -117,6 +119,7 @@ import { pino, type Logger } from 'pino';
 import type { BrowserPool } from '../browser/pool.js';
 import { runFetchInPageExecutor, runPlaywrightExecutor } from './browser-executors.js';
 import { robotIdentity, type RobotIdentity } from './robot-identity.js';
+import { createSessionCheck } from './session-check.js';
 import { runScriptExecutor, type ScriptPort } from './script-executor.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
 import { runRequestValues, type AgentRequestGate } from '../browser/agent-request-gate.js';
@@ -160,6 +163,14 @@ export type StrategyExecutorDeps = {
   readonly agent?: AgentPorts;
   /** Client du tunnel (mode réseau `tunnel`, tâche 2.7) ; absent : `tunnel_unavailable`. */
   readonly tunnel?: TunnelPort;
+  /**
+   * Rejeu serveur des sessions de site (CDC V1 sym-sessions, A2) : clé de scellement `site_sessions`. Présente, une API
+   * à session dont le propriétaire a consenti l'usage serveur s'exécute ici avec ses cookies (E1, lecture) ; absente, ou
+   * session indisponible : tunnel, comme avant.
+   */
+  readonly siteSessions?: { readonly kek: Kek };
+  /** Première page du test de validité d'une session (B1). Défaut : l'origine https du domaine ; tests : serveur local. */
+  readonly sessionProbeUrl?: (domain: string) => URL;
   /** Garde de classification avant extraction (1.7) ; défaut : `classifyExchange` de chaque exécuteur. */
   readonly classify?: (exchange: HttpExchange, context?: ClassifyContext) => ExecFailure | null;
   /**
@@ -290,8 +301,13 @@ type Outcome = {
   scriptItems?: readonly unknown[];
   /** Essai agentique (E4-E6) : coût LLM, compilation E6 → E5, refus du verrou de domaines. */
   agent?: Omit<AgentOutcome, 'result'>;
-  /** Mode tunnel : arrêt sans classe d'échec (défi, extension hors ligne). */
-  stop?: TunnelStop;
+  /**
+   * Arrêt sans classe d'échec : défi ou extension hors ligne (tunnel), ou `cookie_expired` (B1) : la session serveur
+   * consentie ne sert plus, l'extension doit la rafraîchir (`sessionDomain`).
+   */
+  stop?: TunnelStop | 'cookie_expired';
+  /** Avec `stop: 'cookie_expired'` : domaine de la session à rafraîchir. */
+  sessionDomain?: string;
   /** Mode tunnel : l'extension servait ce run puis a disparu (cause `tunnel_lost`, U3.4), plutôt que jamais connectée. */
   tunnelLost?: boolean;
   /** Mode tunnel : le site n'est pas connecté dans le navigateur de l'utilisateur. */
@@ -301,6 +317,11 @@ type Outcome = {
   /** Skills lus par l'agent E6 (`read_skill`, tâche 2.10) : versions épinglées servies, empreintes ; jamais le contenu. */
   skillReads?: readonly SkillRead[];
 };
+
+/** Session serveur d'un run : à rejouer avec ses cookies, ou à rafraîchir (consentie mais morte, B1). */
+type ServerSession =
+  | { kind: 'served'; strategy: NonNullable<RunTarget['strategy']>; cookies: SessionCookies; domain: string }
+  | { kind: 'refresh'; domain: string; reason: string };
 
 /** Un essai d'une stratégie, gardes comprises, avant journalisation (`runTrial`). */
 export type StrategyTrial = {
@@ -326,6 +347,8 @@ export type StrategyRuntime = {
    * l'essai) ou `quarantine` (runs, D-49 : les items non conformes restent dans `result.records`, à trier par l'appelant).
    */
   readonly trial: (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy?: ItemPolicy) => Promise<StrategyTrial>;
+  /** Test de validité d'une session de site (B1, file `site-session-check`) ; absent sans `siteSessions`. */
+  readonly sessionCheck?: (job: SiteSessionCheckJob) => Promise<string | null>;
 };
 
 /** Somme des usages réseau d'un essai (egress Chromium + session `ctx.fetch` du script). */
@@ -586,7 +609,91 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     return { result: out.result, usage: null, ...(out.stop === null ? {} : { stop: out.stop }), ...(out.lost ? { tunnelLost: true } : {}), ...(out.needsUser ? { needsUser: true } : {}) };
   };
 
+  /**
+   * Session serveur (A2, INV5 évolué) : API à session, usage serveur consenti, cookies du propriétaire du run lus par
+   * `siteCookiesForRun` (seul point qui ouvre un cookie). `null` : comportement d'avant (tunnel). E1 en lecture seulement ;
+   * premier barreau serveur de la politique réseau de l'API (garde SSRF, pacing et verrou de domaines inchangés).
+   */
+  const serverSessionFor = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<ServerSession | null> => {
+    if (deps.siteSessions === undefined || !target.api.requiresSession) return null;
+    const serverNetwork = strategy.network !== 'tunnel';
+    // E1 GET sans script : le seul rejeu serveur de la V1. Une autre exécution reste en tunnel (ou, déjà sur le serveur, refusée).
+    if (strategy.execution !== 'fetch' || strategy.scriptRef !== null) {
+      if (!serverNetwork) return null;
+      const available = await sessionAvailable(ctx, target, strategy);
+      if (available === null) return null;
+      return available.kind === 'refresh' ? available : refuse('code_error', 'session_execution_not_fetch');
+    }
+    return sessionAvailable(ctx, target, strategy);
+  };
+
+  const sessionAvailable = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>): Promise<ServerSession | null> => {
+    let rungs: NetworkRung[];
+    try {
+      rungs = buildNetworkRungs(parseNetworkPolicy(target.api.networkPolicy), parseProxyDefinitions(await readProxySettings(deps.pool)));
+    } catch {
+      return null;
+    }
+    const rung = strategy.network === 'tunnel' ? rungs[0] : rungs.find((r) => r.mode === strategy.network);
+    if (rung === undefined) return null;
+    const check = validateDeclarativeSpec(strategy.spec, { outputSchema: target.api.outputSchema });
+    // Lecture seule (V1) : la requête principale ET chaque étape en GET sans corps, contrôlées sur la spec validée
+    // effectivement exécutée. Une écriture (étape POST, corps) n'emporte jamais la session : repli d'avant.
+    if (!check.ok || ![check.spec.request, ...(check.spec.steps ?? []).map((s) => s.request)].every((r) => r.method === 'GET' && r.body === undefined)) return null;
+    const declared = target.api.requires.session_domain;
+    const verdict = checkSiteDomain(typeof declared === 'string' && declared !== '' ? declared : new URL(check.spec.request.url).hostname);
+    if (!verdict.ok) return null;
+    const session = await siteCookiesForRun(deps.pool, deps.siteSessions!.kek, { runId: ctx.runId, domain: verdict.domain }).catch((error: unknown) => {
+      if (error instanceof RunSessionNotFoundError) return null;
+      throw error;
+    });
+    if (session === null) return null;
+    if (!session.ok) {
+      // Session consentie (usage serveur autorisé par le propriétaire) mais absente, expirée ou illisible : on ne retombe
+      // plus sur le tunnel, le run s'arrête sans requête et l'extension est priée de rafraîchir (B1, F2). Sans consentement
+      // (`tunnel_only`, domaine non connecté, run d'un autre compte) : comportement d'avant.
+      if ((session.reason === 'cookie_expired' || session.reason === 'auth_required') && (await consentedSessionForRun(deps.pool, { runId: ctx.runId, domain: verdict.domain })) !== null) {
+        return { kind: 'refresh', domain: verdict.domain, reason: session.reason };
+      }
+      return null;
+    }
+    return { kind: 'served', strategy: { ...strategy, network: rung.mode }, cookies: createSessionCookies(verdict.domain, session.cookies), domain: verdict.domain };
+  };
+
+  /** Le serveur a constaté que la session ne sert plus : événement `refresh_requested` (système), puis arrêt du run. */
+  const refreshStop = async (ctx: RunCtx, domain: string, reason: string, result: DeclarativeRunResult): Promise<Outcome> => {
+    await requestSessionRefresh(deps.pool, { runId: ctx.runId, domain, outcome: reason }).catch((error: unknown) => {
+      logger.error({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'session : refresh_requested non écrit');
+    });
+    return { result, usage: null, stop: 'cookie_expired', sessionDomain: domain };
+  };
+
+  /** Réponse qui dit que la session n'est plus acceptée : 401, redirection vers la connexion, ou 403 sans signature de protection. */
+  const sessionRefused = (failure: ExecFailure): boolean => failure.failure_class === 'auth_required' || (failure.failure_class === 'forbidden' && failure.detail === 'http_403');
+
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy, extras?: StepsTrialExtras): Promise<Outcome> => {
+    const served = await serverSessionFor(ctx, target, strategy);
+    if (served === null) return executeWith(ctx, target, strategy, itemPolicy, extras);
+    // Aucune tentative réseau : la session consentie ne sert plus (F2, R7).
+    if (served.kind === 'refresh') {
+      return refreshStop(ctx, served.domain, served.reason, { ok: false, failure: { failure_class: 'auth_required', retryable: false, detail: 'session_to_refresh' }, pages: 0, requests: 0 });
+    }
+    let outcome = 'error';
+    try {
+      const out = await executeWith(ctx, target, served.strategy, itemPolicy, extras, served.cookies);
+      outcome = out.result.ok ? 'ok' : out.result.failure.failure_class;
+      // La cible a refusé la session pendant le rejeu : à rafraîchir, ni réparation ni erreur opaque.
+      if (!out.result.ok && served.cookies.used() && sessionRefused(out.result.failure)) {
+        const stopped = await refreshStop(ctx, served.domain, out.result.failure.detail ?? out.result.failure.failure_class, out.result);
+        return { ...out, stop: stopped.stop!, sessionDomain: served.domain };
+      }
+      return out;
+    } finally {
+      if (served.cookies.used()) await recordSessionUse(deps.pool, { runId: ctx.runId, domain: served.domain, outcome }).catch(() => undefined);
+    }
+  };
+
+  const executeWith = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy, extras?: StepsTrialExtras, cookies?: SessionCookies): Promise<Outcome> => {
     // Agent à chaque run (19 §4, 2.13) : une version E6 non compilable en E5 ne tourne qu'en mode « agent instruit »
     // (opt-in explicite, étapes confirmées par un humain). Une version `unknown` a droit à son essai de compilation.
     const eachRun = agentEachRun(strategy);
@@ -632,6 +739,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       },
       userAgent,
       ...(from === null ? {} : { from }),
+      ...(cookies === undefined ? {} : { sessionCookies: cookies }),
     });
     const pacer = pacerFor(target);
     const common = {
@@ -1047,7 +1155,12 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     await recordTrial(ctx, candidate, trial, sorted?.verdict ?? null, broke?.failure ?? null);
     // Casse par le seuil sur une page de défi : un refus, qui arrête la réparation comme tout refus (INV6).
     const failure = trial.result.ok ? (broke !== null && broke.failure.failure_class !== 'extraction' ? broke.failure : null) : (trial.guardedFailure ?? trial.result.failure);
-    const stopped: ExecFailure | null = trial.outcome.stop === undefined ? null : { failure_class: 'blocked_by_protection', retryable: false, detail: trial.outcome.stop };
+    const stopped: ExecFailure | null =
+      trial.outcome.stop === undefined
+        ? null
+        : trial.outcome.stop === 'cookie_expired'
+          ? { failure_class: 'auth_required', retryable: false, detail: 'session_to_refresh' }
+          : { failure_class: 'blocked_by_protection', retryable: false, detail: trial.outcome.stop };
     return {
       trial,
       partition: sorted?.partition ?? { conform: [], rejected: [] },
@@ -1345,6 +1458,11 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
         logger.error({ runId: ctx.runId, err: error instanceof Error ? error.name : 'error' }, 'compilable : marquage impossible');
       }
     }
+    if (stop === 'cookie_expired') {
+      // Session à rafraîchir (B1) : cause nommée `session_to_refresh:<domaine>` (jamais une valeur), statut de l'API inchangé.
+      await ctx.log('warn', 'session_to_refresh', { network: 'server', domain: outcome.sessionDomain });
+      return { state: 'failed', failure_class: null, stop_reason: stop, retryable: false, error_detail: `session_to_refresh:${outcome.sessionDomain ?? ''}`, strategy_version: version };
+    }
     if (stop !== undefined) {
       await ctx.log('warn', stop, { network: 'tunnel' });
       return { state: 'failed', failure_class: null, stop_reason: stop, retryable: false, error_detail: stop, strategy_version: version };
@@ -1415,7 +1533,20 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       quarantined.delete(ctx.runId);
     }
   };
-  return { executor, trial: (ctx, target, strategy, itemPolicy) => runTrial(ctx, target, strategy, now(), itemPolicy ?? 'strict') };
+  const sessionCheck =
+    deps.siteSessions === undefined
+      ? undefined
+      : createSessionCheck({
+          pool: deps.pool,
+          kek: deps.siteSessions.kek,
+          guard: deps.guard,
+          ...(deps.pacer === undefined ? {} : { pacer: deps.pacer }),
+          identity,
+          ...(deps.proxyResolver === undefined ? {} : { proxyResolver: deps.proxyResolver }),
+          ...(deps.sessionProbeUrl === undefined ? {} : { startUrl: deps.sessionProbeUrl }),
+          logger,
+        });
+  return { executor, trial: (ctx, target, strategy, itemPolicy) => runTrial(ctx, target, strategy, now(), itemPolicy ?? 'strict'), ...(sessionCheck === undefined ? {} : { sessionCheck }) };
 }
 
 /** Exécuteur des runs de stratégie (E1-E6, tunnel) : `createStrategyRuntime(deps).executor`. */

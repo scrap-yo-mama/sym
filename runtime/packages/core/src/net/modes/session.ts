@@ -10,6 +10,7 @@ import { ENGINE_ACCEPT_LANGUAGE } from '../../access/identity.js';
 import { Secret, secretValues } from '../../crypto/index.js';
 import { createGuardedConnector, createGuardedDispatcher, guardedFetch } from '../fetch.js';
 import { domainLock } from '../domain-lock.js';
+import type { SessionCookies } from '../session-cookies.js';
 import { createSsrfPolicy, SsrfGuard, type Resolver } from '../guard.js';
 import { stripAddress } from '../ip.js';
 import { NetworkConfigError, renderProxyUsername, type NetworkMode, type ProviderParams, type ProxyDefinition, type ProxyPrice } from './definitions.js';
@@ -151,6 +152,8 @@ export type NetworkSessionOptions = {
   readonly userAgent?: string;
   /** En-tête `From` (RFC 9110 §10.1.2) imposé à chaque requête : contact d'instance, si `identify_instance` est activé. */
   readonly from?: string;
+  /** Cookies de session du propriétaire du run (A2) : posés par saut, jamais hors du domaine de la session. */
+  readonly sessionCookies?: SessionCookies;
 };
 
 type FetchInit = Parameters<typeof guardedFetch>[1];
@@ -357,6 +360,7 @@ export function openNetworkSession(options: NetworkSessionOptions): NetworkSessi
         dispatcher,
         ...(opts.followRedirects === false ? { followRedirects: false } : {}),
         ...(allowHost === undefined ? {} : { allowHost }),
+        ...(options.sessionCookies === undefined ? {} : { cookieFor: (url: URL) => options.sessionCookies!.headerFor(url) }),
         ...(options.costCeiling === undefined ? {} : { beforeRequest }),
       }),
     budgetExceeded: () => exceeded,
