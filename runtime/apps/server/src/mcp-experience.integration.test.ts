@@ -531,7 +531,7 @@ describe('B1 : un run arrêté pour une session à rafraîchir est lisible par M
         await c.query("UPDATE apis SET status_reason = 'cookie_expired', investigation_phase = 'done' WHERE id = $1", [api.id]);
       });
       const result = await call(await connect(party.key), 'get_run', { run_id: runId });
-      expect(result.structuredContent).toMatchObject({ state: 'failed', status: 'action_requise', error: { code: 'cookie_expired' } });
+      expect(result.structuredContent).toMatchObject({ state: 'action_required', status: 'action_requise', error: { code: 'cookie_expired' } });
       expect(text(result)).toContain(actionTemplate(locale, 'cookie_expired'));
       expect(actionTemplate(locale, 'cookie_expired')).toMatch(locale === 'en' ? /SYM extension/ : /extension SYM/);
     }
