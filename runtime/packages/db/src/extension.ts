@@ -234,10 +234,15 @@ export async function adminRevokeDevice(db: Queryable, tunnelId: string): Promis
 // Domaines connectés et cookies (07 § 2)
 // ---------------------------------------------------------------------------------------------------------------------
 
+/** Natures de secret de session connues ; la contrainte `site_sessions_secret_kind` (0027) tient la même liste. */
+export type SecretKind = 'cookie';
+
 export type SiteView = {
   id: string;
   domain: string;
   serverUseAllowed: boolean;
+  /** Nature du secret scellé (`cookie` en V1). */
+  secretKind: SecretKind;
   /** Des cookies sont stockés côté serveur (jamais leur valeur). */
   hasServerCookies: boolean;
   consentedAt: Date;
@@ -249,16 +254,18 @@ type SiteRow = {
   id: string;
   domain: string;
   server_use_allowed: boolean;
+  secret_kind: string;
   key_version: number | null;
   consented_at: Date;
   captured_at: Date | null;
   expires_at: Date | null;
 };
-const SITE_COLUMNS = 'id, domain, server_use_allowed, key_version, consented_at, captured_at, expires_at';
+const SITE_COLUMNS = 'id, domain, server_use_allowed, secret_kind, key_version, consented_at, captured_at, expires_at';
 const siteView = (r: SiteRow): SiteView => ({
   id: r.id,
   domain: r.domain,
   serverUseAllowed: r.server_use_allowed,
+  secretKind: r.secret_kind as SecretKind,
   hasServerCookies: r.key_version !== null,
   consentedAt: r.consented_at,
   capturedAt: r.captured_at,
@@ -384,6 +391,7 @@ export async function siteCookiesForRun(db: Queryable, kek: Kek, input: { runId:
   const row = (
     await db.query<{
       server_use_allowed: boolean;
+      secret_kind: string;
       ciphertext: Buffer | null;
       nonce: Buffer | null;
       dek_wrapped: Buffer | null;
@@ -391,13 +399,15 @@ export async function siteCookiesForRun(db: Queryable, kek: Kek, input: { runId:
       key_version: number | null;
       expires_at: Date | null;
     }>(
-      `SELECT server_use_allowed, ciphertext, nonce, dek_wrapped, alg, key_version, expires_at
+      `SELECT server_use_allowed, secret_kind, ciphertext, nonce, dek_wrapped, alg, key_version, expires_at
        FROM site_sessions WHERE owner_id = $1 AND domain = $2`,
       [run.owner_id, input.domain],
     )
   ).rows[0];
   if (!row) return { ok: false, reason: 'auth_required' };
   if (!row.server_use_allowed) return { ok: false, reason: 'tunnel_only' };
+  // Seul un secret de nature `cookie` est ouvert ici et rejoué comme cookies.
+  if (row.secret_kind !== 'cookie') return { ok: false, reason: 'auth_required' };
   if (!row.ciphertext || !row.nonce || !row.dek_wrapped || !row.alg || row.key_version === null) return { ok: false, reason: 'auth_required' };
   // `expires_at` = expiration du dernier cookie : passée, plus aucun cookie n'est vivant (inutile de déchiffrer).
   if (row.expires_at !== null && row.expires_at.getTime() <= Date.now()) return { ok: false, reason: 'cookie_expired' };
