@@ -10,6 +10,7 @@
 // - admin, transaction `withActor` : `listAllDevices` (vue de métadonnées), `adminRevokeDevice` (fonction de révocation) ;
 // - système côté worker : `siteCookiesForRun`, seule fonction qui ouvre un cookie, toujours pour le propriétaire du run.
 import {
+  computeSessionState,
   cookieMatchesDomain,
   EXTENSION_TOKEN_LIFETIME_DAYS,
   generateExtensionToken,
@@ -24,9 +25,11 @@ import {
   PAIRING_CODE_TTL_MINUTES,
   sealSecret,
   SecretDecryptError,
+  SESSION_STATE_LABELS,
   siteSessionAad,
   type Kek,
   type Role,
+  type SessionState,
   type SiteCookie,
 } from '@runtime/core';
 import type pg from 'pg';
@@ -248,6 +251,18 @@ export type SiteView = {
   consentedAt: Date;
   capturedAt: Date | null;
   expiresAt: Date | null;
+  /** B1 : état calculé par le serveur (`computeSessionState`) ; `null` en mode tunnel (aucune session côté serveur). */
+  state: SessionState | null;
+  /** Libellé français de l'état (« Active », « À renouveler », « Expirée », « À vérifier »), `null` en mode tunnel. */
+  stateLabel: string | null;
+  lastUsedAt: Date | null;
+  lastCheckedAt: Date | null;
+  /** Code court du dernier test de validité (`alive`, `dead_http_401`...), jamais une valeur du site. */
+  lastCheckOutcome: string | null;
+  /** Un rafraîchissement est demandé à l'extension et n'est pas encore arrivé. */
+  refreshRequested: boolean;
+  /** Étiquette libre du compte, choisie par l'utilisateur. */
+  accountLabel: string | null;
 };
 
 type SiteRow = {
@@ -259,22 +274,71 @@ type SiteRow = {
   consented_at: Date;
   captured_at: Date | null;
   expires_at: Date | null;
+  last_used_at: Date | null;
+  last_checked_at: Date | null;
+  account_label: string | null;
+  check_at: Date | null;
+  check_outcome: string | null;
+  use_ok_at: Date | null;
+  refresh_requested_at: Date | null;
+  refreshed_at: Date | null;
 };
-const SITE_COLUMNS = 'id, domain, server_use_allowed, secret_kind, key_version, consented_at, captured_at, expires_at';
-const siteView = (r: SiteRow): SiteView => ({
-  id: r.id,
-  domain: r.domain,
-  serverUseAllowed: r.server_use_allowed,
-  secretKind: r.secret_kind as SecretKind,
-  hasServerCookies: r.key_version !== null,
-  consentedAt: r.consented_at,
-  capturedAt: r.captured_at,
-  expiresAt: r.expires_at,
-});
+/**
+ * Vue d'une session : colonnes de métadonnées (jamais les colonnes scellées) et derniers événements du journal d'usage,
+ * qui fondent l'état. Le journal ne s'écrit pas à la main : `checked`, `used` et `refresh_requested` viennent du système
+ * (0027), donc un utilisateur ne peut pas se fabriquer une preuve de vie en écrivant `last_checked_at`.
+ */
+const SITE_VIEW_SELECT = `SELECT s.id, s.domain, s.server_use_allowed, s.secret_kind, s.key_version, s.consented_at, s.captured_at, s.expires_at,
+  s.last_used_at, s.last_checked_at, s.account_label,
+  (SELECT e.created_at FROM site_session_events e WHERE e.owner_id = s.owner_id AND e.domain = s.domain AND e.event = 'checked' ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS check_at,
+  (SELECT e.outcome FROM site_session_events e WHERE e.owner_id = s.owner_id AND e.domain = s.domain AND e.event = 'checked' ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS check_outcome,
+  (SELECT max(e.created_at) FROM site_session_events e WHERE e.owner_id = s.owner_id AND e.domain = s.domain AND e.event = 'used' AND e.outcome = 'ok') AS use_ok_at,
+  (SELECT max(e.created_at) FROM site_session_events e WHERE e.owner_id = s.owner_id AND e.domain = s.domain AND e.event = 'refresh_requested') AS refresh_requested_at,
+  (SELECT max(e.created_at) FROM site_session_events e WHERE e.owner_id = s.owner_id AND e.domain = s.domain AND e.event = 'refreshed') AS refreshed_at
+  FROM site_sessions s`;
+const siteView = (r: SiteRow, now: Date = new Date()): SiteView => {
+  const refreshRequested = r.refresh_requested_at !== null && (r.refreshed_at === null || r.refreshed_at.getTime() < r.refresh_requested_at.getTime());
+  const state = computeSessionState(
+    {
+      serverUseAllowed: r.server_use_allowed,
+      hasServerCookies: r.key_version !== null,
+      capturedAt: r.captured_at,
+      expiresAt: r.expires_at,
+      lastCheckAt: r.check_at,
+      lastCheckOutcome: r.check_outcome,
+      lastUseOkAt: r.use_ok_at,
+      refreshPending: refreshRequested,
+    },
+    now,
+  );
+  return {
+    id: r.id,
+    domain: r.domain,
+    serverUseAllowed: r.server_use_allowed,
+    secretKind: r.secret_kind as SecretKind,
+    hasServerCookies: r.key_version !== null,
+    consentedAt: r.consented_at,
+    capturedAt: r.captured_at,
+    expiresAt: r.expires_at,
+    state,
+    stateLabel: state === null ? null : SESSION_STATE_LABELS[state],
+    lastUsedAt: r.last_used_at,
+    lastCheckedAt: r.last_checked_at,
+    lastCheckOutcome: r.check_outcome,
+    refreshRequested: state !== null && refreshRequested,
+    accountLabel: r.account_label,
+  };
+};
 
 export async function listSites(db: Queryable, ownerId: string): Promise<SiteView[]> {
-  const { rows } = await db.query<SiteRow>(`SELECT ${SITE_COLUMNS} FROM site_sessions WHERE owner_id = $1 ORDER BY domain`, [ownerId]);
-  return rows.map(siteView);
+  const { rows } = await db.query<SiteRow>(`${SITE_VIEW_SELECT} WHERE s.owner_id = $1 ORDER BY s.domain`, [ownerId]);
+  return rows.map((r) => siteView(r));
+}
+
+/** Une session de l'utilisateur par identifiant (transaction `withActor`) ; `null` si elle n'existe pas ou n'est pas à lui. */
+export async function readSite(db: Queryable, ownerId: string, id: string): Promise<SiteView | null> {
+  const { rows } = await db.query<SiteRow>(`${SITE_VIEW_SELECT} WHERE s.owner_id = $1 AND s.id = $2`, [ownerId, id]);
+  return rows[0] ? siteView(rows[0]) : null;
 }
 
 const WIPE_SEALED = 'ciphertext = NULL, nonce = NULL, dek_wrapped = NULL, alg = NULL, key_version = NULL, captured_at = NULL, expires_at = NULL';
@@ -288,22 +352,43 @@ export async function connectSite(
   input: { ownerId: string; domain: string; serverUseAllowed: boolean },
 ): Promise<{ site: SiteView; change: 'connected' | 'server_use_changed' | 'unchanged' }> {
   const existing = (
-    await db.query<SiteRow>(`SELECT ${SITE_COLUMNS} FROM site_sessions WHERE owner_id = $1 AND domain = $2 FOR UPDATE`, [input.ownerId, input.domain])
+    await db.query<{ id: string; server_use_allowed: boolean; key_version: number | null }>(
+      'SELECT id, server_use_allowed, key_version FROM site_sessions WHERE owner_id = $1 AND domain = $2 FOR UPDATE',
+      [input.ownerId, input.domain],
+    )
   ).rows[0];
   if (!existing) {
-    const { rows } = await db.query<SiteRow>(
-      `INSERT INTO site_sessions (owner_id, domain, server_use_allowed) VALUES ($1, $2, $3) RETURNING ${SITE_COLUMNS}`,
+    const { rows } = await db.query<{ id: string }>(
+      'INSERT INTO site_sessions (owner_id, domain, server_use_allowed) VALUES ($1, $2, $3) RETURNING id',
       [input.ownerId, input.domain, input.serverUseAllowed],
     );
-    return { site: siteView(rows[0]!), change: 'connected' };
+    return { site: (await readSite(db, input.ownerId, rows[0]!.id))!, change: 'connected' };
   }
   const changed = existing.server_use_allowed !== input.serverUseAllowed;
-  const { rows } = await db.query<SiteRow>(
+  // Retirer l'usage serveur efface les cookies : c'est une révocation, tracée comme telle (sans valeur).
+  if (!input.serverUseAllowed && existing.key_version !== null) {
+    await recordRevocation(db, { ownerId: input.ownerId, siteSessionId: existing.id, domain: input.domain, outcome: 'server_use_withdrawn' });
+  }
+  await db.query(
     `UPDATE site_sessions SET server_use_allowed = $3, consented_at = now(), updated_at = now()${input.serverUseAllowed ? '' : `, ${WIPE_SEALED}`}
-     WHERE id = $1 AND owner_id = $2 RETURNING ${SITE_COLUMNS}`,
+     WHERE id = $1 AND owner_id = $2`,
     [existing.id, input.ownerId, input.serverUseAllowed],
   );
-  return { site: siteView(rows[0]!), change: changed ? 'server_use_changed' : 'unchanged' };
+  return { site: (await readSite(db, input.ownerId, existing.id))!, change: changed ? 'server_use_changed' : 'unchanged' };
+}
+
+/**
+ * Événement `revoked` du journal d'usage (transaction `withActor` du propriétaire : le rôle des requêtes n'insère que
+ * `revoked` et `refreshed`). À écrire AVANT la suppression de la session : le déclencheur d'appartenance la relit.
+ * Aucune valeur de secret : `outcome` est un code court.
+ */
+async function recordRevocation(db: Queryable, input: { ownerId: string; siteSessionId: string; domain: string; outcome: string }): Promise<void> {
+  await db.query(`INSERT INTO site_session_events (owner_id, site_session_id, domain, event, outcome) VALUES ($1, $2, $3, 'revoked', $4)`, [
+    input.ownerId,
+    input.siteSessionId,
+    input.domain,
+    input.outcome,
+  ]);
 }
 
 export class CookieDomainMismatchError extends Error {
@@ -321,8 +406,8 @@ export async function storeSiteCookies(
   input: { ownerId: string; domain: string; cookies: readonly SiteCookie[] },
 ): Promise<'stored' | 'not_connected' | 'server_use_not_allowed'> {
   const site = (
-    await db.query<{ id: string; server_use_allowed: boolean }>(
-      'SELECT id, server_use_allowed FROM site_sessions WHERE owner_id = $1 AND domain = $2 FOR UPDATE',
+    await db.query<{ id: string; server_use_allowed: boolean; key_version: number | null; expires_at: Date | null }>(
+      'SELECT id, server_use_allowed, key_version, expires_at FROM site_sessions WHERE owner_id = $1 AND domain = $2 FOR UPDATE',
       [input.ownerId, input.domain],
     )
   ).rows[0];
@@ -348,19 +433,34 @@ export async function storeSiteCookies(
      WHERE id = $1`,
     [site.id, sealed.ciphertext, sealed.nonce, sealed.dekWrapped, sealed.alg, sealed.kekVersion, expiresAt],
   );
+  // Session neuve (B1) : si un rafraîchissement était demandé, ou si la précédente n'était plus servable (expirée), l'arrivée de la nouvelle est tracée (`refreshed`, sans valeur). Une simple resynchronisation d'une session
+  // qui fonctionnait n'écrit rien : le journal ne se remplit pas à chaque réveil de l'extension.
+  const unusable = site.key_version !== null && site.expires_at !== null && site.expires_at.getTime() <= Date.now();
+  if (unusable || (await refreshPending(db, input.ownerId, input.domain))) {
+    await db.query(`INSERT INTO site_session_events (owner_id, site_session_id, domain, event, outcome) VALUES ($1, $2, $3, 'refreshed', $4)`, [
+      input.ownerId,
+      site.id,
+      input.domain,
+      unusable ? 'replaced_expired' : 'pushed',
+    ]);
+  }
   return 'stored';
 }
 
 /** « Déconnecter ce site » (07 § 2) : supprime le domaine et ses cookies. Renvoie vrai si une ligne existait. */
 export async function disconnectSite(db: Queryable, ownerId: string, domain: string): Promise<boolean> {
-  const { rowCount } = await db.query('DELETE FROM site_sessions WHERE owner_id = $1 AND domain = $2', [ownerId, domain]);
+  const site = (await db.query<{ id: string; key_version: number | null }>('SELECT id, key_version FROM site_sessions WHERE owner_id = $1 AND domain = $2 FOR UPDATE', [ownerId, domain])).rows[0];
+  if (!site) return false;
+  // Révocation tracée (B1, `revoked`) avant la suppression : la session cesse d'être servie à l'instant (`siteCookiesForRun` : `auth_required`).
+  await recordRevocation(db, { ownerId, siteSessionId: site.id, domain, outcome: site.key_version === null ? 'consent_removed' : 'cookies_deleted' });
+  const { rowCount } = await db.query('DELETE FROM site_sessions WHERE id = $1 AND owner_id = $2', [site.id, ownerId]);
   return rowCount === 1;
 }
 
 /** Même révocation depuis la console, par identifiant. Renvoie le domaine supprimé, ou `null`. */
 export async function disconnectSiteById(db: Queryable, ownerId: string, id: string): Promise<string | null> {
-  const { rows } = await db.query<{ domain: string }>('DELETE FROM site_sessions WHERE id = $1 AND owner_id = $2 RETURNING domain', [id, ownerId]);
-  return rows[0]?.domain ?? null;
+  const site = (await db.query<{ domain: string }>('SELECT domain FROM site_sessions WHERE id = $1 AND owner_id = $2', [id, ownerId])).rows[0];
+  return site !== undefined && (await disconnectSite(db, ownerId, site.domain)) ? site.domain : null;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -395,6 +495,14 @@ export async function siteCookiesForRun(db: Queryable, kek: Kek, input: { runId:
   if (!run) throw new RunSessionNotFoundError(`run ${input.runId} introuvable`);
   // Une API à session est privée (CHECK apis_session_private) : l'appelant est son propriétaire. Sinon, rien.
   if (run.owner_id !== run.api_owner_id || run.recorded_api_owner_id !== run.api_owner_id) return { ok: false, reason: 'auth_required' };
+  return openSiteCookies(db, kek, { ownerId: run.owner_id, domain: input.domain });
+}
+
+/**
+ * Ouvre les cookies de la session (propriétaire, domaine) : lecture de la ligne du propriétaire seulement, jamais d'une
+ * autre. Appelée une fois le propriétaire établi par l'appelant (`siteCookiesForRun`, test de validité : `session-check.ts`).
+ */
+export async function openSiteCookies(db: Queryable, kek: Kek, input: { ownerId: string; domain: string }): Promise<RunSiteSession> {
   const row = (
     await db.query<{
       server_use_allowed: boolean;
@@ -408,7 +516,7 @@ export async function siteCookiesForRun(db: Queryable, kek: Kek, input: { runId:
     }>(
       `SELECT server_use_allowed, secret_kind, ciphertext, nonce, dek_wrapped, alg, key_version, expires_at
        FROM site_sessions WHERE owner_id = $1 AND domain = $2`,
-      [run.owner_id, input.domain],
+      [input.ownerId, input.domain],
     )
   ).rows[0];
   if (!row) return { ok: false, reason: 'auth_required' };
@@ -421,14 +529,14 @@ export async function siteCookiesForRun(db: Queryable, kek: Kek, input: { runId:
   let cookies: SiteCookie[];
   try {
     const sealed = { ciphertext: row.ciphertext, nonce: row.nonce, dekWrapped: row.dek_wrapped, alg: row.alg, kekVersion: row.key_version };
-    cookies = JSON.parse(openSecret(sealed, kek, siteSessionAad({ ownerId: run.owner_id, domain: input.domain, keyVersion: row.key_version }))) as SiteCookie[];
+    cookies = JSON.parse(openSecret(sealed, kek, siteSessionAad({ ownerId: input.ownerId, domain: input.domain, keyVersion: row.key_version }))) as SiteCookie[];
   } catch (error) {
     if (error instanceof SecretDecryptError) return { ok: false, reason: 'auth_required' };
     throw error;
   }
   const live = liveCookies(cookies, Date.now() / 1000);
   if (live.length === 0) return { ok: false, reason: 'cookie_expired' };
-  return { ok: true, ownerId: run.owner_id, cookies: live };
+  return { ok: true, ownerId: input.ownerId, cookies: live };
 }
 
 /**
@@ -449,6 +557,18 @@ export async function recordSessionUse(db: Queryable, input: { runId: string; do
     [site.owner_id, site.id, input.domain, input.runId, input.outcome.slice(0, 120)],
   );
   return true;
+}
+
+/** Un `refresh_requested` du journal d'usage n'a pas encore de `refreshed` derrière lui (propriétaire, domaine). */
+export async function refreshPending(db: Queryable, ownerId: string, domain: string): Promise<boolean> {
+  const { rows } = await db.query<{ pending: boolean | null }>(
+    `SELECT (
+       (SELECT max(created_at) FROM site_session_events WHERE owner_id = $1 AND domain = $2 AND event = 'refresh_requested') >
+       coalesce((SELECT max(created_at) FROM site_session_events WHERE owner_id = $1 AND domain = $2 AND event = 'refreshed'), '-infinity'::timestamptz)
+     ) AS pending`,
+    [ownerId, domain],
+  );
+  return rows[0]?.pending === true;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
