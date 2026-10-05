@@ -91,27 +91,16 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
     degraded_reasons: { type: 'array', items: { type: 'string' } },
     rejected: { type: ['object', 'null'] },
     message: { type: 'string' },
-    error: { type: 'object', description: 'Named cause of a failed run: { code, message, what_to_do, retryable }.' },
+    error: { type: 'object', description: 'Cause: { code, message, what_to_do, retryable }.' },
     next_action: { type: ['object', 'null'] },
     poll_after_seconds: { type: ['integer', 'null'] },
-    progress: { type: ['object', 'null'], description: 'While an investigation runs: step (1 to 4), label, phase, strategies tried, and a sentence on what SYM is doing.' },
-    // Bloc de résultat d'une enquête (03 § 10.2) : présent pour create_api, get_run et validate_schema d'une enquête.
-    api_id: { type: 'string' },
-    slug: { type: 'string' },
-    name: { type: 'string' },
-    existing: { type: 'boolean' },
-    phase: { type: 'string' },
-    question: { type: 'object', description: 'The single closed question SYM asks when state is awaiting_decision: reason, text, options[{ id, label }].' },
+    progress: { type: ['object', 'null'], description: 'Investigation step (1 to 4) and what SYM is doing.' },
+    // Bloc de résultat d'une enquête (03 § 10.2) : api_id, slug, name, existing, phase, items_total, items_preview, items_cursor, timeline,
+    // attempts, cost, message_locale s'ajoutent à ces propriétés (non déclarées ici : le budget des définitions d'outils est de 5 000 jetons).
+    question: { type: 'object', description: 'The question SYM asks (awaiting_decision): reason, text, options[{ id, label }].' },
     proposed_output_schema: { type: ['object', 'null'] },
     fields_found: { type: 'array', items: { type: 'string' } },
-    items_total: { type: ['integer', 'null'] },
-    items_preview: { type: 'array', items: { type: 'object' } },
-    items_cursor: { type: ['string', 'null'] },
-    timeline: { type: 'array' },
-    attempts: { type: 'array' },
-    cost: { type: 'object' },
     console_url: { type: 'string' },
-    message_locale: { type: 'string' },
     metadata_only: { type: 'boolean' },
   },
 };
@@ -159,17 +148,13 @@ export type GenericToolName =
   | 'revert_api'
   | 'discard_draft';
 
-/** Résultat des outils d'itération (19b § 2, `IterationResult`) : `summary` localisé, `estimate`, `next_action`, jamais un code interne dans le texte. */
+/** Résultat des outils d'itération (19b § 2, `IterationResult`) : `summary` localisé, `estimate`, `next_action`, jamais un code interne dans le texte. Les versions
+ * (draft_version, base_version, current_version, output_schema_version) et diff_ref s'ajoutent sans être déclarées (budget des définitions). */
 const ITERATION_RESULT_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     summary: { type: 'string' },
-    draft_version: { type: 'integer' },
-    base_version: { type: 'integer' },
-    current_version: { type: 'integer' },
-    output_schema_version: { type: 'string' },
     estimate: { type: 'object' },
-    diff_ref: { type: ['string', 'null'] },
     diff_hash: { type: ['string', 'null'] },
     run_id: { type: 'string' },
     test: { type: ['object', 'null'] },
@@ -197,7 +182,7 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     toolset: 'build',
     scope: 'apis:write',
     description:
-      'Create a new API from a description and a start URL: SYM investigates the site (access report, cheapest strategy first), validates the output schema itself and returns the items in the same conversation. SYM does the extraction itself, every page included: do not fetch the site yourself; follow the run with get_run every poll_after_seconds (with wait_seconds) until state is succeeded, and show the user the items SYM returns. Only if SYM asks a question (state awaiting_decision), put it to the user, then call validate_schema with choice. Use only when list_apis has no API that fits.',
+      'Create a new API from a description and a start URL: SYM investigates the site, validates the output schema itself and returns the items in the same conversation. SYM does the extraction itself, every page included: do not fetch the site yourself; follow the run with get_run every poll_after_seconds until state is succeeded, and show the user the items. Only if SYM asks a question (state awaiting_decision), put it to the user, then call validate_schema with choice. Use only when list_apis has no API that fits.',
     annotations: EXECUTE,
     inputSchema: {
       type: 'object',
@@ -208,9 +193,9 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
         url: { type: 'string', minLength: 1, maxLength: 2048, description: 'Absolute start URL (https://…).' },
         example_output: { type: ['object', 'array'], description: 'Optional example of one item or a list of items.' },
         brief: BRIEF_SCHEMA,
-        auto_validate: { type: 'boolean', default: true, description: 'SYM validates the proposed schema itself (default true) and stops only on a real doubt; false: stop at the schema.' },
+        auto_validate: { type: 'boolean', default: true, description: 'SYM validates the proposed schema itself and stops only on a real doubt; false: stop at the schema.' },
         name: { type: 'string', minLength: 1, maxLength: 80, description: 'Short name of the API (optional); SYM proposes one otherwise.' },
-        force_new: { type: 'boolean', default: false, description: 'Create a new API even if the same request is already known (same URL and description, running or done in the last 24 hours).' },
+        force_new: { type: 'boolean', default: false, description: 'Create a new API even if the same request is known (same URL and description, last 24 h).' },
         network_policy: NETWORK_POLICY,
         wait_seconds: WAIT,
       },
@@ -241,7 +226,7 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     name: 'validate_schema',
     toolset: 'build',
     scope: 'apis:write',
-    description: 'Answer the question SYM asked (state awaiting_decision) with choice, the id of the option the user picked (default continue), or validate a corrected output_schema (each property description says what goes in the field; instructions carry what a schema cannot say, source_id limits the trials to one source of the reconnaissance; schema_validation in the answer shows the retained schema, what changed and what was not applied). SYM then tries the strategies, cheapest first, and returns the items.',
+    description: 'Answer the question SYM asked (state awaiting_decision) with choice, or validate a corrected output_schema (each property description says what the field holds); instructions and source_id guide the mapping, schema_validation shows what was applied.',
     annotations: EXECUTE,
     inputSchema: {
       type: 'object',
@@ -250,8 +235,8 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
       properties: {
         api_id: UUID_STRING,
         output_schema: { type: 'object', description: 'Corrected JSON Schema of one item (optional).' },
-        instructions: { type: 'string', maxLength: 2000, description: 'Corrections from the user, in plain words (optional).' },
-        source_id: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,64}$', description: 'Id of a source found by the reconnaissance (optional).' },
+        instructions: { type: 'string', maxLength: 2000, description: 'The user’s corrections, in plain words.' },
+        source_id: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,64}$', description: 'Id of a source found by the reconnaissance.' },
         choice: { type: 'string', maxLength: 64, description: 'Id of the option the user picked among those of the question (continue validates the proposed schema).' },
         wait_seconds: WAIT,
       },

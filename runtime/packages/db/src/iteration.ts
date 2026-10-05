@@ -95,7 +95,7 @@ type ApiState = {
   draft_strategy_version: number | null;
   output_schema: Json;
   output_schema_version: string;
-  max_cost_usd: string;
+  max_cost_usd: string | null;
   iteration_budget_usd: string | null;
 };
 
@@ -398,7 +398,7 @@ export async function planDraftTest(pool: pg.Pool, args: { apiId: string; ownerI
       history,
       strategyEstUsd: draft.est_cost_usd === null ? null : Number(draft.est_cost_usd),
       currentEstUsd: current === null || current.est_cost_usd === null ? null : Number(current.est_cost_usd),
-      maxCostUsd: Number(apiRow.max_cost_usd),
+      maxCostUsd: apiRow.max_cost_usd === null ? null : Number(apiRow.max_cost_usd),
       iterationBudgetUsd: apiRow.iteration_budget_usd === null ? null : Number(apiRow.iteration_budget_usd),
       ...(args.confirmAboveUsd === undefined ? {} : { confirmAboveUsd: args.confirmAboveUsd }),
     });

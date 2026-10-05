@@ -208,7 +208,7 @@ export function iterationRoutes(app: FastifyInstance, ctx: ServerContext): void 
       // Un schéma qui ajoute des champs `x-personal` passe par la case « j'ai lu » comme à la validation (17 § 11).
       if (body.output_schema !== undefined && schemaHasPersonalFields(body.output_schema) && (await rejectWithoutAck(ctx, reply, actor, body.output_schema))) return reply;
       if (api.current_strategy_version === null) return fail(reply, 'no_current_version', api.slug, locale);
-      const estimate = estimateCost({ history: [], strategyEstUsd: null, maxCostUsd: Number(api.max_cost_usd), iterationBudgetUsd: null });
+      const estimate = estimateCost({ history: [], strategyEstUsd: null, maxCostUsd: api.max_cost_usd === null ? null : Number(api.max_cost_usd), iterationBudgetUsd: null });
       if (body.dry_run === true) {
         return reply.send({ dry_run: true, estimate, summary: refinedText(locale, { changes: [], costUsd: estimate.high_usd, feedbackOnly: true, dryRun: true }), next_action: { tool: 'refine_api', args: { slug: api.slug } } });
       }

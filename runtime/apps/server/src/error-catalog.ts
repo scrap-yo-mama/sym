@@ -44,8 +44,12 @@ const RETRYABLE = new Set([
   'minimal_content',
 ]);
 
-/** `retryable` d'un code : la liste ci-dessus, ou tout statut 429 et 5xx. */
+/** Refus en 429 qui ne se réessaie pas tel quel : le budget du jour (D-123) se réinitialise à minuit UTC. */
+const NOT_RETRYABLE = new Set(['budget_exceeded']);
+
+/** `retryable` d'un code : la liste ci-dessus, ou tout statut 429 et 5xx (sauf NOT_RETRYABLE). */
 function isRetryable(code: string, status?: number): boolean {
+  if (NOT_RETRYABLE.has(code)) return false;
   return RETRYABLE.has(code) || (status !== undefined && (status === 429 || status >= 500));
 }
 

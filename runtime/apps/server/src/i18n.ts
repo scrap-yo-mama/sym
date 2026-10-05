@@ -67,6 +67,7 @@ async function resolveRequestLocale(ctx: Pick<ServerContext, 'pool'> & { default
  */
 const ROUTE_MESSAGE_CODES = new Set([
   'invalid_input',
+  'budget_exceeded',
   'cost_cap_exceeded',
   'weak_password',
   'lifetime_too_long',

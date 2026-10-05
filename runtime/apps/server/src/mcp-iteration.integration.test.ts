@@ -316,6 +316,8 @@ describe('reprise dans une autre conversation, propriétaire seul', () => {
 describe('plafonds : une boucle d’affinages et de tests', () => {
   test('assert_estimate_within_cap : 10 cycles refine + test, 10 runs draft_refine tracés, chaque coût réel sous le plafond annoncé, un seul affinage à la fois', async () => {
     const api = await seedApi(srv.db.url, a.user.id);
+    // D-123 : sans plafond fixé, l'estimation annonce le plafond d'instance par défaut ; ici un plafond de 0,5 $ est fixé sur l'API.
+    await withClient(srv.db.url, (c) => c.query('UPDATE apis SET max_cost_usd = 0.5 WHERE id = $1', [api.id]));
     const client = await connect(a.key);
     const caps: number[] = [];
     for (let i = 0; i < 10; i += 1) {

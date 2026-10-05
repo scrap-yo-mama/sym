@@ -57,6 +57,8 @@ export type PrepareOptions = {
   extraCa?: string[];
   /** Tests seulement : accepte un IdP OIDC en http (faux fournisseur local). */
   oidcAllowHttp?: boolean;
+  /** Tests seulement : garde SSRF du serveur (fixtures sur la boucle locale, résolveur injecté) ; défaut : la politique de l'environnement. */
+  guard?: SsrfGuard;
   /** Passerelle tunnel : périodes de sondage, de revalidation et délai d'inactivité (tests ; défauts de production). */
   tunnel?: { pollMs?: number; revalidateMs?: number; idleMs?: number };
   /** API REST : relecture des attentes et du flux SSE, ping, plafond de flux (tests ; défauts de production). */
@@ -197,7 +199,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       isInitialized,
       mfaEnforced: config.mfaEnforced,
       defaultLocaleEnv: config.defaultLocale,
-      guard: new SsrfGuard({ policy: config.ssrfPolicy }),
+      guard: options.guard ?? new SsrfGuard({ policy: config.ssrfPolicy }),
       secretsKek: kekFor(config.keyring.current, 0, 'secrets'),
       secrets: null,
       keyChecked: null,

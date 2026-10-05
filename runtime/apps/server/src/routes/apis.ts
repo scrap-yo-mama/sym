@@ -245,7 +245,10 @@ async function rejectUrlNotAllowed(ctx: ServerContext, reply: FastifyReply, raw:
     if (literal) await ctx.guard.resolveAnyPort(target.host, target.port);
     return false;
   } catch (error) {
-    if (findSsrfBlocked(error) === undefined) throw error;
+    const blocked = findSsrfBlocked(error);
+    if (blocked === undefined) throw error;
+    // Un nom qui ne se résout pas ici n'est pas une adresse interne : le worker recontrôle à la connexion (INV10) et l'enquête dira l'échec.
+    if (blocked.detail.reason === 'unresolvable') return false;
     await sendError(reply, 400, 'url_not_allowed', 'adresse interne ou réservée : donne une adresse publique');
     return true;
   }

@@ -6,6 +6,9 @@
 
 export const CONFIRM_ABOVE_USD_DEFAULT = 0.1;
 
+/** Plafond annoncé quand l'API n'a aucun plafond par run (D-123, `max_cost_usd` NULL) et aucun budget d'itération : le plafond d'instance par défaut (`MAX_COST_USD_PER_RUN`). */
+export const NO_RUN_CAP_ESTIMATE_USD = 10;
+
 export type Estimate = {
   readonly low_usd: number;
   readonly high_usd: number;
@@ -27,7 +30,8 @@ export type EstimateInput = {
   readonly strategyEstUsd: number | null;
   /** Coût estimé de la version en service, pour le delta (null : inconnu). */
   readonly currentEstUsd?: number | null;
-  readonly maxCostUsd: number;
+  /** Plafond par run de l'API ; null : aucun (D-123), le budget d'itération ou le plafond d'instance par défaut tient lieu de borne. */
+  readonly maxCostUsd: number | null;
   readonly iterationBudgetUsd: number | null;
   readonly confirmAboveUsd?: number;
   /** Coût propre de l'affinage (recompilation par modèle), ajouté aux deux bornes. */
@@ -42,7 +46,8 @@ const median = (v: readonly number[]): number => {
 };
 
 export function estimateCost(input: EstimateInput): Estimate {
-  const cap = round6(input.iterationBudgetUsd === null ? input.maxCostUsd : Math.min(input.maxCostUsd, input.iterationBudgetUsd));
+  const runCap = input.maxCostUsd ?? input.iterationBudgetUsd ?? NO_RUN_CAP_ESTIMATE_USD;
+  const cap = round6(input.iterationBudgetUsd === null ? runCap : Math.min(runCap, input.iterationBudgetUsd));
   const extra = input.extraUsd ?? 0;
   const history = input.history.filter((c) => Number.isFinite(c) && c >= 0).slice(0, 20);
   let low: number;

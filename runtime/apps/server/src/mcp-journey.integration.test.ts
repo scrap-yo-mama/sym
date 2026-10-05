@@ -141,7 +141,8 @@ describe('progression et attente tenue (03 § 3 et § 5)', () => {
     const beats = seen.filter((p) => /^\d\/4 /.test(p.message));
     expect(beats.length).toBeGreaterThanOrEqual(2);
     expect(beats.every((p) => /Décrire|Reconnaître|Valider le schéma|Essayer/.test(p.message))).toBe(true);
-    expect(beats.every((p) => / · \d+ s$/.test(p.message))).toBe(true);
+    // Les battements (jalon courant et durée) alternent avec les jalons du récit : au moins deux portent la durée.
+    expect(beats.filter((p) => / · \d+ s$/.test(p.message)).length).toBeGreaterThanOrEqual(2);
   }, 30_000);
 
   test('assert_wait_honored — get_run(wait_seconds: 2) sur un run qui reste en cours revient à l’échéance, timeline non vide ; un run qui finit pendant l’attente la coupe', async () => {

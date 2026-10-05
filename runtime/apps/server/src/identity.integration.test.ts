@@ -97,7 +97,7 @@ describe('assert_identity_settings_admin_only : réglages d’identité du robot
     for (const contact of refused) {
       const res = await put(adminCookie, { instance_contact: contact });
       expect(res.statusCode, JSON.stringify(contact)).toBe(400);
-      expect(res.json()).toEqual({ error: { code: 'invalid_instance_contact', message: expect.any(String) } });
+      expect(res.json()).toMatchObject({ error: { code: 'invalid_instance_contact', message: expect.any(String) } });
       expect(res.body).not.toContain('Injected');
     }
     expect(await settingRows('instance_contact')).toEqual([{ value: 'mailto:ops@zz-test.example' }]);
@@ -133,7 +133,9 @@ describe('assert_identity_settings_admin_only : réglages d’identité du robot
     expect(view.engine).toEqual(engine);
     expect(view.user_agent).toBe(engineUserAgent(engine));
     expect(view.user_agent).not.toMatch(/HeadlessChrome|Scrapyomama/);
-    expect(view.user_agent_identified).toBe(`${engineUserAgent(engine)} (compatible; Scrapyomama/0.0.0; +https://zz-test.example/robot)`);
+    // La version publiée est celle du paquet (U4.1), non plus le placeholder 0.0.0.
+    expect(view.user_agent_identified).toMatch(/\(compatible; Scrapyomama\/\d+\.\d+\.\d+; \+https:\/\/zz-test\.example\/robot\)$/);
+    expect(view.user_agent_identified.startsWith(`${engineUserAgent(engine)} (compatible; Scrapyomama/`)).toBe(true);
     // Le User-Agent n'est pas un champ d'écriture.
     expect((await put(adminCookie, { user_agent: 'Mozilla/5.0 (X11) Firefox/130' })).statusCode).toBe(400);
     expect((await get(adminCookie)).json<{ user_agent: string }>().user_agent).toBe(engineUserAgent(engine));

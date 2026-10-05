@@ -129,7 +129,8 @@ beforeAll(async () => {
   srv = await startTestServer(
     'first_try',
     { GATEWAY_INSTANCE: 'zz_test_gw_first', MAX_WAIT_SECONDS: '50', MAX_CONCURRENT_RUNS: '1000', MAX_ACTIVE_RUNS_PER_USER: '1000', MAX_RUNS_PER_KEY_PER_MINUTE: '1000', MCP_ALLOWED_HOSTS: '127.0.0.1' },
-    { rest: { pollMs: 50 } },
+    // Garde du serveur : les fixtures sont des noms `.localhost` que seul le résolveur injecté connaît (refus d'adresse interne, U1.5).
+    { rest: { pollMs: 50 }, guard: fixtureGuard(client.server.port, [HTML_LIST, TWO_LISTS, BOOKS, CATALOGUE], net) },
   );
   // Sites de fixtures sur la boucle locale : pas d'attente de politesse de 1,5 s entre deux pages (52 pages).
   await withClient(srv.db.url, (c) => c.query(`ALTER TABLE apis ALTER COLUMN domain_pacing SET DEFAULT '{"min_delay_ms": 5, "max_requests_per_run": 200, "max_wait_ms": 60000}'`));

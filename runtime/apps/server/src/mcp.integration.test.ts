@@ -625,7 +625,7 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
 
   test('validate_schema (constat Barnes) : corrections, consignes et source transmises ; schema_validation montre le schéma retenu et ce qui a changé ; source inconnue → erreur claire', async () => {
     const client = await connect(a.key);
-    const created = await call(client, 'create_api', { description: 'zz_test biens immobiliers', url: 'https://zz-test-barnes.example/', wait_seconds: 0 });
+    const created = await call(client, 'create_api', { description: 'zz_test biens immobiliers', url: 'https://zz-test-barnes.example/', auto_validate: false, wait_seconds: 0 });
     const view = created.structuredContent as { api_id: string; run_id: string };
     const proposed = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference' }, type: { type: 'string', description: 'Type' } } };
     await withClient(srv.db.url, async (c) => {
@@ -645,7 +645,7 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
     const validated = await call(client, 'validate_schema', { api_id: view.api_id, output_schema: corrected, instructions: 'Use the results list, not the carousel.', source_id: 'c2', wait_seconds: 0 });
     expect(validated.isError ?? false).toBe(false);
     expect(validated.structuredContent).toMatchObject({
-      state: 'queued',
+      state: 'running', // l'état du parcours (03 § 10.2) ; l'état brut du run reste lisible dans run_state
       schema_validation: {
         output_schema: corrected,
         corrected: true,
