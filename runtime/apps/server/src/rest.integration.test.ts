@@ -273,14 +273,16 @@ describe('catalogue (05 § 4.2) : création, liste, fiche, modification, suppres
     expect((await api(a, 'PATCH', `/api/apis/${session.slug}`, '/api/apis/{slug}', { visibility: 'instance' })).body).toMatchObject({ error: { code: 'session_api_private' } });
   });
 
-  test('PATCH : `max_cost_usd: null` et `budget_daily_usd: null` reviennent au défaut de l’instance (jamais un 200 sans effet)', async () => {
+  test('PATCH : `max_cost_usd: null` retire le plafond par run (D-123) et `budget_daily_usd: null` revient au défaut (jamais un 200 sans effet)', async () => {
     const api1 = await seedApi(srv.db.url, a.user.id);
+    // D-123 : une API neuve n'a pas de plafond par run (null, jamais 0 ni 0,5).
+    expect((await api(a, 'GET', `/api/apis/${api1.slug}`, '/api/apis/{slug}')).body).toMatchObject({ max_cost_usd: null });
     expect((await api(a, 'PATCH', `/api/apis/${api1.slug}`, '/api/apis/{slug}', { max_cost_usd: 2, budget_daily_usd: 7 })).body).toMatchObject({ max_cost_usd: 2, budget_daily_usd: 7 });
     const reset = await api(a, 'PATCH', `/api/apis/${api1.slug}`, '/api/apis/{slug}', { max_cost_usd: null, budget_daily_usd: null });
     expect(reset.status).toBe(200);
-    // Défauts de l'instance : ceux de la colonne (0,5 $ par run, 5 $ par jour).
-    expect(reset.body).toMatchObject({ max_cost_usd: 0.5, budget_daily_usd: 5 });
-    expect(await count('SELECT max_cost_usd::float FROM apis WHERE id = $1', [api1.id])).toBe(0.5);
+    // Plus de plafond par run (D-123) ; budget du jour de l'API au défaut de la colonne (5 $ par jour).
+    expect(reset.body).toMatchObject({ max_cost_usd: null, budget_daily_usd: 5 });
+    expect(await count('SELECT count(*) FROM apis WHERE id = $1 AND max_cost_usd IS NULL', [api1.id])).toBe(1);
   });
 
   test('fiche d’une API `instance` d’autrui : de quoi la lancer (schémas, statut, exécution, réseau, coût), jamais la politique du propriétaire', async () => {
@@ -560,6 +562,36 @@ describe('validation du schéma : case « j’ai lu » non contournable, ordre d
     // Les marques DÉTECTÉES sont réappliquées côté serveur au schéma validé : le masquage RGPD en aval tient.
     const state = await withClient(srv.db.url, async (cl) => (await cl.query<{ investigation: InvestigationState }>('SELECT investigation FROM apis WHERE id = $1', [apiId])).rows[0]!.investigation);
     expect(state.validated_schema).toEqual({ type: 'object', properties: { name: { type: 'string', 'x-personal': 'identifier' }, city: { type: 'string' } } });
+  });
+
+  test('constat Barnes : corrections appliquées et enregistrées (changements, consignes, source) ; source inconnue → 400 unknown_source avec les identifiants valides', async () => {
+    const proposed = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference' }, type: { type: 'string', description: 'Type' } } };
+    const { apiId } = await awaitingValidation(a, proposed);
+    await withClient(srv.db.url, (c) =>
+      c.query("UPDATE apis SET investigation = investigation || jsonb_build_object('candidates', $2::jsonb) WHERE id = $1", [apiId, JSON.stringify([{ id: 'c1' }, { id: 'c2' }, { id: 'c3', unsupported: 'client_signature' }])]),
+    );
+    const path = `/api/apis/${apiId}/validate-schema`;
+    const unknown = await api(a, 'POST', path, '/api/apis/{id}/validate-schema', { source_id: 'results-list' });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body).toMatchObject({ error: { code: 'unknown_source', what_to_do: expect.stringContaining('c1, c2'), retryable: true } });
+    expect(unknown.body['error'].message).toContain('c1, c2');
+    expect(unknown.body['error'].message).not.toContain('c3');
+    expect((await api(a, 'POST', path, '/api/apis/{id}/validate-schema', { instructions: 'x'.repeat(2001) })).status).toBe(400);
+    expect(await count("SELECT count(*) FROM apis WHERE id = $1 AND investigation_phase = 'awaiting_schema_validation'", [apiId])).toBe(1);
+
+    const corrected = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference without the carousel- prefix' }, property_type: { type: 'string', description: 'Type' } } };
+    const ok = await api(a, 'POST', path, '/api/apis/{id}/validate-schema', { output_schema: corrected, instructions: 'Use the results list,\u0000 not the carousel.', source_id: 'c2' });
+    expect(ok.status).toBe(202);
+    const state = await withClient(srv.db.url, async (c) => (await c.query<{ investigation: InvestigationState }>('SELECT investigation FROM apis WHERE id = $1', [apiId])).rows[0]!.investigation);
+    expect(state.validated_schema).toEqual(corrected);
+    expect(state.validation).toEqual({
+      corrected: true,
+      changes: { added: [], removed: [], renamed: [{ from: 'type', to: 'property_type' }], type_changed: [], description_changed: ['reference'], required_changed: [], other_changed: [] },
+      not_applied: [],
+      instructions: 'Use the results list, not the carousel.',
+      source_id: 'c2',
+    });
+    expect(await count("SELECT count(*) FROM audit_events WHERE action = 'api.schema_validated' AND target_id = $1 AND meta ->> 'source_id' = 'c2'", [apiId])).toBe(1);
   });
 
   test('assert_csv_declared_column_order : colonnes dans l’ordre DÉCLARÉ du schéma validé (corrigé par l’appelant), jamais dans l’ordre de jsonb', async () => {

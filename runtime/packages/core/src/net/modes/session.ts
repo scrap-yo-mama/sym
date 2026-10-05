@@ -141,7 +141,7 @@ export type NetworkSessionOptions = {
    * reconnaissance de l'enquête seulement (2.1, 04b §2), jamais tirées d'une stratégie ; sans `allowedHosts`, ignorées.
    */
   readonly allowedHostSuffixes?: readonly string[];
-  /** Plafond `max_cost_usd` de l'API, contrôlé avant chaque requête (tâche 1.6). */
+  /** Borne de coût du run, contrôlée avant chaque requête (tâche 1.6) : `max_cost_usd` s'il est fixé, sinon le budget du jour (ou d'enquête) restant, D-123. */
   readonly costCeiling?: CostCeiling;
   /**
    * User-Agent du robot (`buildUserAgent` : celui du moteur embarqué, plus le jeton si `identify_instance`), imposé à

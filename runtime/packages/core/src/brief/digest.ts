@@ -5,6 +5,7 @@
 // la sonde. Les décisions de garde ne viennent pas d'ici : l'hôte hors portée est écarté AVANT toute requête, mais la sonde
 // elle-même repasse par la portée de l'API, la garde SSRF, la cadence et le classifieur de l'API.
 import { createHash } from 'node:crypto';
+import { compileSelector } from '../dsl/css.js';
 import { wideningWarnings, type WideningGuard } from '../rules/widening.js';
 import { BRIEF_DEFAULTS, BRIEF_STALE_DAYS, DEFAULT_BRIEF_CONFIG, type BriefConfig, type BriefHint, type BriefHintKind, type BriefHintState, type BriefReason, type InvestigationBrief } from './schema.js';
 import { isIpLiteral, matchTemplate, parseHintUrl, templatePath } from './url.js';
@@ -31,7 +32,27 @@ export type ParsedHint =
   | { readonly kind: 'endpoint'; readonly method: string; readonly url: URL; readonly host: string; readonly templated: boolean }
   | { readonly kind: 'example_url'; readonly url: URL; readonly host: string; readonly templated: boolean }
   | { readonly kind: 'embedded_data'; readonly blob: string; readonly path: string }
-  | { readonly kind: 'pagination'; readonly family: string; readonly param: string | null }
+  /**
+   * `param` : nom ou emplacement du paramètre (`page`, `url.query.page`) ; `pattern` : motif de chemin ou d'URL des pages
+   * (`/annonces/page/{page}/`, `?page={page}`) ; `selector` : sélecteur CSS du lien « suivant ». Au plus un des trois.
+   */
+  | {
+      readonly kind: 'pagination';
+      readonly family: string;
+      readonly param: string | null;
+      readonly pattern?: string;
+      readonly selector?: string;
+      /**
+       * Famille `xhr` (liste chargée par XHR / fetch après le rendu, constat Barnes) : requête de la liste désignée par le
+       * dossier, en chemin GABARIT (`endpoint`, sans valeur de requête) ou en motif (`pattern`), sa méthode et son hôte (dans
+       * la portée de l'API, sinon `brief_host_ignored`, 0 requête). Jamais sondée : rapprochée du trafic de la reconnaissance.
+       */
+      readonly endpoint?: string;
+      readonly method?: string;
+      readonly host?: string;
+      /** Famille `load_more` (bouton « Annonces suivantes », « Voir plus », « Load more ») : libellé court du bouton. */
+      readonly label?: string;
+    }
   | { readonly kind: 'selector'; readonly selector: string }
   | { readonly kind: 'pitfall' };
 
@@ -56,16 +77,145 @@ export function parseHintValue(hint: Pick<BriefHint, 'kind' | 'value'>, pageUrl:
       const blob = m === null ? undefined : BLOB_ALIASES[m[1]!.toLowerCase()];
       return blob === undefined ? null : { kind: 'embedded_data', blob, path: m![2] ?? '$' };
     }
-    case 'pagination': {
-      const m = /^([a-z_]{3,20})(?:\s+([A-Za-z0-9_.[\]-]{1,64}))?$/.exec(value);
-      if (m === null || !(BRIEF_PAGINATION_FAMILIES as readonly string[]).includes(m[1]!)) return null;
-      return { kind: 'pagination', family: m[1]!, param: m[2] ?? null };
-    }
+    case 'pagination':
+      return parsePaginationHint(value, pageUrl);
     case 'selector':
-      return value === '' || /[<>{}]/.test(value) || value.length > 300 ? null : { kind: 'selector', selector: value };
+      return validSelector(value) ? { kind: 'selector', selector: value } : null;
     case 'pitfall':
       return { kind: 'pitfall' };
   }
+}
+
+/** Sélecteur CSS accepté par le MÊME analyseur que l'interpréteur (combinateurs, attributs, `:nth-child`…), borné. */
+function validSelector(value: string): boolean {
+  if (value === '' || value.length > 300 || value.includes('<')) return false;
+  try {
+    compileSelector(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Numéro de page d'un motif : `{page}`, `{n}`, `{N}` ou un `N` seul comme segment ou valeur de paramètre. */
+const PAGE_TOKEN = /\{(?:page|n|N|p)\}|(?<=\/|=)N(?=\/|&|$)/;
+
+/**
+ * Indice de pagination (19c § 9.1, élargi par le constat Janssens) : famille de 04 § 4 suivie d'un paramètre (`page_param
+ * page`), d'un MOTIF d'URL des pages (`page_param /nos-maisons/page/{page}/`, `?page=N`) ou du SÉLECTEUR du lien suivant
+ * (`next_link a.next`) ; ou le motif, ou le sélecteur, seul. Le motif est ramené à son chemin et à sa requête (`{page}`) :
+ * l'hôte n'en est jamais retenu.
+ */
+function parsePaginationHint(value: string, pageUrl: string): ParsedHint | null {
+  const loader = parseLoaderHint(value, pageUrl);
+  if (loader !== undefined) return loader;
+  const known = parseFamilyHint(value);
+  if (known !== null) return known;
+  return parseLoaderPhrase(value);
+}
+
+/** Familles de chargement de la liste après le rendu (constat Barnes), en plus de celles de 04 § 4. */
+export const BRIEF_PAGINATION_LOADERS = ['xhr', 'load_more'] as const;
+const XHR_LEAD = /^(?:xhr|ajax|fetch|xmlhttprequest)(?![\w-])[\s:]*(.*)$/is;
+const XHR_WORD = /(?<![\w-])(?:xhr|ajax|xmlhttprequest)(?![\w-])/i;
+const LOAD_MORE = String.raw`load[\s_-]?more|charger\s+plus|voir\s+plus|afficher\s+plus|show\s+more|see\s+more`;
+const LOAD_MORE_LEAD = new RegExp(String.raw`^(?:${LOAD_MORE})(?![\w-])[\s:]*(.*)$`, 'is');
+const LOAD_MORE_WORD = new RegExp(String.raw`(?<![\w-])(?:${LOAD_MORE}|bouton|button)(?![\w-])`, 'i');
+const BUTTON_LEAD = /^(?:button|bouton|btn)(?:\s*:\s*|\s+|$)/i;
+/** Libellé entre guillemets (droits, typographiques, chevrons). */
+const QUOTED = /[«"“‘']\s*([^«»"“”‘’']{1,200}?)\s*[»"”’']/;
+/** Libellé de bouton : court, sans balisage, sans URL ni chemin. */
+const LABEL_MAX = 80;
+/** Schéma d'URL (`javascript:`, `ftp://`, `data:`) : jamais suivi, l'indice est refusé. */
+const SCHEME = /(?<![\w-])[a-z][a-z0-9+.-]{1,20}:(?=\S)/i;
+
+const cleanLabel = (raw: string): string | null => {
+  const label = raw.trim().replace(/\s+/g, ' ');
+  return label === '' || label.length > LABEL_MAX || /[<>/\\{}]/.test(label) || SCHEME.test(label) ? null : label;
+};
+
+/**
+ * Forme menée par la famille (`xhr …`, `ajax`, `fetch`, `load_more …`, `charger plus`, `voir plus`) : rendue ou refusée
+ * (`null`) ; `undefined` : autre forme. `xhr` suivi d'un nom de paramètre, d'une requête (méthode facultative, chemin ou URL
+ * http(s), motif `{page}`) ou d'une phrase ; `load_more` suivi du libellé du bouton (entre guillemets ou non) ou de son
+ * sélecteur. Balisage, URL non http(s) et libellé trop long : refusés.
+ */
+function parseLoaderHint(value: string, pageUrl: string): ParsedHint | null | undefined {
+  const xhr = XHR_LEAD.exec(value);
+  if (xhr !== null) {
+    const rest = xhr[1]!.trim();
+    if (rest === '') return { kind: 'pagination', family: 'xhr', param: null };
+    if (rest.includes('<') || rest.includes('>')) return null;
+    if (/^[A-Za-z0-9_.[\]-]{1,64}$/.test(rest) && !/^N$/.test(rest)) return { kind: 'pagination', family: 'xhr', param: rest };
+    const request = /^(?:([A-Za-z]{3,7})\s+)?(\S+)$/.exec(rest);
+    if (request !== null && (/^(?:\/|\?|https?:\/\/)/i.test(request[2]!) || SCHEME.test(request[2]!))) return xhrRequest(request[1], request[2]!, pageUrl);
+    // Phrase (« chargée après le rendu ») : la famille seule ; une URL dans la phrase n'est jamais suivie, elle la refuse.
+    return SCHEME.test(rest) ? null : { kind: 'pagination', family: 'xhr', param: null };
+  }
+  const more = LOAD_MORE_LEAD.exec(value);
+  if (more === null) return undefined;
+  const rest = more[1]!.trim().replace(BUTTON_LEAD, '');
+  if (rest === '') return { kind: 'pagination', family: 'load_more', param: null };
+  if (rest.includes('<') || rest.includes('>') || SCHEME.test(rest)) return null;
+  const quoted = QUOTED.exec(rest);
+  if (quoted !== null) {
+    const label = cleanLabel(quoted[1]!);
+    return label === null ? null : { kind: 'pagination', family: 'load_more', param: null, label };
+  }
+  if (/[.#[:]/.test(rest) && validSelector(rest)) return { kind: 'pagination', family: 'load_more', param: null, selector: rest };
+  const label = cleanLabel(rest);
+  return label === null ? null : { kind: 'pagination', family: 'load_more', param: null, label };
+}
+
+/** Requête XHR de la liste : méthode connue, URL http(s) (relative à la page), motif `{page}` ou chemin en gabarit. */
+function xhrRequest(rawMethod: string | undefined, rawUrl: string, pageUrl: string): ParsedHint | null {
+  const method = (rawMethod ?? 'GET').toUpperCase();
+  if (!HTTP_METHODS.has(method)) return null;
+  const token = PAGE_TOKEN.test(rawUrl);
+  const parsed = parseHintUrl(token ? rawUrl.replace(PAGE_TOKEN, '987654321') : rawUrl.startsWith('?') ? `${new URL(pageUrl).pathname}${rawUrl}` : rawUrl, pageUrl);
+  if (parsed === null) return null;
+  if (token) {
+    const pattern = `${parsed.url.pathname}${parsed.url.search}`.replace('987654321', '{page}');
+    if (!pattern.includes('{page}') || pattern.length > 500) return null;
+    return { kind: 'pagination', family: 'xhr', param: null, pattern, method, host: parsed.host };
+  }
+  return { kind: 'pagination', family: 'xhr', param: null, endpoint: templatePath(parsed.url.pathname), method, host: parsed.host };
+}
+
+/**
+ * Phrase qui nomme le chargement sans le mener (« Liste chargée en XHR après le rendu », « bouton « Annonces suivantes » ») :
+ * la famille, et pour un bouton son libellé entre guillemets ; balisage ou URL : refusée.
+ */
+function parseLoaderPhrase(value: string): ParsedHint | null {
+  if (value.includes('<') || value.includes('>') || SCHEME.test(value)) return null;
+  if (XHR_WORD.test(value)) return { kind: 'pagination', family: 'xhr', param: null };
+  if (!LOAD_MORE_WORD.test(value)) return null;
+  const quoted = QUOTED.exec(value);
+  const label = quoted === null ? null : cleanLabel(quoted[1]!);
+  if (quoted !== null && label === null) return null;
+  return label === null ? { kind: 'pagination', family: 'load_more', param: null } : { kind: 'pagination', family: 'load_more', param: null, label };
+}
+
+function parseFamilyHint(value: string): ParsedHint | null {
+  const m = /^([a-z_]{3,20})(?:\s+(.+))?$/s.exec(value);
+  const family = m !== null && (BRIEF_PAGINATION_FAMILIES as readonly string[]).includes(m[1]!) ? m[1]! : null;
+  const rest = (family === null ? value : (m![2] ?? '')).trim();
+  if (rest === '') return family === null ? null : { kind: 'pagination', family, param: null };
+  if (family !== null && family !== 'next_link' && /^[A-Za-z0-9_.[\]-]{1,64}$/.test(rest) && !/^N$/.test(rest)) return { kind: 'pagination', family, param: rest };
+  if (PAGE_TOKEN.test(rest) && rest.length <= 500 && !/\s/.test(rest)) {
+    let url: URL;
+    try {
+      url = new URL(rest.replace(PAGE_TOKEN, '987654321'), 'https://brief.invalid/');
+    } catch {
+      return null;
+    }
+    const pattern = `${url.pathname}${url.search}`.replace('987654321', '{page}');
+    if (!pattern.includes('{page}')) return null;
+    return { kind: 'pagination', family: family ?? 'page_param', param: null, pattern };
+  }
+  // Sélecteur du lien suivant : au moins une classe, un identifiant, un attribut ou une pseudo-classe (une phrase n'en est pas un).
+  if (/[.#[:]/.test(rest) && validSelector(rest)) return { kind: 'pagination', family: family ?? 'next_link', param: null, selector: rest };
+  return null;
 }
 
 /** Valeur canonique d'un indice (identité) : gabarit pour une URL, forme normalisée sinon. */
@@ -79,7 +229,8 @@ function canonicalValue(parsed: ParsedHint | null, hint: Pick<BriefHint, 'value'
     case 'embedded_data':
       return `${parsed.blob} ${parsed.path}`;
     case 'pagination':
-      return `${parsed.family} ${parsed.param ?? ''}`.trim();
+      if (parsed.host !== undefined) return `${parsed.family} ${parsed.method ?? 'GET'} ${parsed.host}${parsed.pattern ?? parsed.endpoint ?? ''}`;
+      return `${parsed.family} ${parsed.param ?? parsed.pattern ?? parsed.selector ?? parsed.label?.toLowerCase() ?? ''}`.trim();
     case 'selector':
       return parsed.selector.replace(/\s+/g, ' ');
     case 'pitfall':
@@ -240,6 +391,11 @@ export function buildBriefDigest(brief: InvestigationBrief, ctx: DigestContext):
         continue;
       }
       push('probe', null);
+      continue;
+    }
+    // Pagination `xhr` qui nomme une requête : hôte dans la portée de l'API, jamais une adresse IP (0 requête sinon).
+    if (parsed.kind === 'pagination' && parsed.host !== undefined && (isIpLiteral(parsed.host) || !within(parsed.host, ctx.scope))) {
+      push('ignored', 'brief_host_ignored');
       continue;
     }
     push('match_in_recon', null);

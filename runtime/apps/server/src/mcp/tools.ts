@@ -45,7 +45,10 @@ export const MCP_INSTRUCTIONS =
   'Before create_api, put what you found in brief. ' +
   'Status: sain = healthy, warning = works, mention the warning; bloquee = the site refused automated access: tell the user, ' +
   'never retry, never look for another way in; erreur and action_requise come with what_to_do. ' +
-  'Long runs return run_id: poll get_run every poll_after_seconds, page items with get_items; cancel_run stops a run that costs too much. ' +
+  'Let SYM do the extraction: never fetch the site or write a scraper yourself to get the items, even for a simple list; ' +
+  'SYM reads every page and returns all items. ' +
+  'Long runs return run_id: poll get_run every poll_after_seconds (progress says what SYM is doing), page items with get_items; ' +
+  'cancel_run stops a run that costs too much. ' +
   "Reply in the user's language.";
 
 /** Plafond de `instructions` (05 § 1.3, 21 § 4.3) et part qui doit porter l'essentiel (le reste peut être coupé par un client). */
@@ -74,6 +77,8 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
   required: ['run_id', 'state', 'status', 'items', 'total', 'truncated', 'next_cursor', 'message', 'next_action', 'poll_after_seconds', 'console_url'],
   properties: {
     run_id: { type: 'string' },
+    api_id: { type: 'string', description: 'create_api only: the created API.' },
+    slug: { type: 'string', description: 'create_api only: the slug of the created API.' },
     state: { type: 'string' },
     status: { type: 'string' },
     items: { type: 'array', maxItems: 20, items: { type: 'object' } },
@@ -87,6 +92,7 @@ export const RUN_RESULT_SCHEMA: JsonSchema = {
     error: { type: 'object', description: 'Named cause of a failed run: { code, message, what_to_do, retryable }.' },
     next_action: { type: ['object', 'null'] },
     poll_after_seconds: { type: ['integer', 'null'] },
+    progress: { type: ['object', 'null'], description: 'While an investigation runs: phase, strategies tried, and a sentence on what SYM is doing.' },
     timeline: { type: 'array' },
     attempts: { type: 'array' },
     cost: { type: 'object' },
@@ -143,7 +149,7 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     toolset: 'build',
     scope: 'apis:write',
     description:
-      'Create a new API from a description and a start URL: SYM investigates the site (access report, cheapest strategy first) and proposes an output schema. Show the proposed schema to the user, then call validate_schema. Use only when list_apis has no API that fits.',
+      'Create a new API from a description and a start URL: SYM investigates the site (access report, cheapest strategy first) and proposes an output schema. Show the proposed schema to the user, then call validate_schema. SYM does the extraction itself, every page included: do not fetch the site yourself; follow the run with get_run every poll_after_seconds. Use only when list_apis has no API that fits.',
     annotations: EXECUTE,
     inputSchema: {
       type: 'object',
@@ -185,13 +191,23 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     name: 'validate_schema',
     toolset: 'build',
     scope: 'apis:write',
-    description: 'Validate (optionally corrected) the output schema proposed by create_api, after the user agreed. SYM then tries the strategies, cheapest first, and returns a RunResult.',
+    description:
+      'Validate the output schema proposed by create_api, after the user agreed. SYM then tries the strategies, cheapest first, and returns a RunResult. ' +
+      'To apply corrections: send the corrected output_schema (rename, add or remove properties; each property description says what goes in the field) ' +
+      'and, for what a schema cannot say (which list, a prefix to drop), the user\'s instructions. source_id limits the trials to one source of the reconnaissance. ' +
+      'schema_validation in the answer shows the retained schema, what changed and what was not applied.',
     annotations: EXECUTE,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['api_id'],
-      properties: { api_id: UUID_STRING, output_schema: { type: 'object', description: 'Corrected JSON Schema of one item (optional).' }, wait_seconds: WAIT },
+      properties: {
+        api_id: UUID_STRING,
+        output_schema: { type: 'object', description: 'Corrected JSON Schema of one item (optional).' },
+        instructions: { type: 'string', maxLength: 2000, description: 'Corrections from the user, in plain words (optional).' },
+        source_id: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,64}$', description: 'Id of a source found by the reconnaissance (optional).' },
+        wait_seconds: WAIT,
+      },
     },
     outputSchema: RUN_RESULT_SCHEMA,
   },
@@ -219,7 +235,7 @@ export const GENERIC_TOOLS: readonly GenericTool[] = [
     name: 'get_run',
     toolset: 'run',
     scope: 'runs:read',
-    description: 'Read the state and first items of one of your runs (RunResult). Poll it after a running answer, every poll_after_seconds.',
+    description: 'Read the state and first items of one of your runs (RunResult). Poll it after a running answer, every poll_after_seconds; progress says what SYM is doing.',
     annotations: READ,
     inputSchema: { type: 'object', additionalProperties: false, required: ['run_id'], properties: { run_id: UUID_STRING } },
     outputSchema: RUN_RESULT_SCHEMA,

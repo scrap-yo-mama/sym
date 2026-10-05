@@ -57,7 +57,7 @@ export async function exportApi(db: Queryable, input: { apiId: string; ownerId: 
     purpose: string;
     legal_basis: string | null;
     contains_personal_data: boolean;
-    max_cost_usd: string;
+    max_cost_usd: string | null;
     budget_daily_usd: string;
     network_policy: Record<string, unknown>;
     current_strategy_version: number | null;
@@ -107,7 +107,8 @@ export async function exportApi(db: Queryable, input: { apiId: string; ownerId: 
       purpose: api.purpose === '' ? null : api.purpose,
       legal_basis: api.legal_basis,
       contains_personal_data: api.contains_personal_data,
-      max_cost_usd: Number(api.max_cost_usd),
+      // D-123 : sans plafond par run (NULL), le champ est omis (un import plus ancien le lit comme absent).
+      ...(api.max_cost_usd === null ? {} : { max_cost_usd: Number(api.max_cost_usd) }),
       budget_daily_usd: Number(api.budget_daily_usd),
       network_policy: { allow },
       alert_targets: hooks.map((h, i) => ({ ref: `$ALERT_WEBHOOK_${i + 1}`, events: [...h.events].sort() })),
@@ -149,7 +150,7 @@ export async function importApi(
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO apis (slug, owner_id, visibility, description, status, network_policy, views, purpose, legal_basis, contains_personal_data,
                        max_cost_usd, budget_daily_usd)
-     VALUES ($1, $2, 'private', $3, 'enquete', $4::jsonb, $5::jsonb, $6, $7, $8, coalesce($9::numeric, 0.5), coalesce($10::numeric, 5)) RETURNING id`,
+     VALUES ($1, $2, 'private', $3, 'enquete', $4::jsonb, $5::jsonb, $6, $7, $8, $9::numeric, coalesce($10::numeric, 5)) RETURNING id`,
     [
       input.slug,
       input.ownerId,

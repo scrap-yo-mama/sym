@@ -6,9 +6,15 @@ import { BLOB_KINDS, SCRIPT_ID_PATTERN, VARIABLE_PATTERN, type BlobLocator } fro
 import { compileSelector } from './css.js';
 import { DslError } from './errors.js';
 import { compileJsonPath } from './jsonpath.js';
-import { compileOperators, OPERATOR_NAMES, type OperatorSpec } from './operators.js';
+import { compileOperators, OPERATOR_NAMES, parseUrlTemplate, type OperatorSpec } from './operators.js';
 
 export const SPEC_SCHEMA_VERSION = 1;
+/**
+ * Borne du format pour `pagination.limits.hard_max_pages` (04b §2). 1000 depuis R13 (liste de 6197 biens à 24 par page :
+ * 259 pages) ; le plafond de requêtes d'un run (`domain_pacing.max_requests_per_run`) et la cadence du domaine tiennent la
+ * charge, la borne ne fait que garantir l'arrêt.
+ */
+export const HARD_MAX_PAGES_LIMIT = 1000;
 
 export type FieldType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object';
 export type SourceFrom = 'response' | 'html' | 'embedded';
@@ -39,6 +45,21 @@ export interface FieldLocator {
   css?: string;
   attr?: string;
   fallback_paths?: string[];
+  /**
+   * Source HTML seulement : le sélecteur `css` est cherché sous le N-ième ancêtre de l'enregistrement (1 : son parent), et non
+   * sous l'enregistrement lui-même ; premier élément trouvé. Sert au titre d'un groupe de blocs (banc réel R04 : l'équipe
+   * d'une offre est le titre de la section qui réunit ses offres). Borné à 3 niveaux.
+   */
+  up?: number;
+  /**
+   * Source JSON seulement : valeur lue dans un AUTRE tableau de la même réponse, lié par identifiant (banc réel R05 : offres
+   * et équipes). `from` : JSONPath (depuis la racine) des enregistrements joints ; `on` : chemin, dans l'enregistrement, de la
+   * clé de liaison ; `key` : chemin, dans un enregistrement joint, de sa clé ; `take` : chemin de la valeur lue dans
+   * l'enregistrement joint. Égalité de clés seulement (opérateur fermé, aucun code), première correspondance. `parent` : chemin,
+   * dans l'enregistrement joint, de la clé de SON parent dans le même tableau ; `take` est alors lu chez le parent (le
+   * département d'une équipe). Sans correspondance, le champ est absent (jamais la clé brute).
+   */
+  join?: { from: string; on: string; key: string; take: string; parent?: string };
 }
 
 export interface FieldSpec extends FieldLocator {
@@ -69,8 +90,21 @@ export type StopCondition =
 
 export interface PaginationSpec {
   type: PaginationType;
+  /** Emplacement du numéro de page : `url.query.<nom>`, `body.json.<chemin>`, `body.form.<nom>`, ou `url.path` (avec `path_pattern`). */
   param?: string;
+  /**
+   * Chemin des pages suivantes quand le numéro est dans le chemin (`/annonces/page/{page}/`) : `param` vaut `url.path`, la
+   * première page est l'URL de la requête telle quelle, la page N remplace le chemin par ce motif. Chemin seul : l'hôte et
+   * le schéma restent ceux de la requête (INV10).
+   */
+  path_pattern?: string;
   next_path?: string;
+  /**
+   * URL des pages SUIVANTES quand elles ne sont pas servies par la requête de la page 1 (R13 : bouton « charger plus » qui
+   * charge un fragment HTML en XHR, `viewAjax.php?…&begin=24`) : la page 1 est `request`, la page N cette URL (GET, même
+   * hôte, dans `allowed_hosts`) avec le paramètre de pagination posé. `page_param` et `offset` sur `url.query.*` seulement.
+   */
+  next_url?: string;
   start?: number;
   step?: number | 'items_received';
   stop?: StopCondition[];
@@ -119,6 +153,13 @@ const locatorProps = {
   css: { type: 'string', minLength: 1, maxLength: 300 },
   attr: { type: 'string', pattern: '^(text|[A-Za-z_:][A-Za-z0-9_:.-]{0,63})$' },
   fallback_paths: { type: 'array', maxItems: 5, items: PATH },
+  up: { type: 'integer', minimum: 1, maximum: 3 },
+  join: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['from', 'on', 'key', 'take'],
+    properties: { from: PATH, on: PATH, key: PATH, take: PATH, parent: PATH },
+  },
 };
 
 export const DECLARATIVE_SPEC_SCHEMA = {
@@ -265,7 +306,9 @@ export const DECLARATIVE_SPEC_SCHEMA = {
       properties: {
         type: { enum: ['page_param', 'offset', 'cursor', 'next_link', 'infinite_scroll', 'none'] },
         param: POINTER_LIKE,
+        path_pattern: { type: 'string', maxLength: 500, pattern: '^/[^?#{}\\s]*\\{page\\}[^?#{}\\s]*$' },
         next_path: PATH,
+        next_url: { type: 'string', pattern: '^https?://', maxLength: 2000 },
         start: { type: 'integer', minimum: 0, maximum: 1_000_000 },
         step: { oneOf: [{ type: 'integer', minimum: 1, maximum: 10_000 }, { const: 'items_received' }] },
         stop: {
@@ -283,7 +326,7 @@ export const DECLARATIVE_SPEC_SCHEMA = {
         limits: {
           type: 'object',
           additionalProperties: false,
-          properties: { max_pages_input: { type: 'string', pattern: '^input\\.[A-Za-z_][A-Za-z0-9_]{0,63}$' }, hard_max_pages: { type: 'integer', minimum: 1, maximum: 200 } },
+          properties: { max_pages_input: { type: 'string', pattern: '^input\\.[A-Za-z_][A-Za-z0-9_]{0,63}$' }, hard_max_pages: { type: 'integer', minimum: 1, maximum: HARD_MAX_PAGES_LIMIT } },
         },
       },
     },
@@ -444,17 +487,22 @@ export function validateDeclarativeSpec(input: unknown, options: ValidateSpecOpt
     checkLocator(field, at, issues);
     for (const [i, source] of spec.sources.entries()) {
       const effective = { ...field, ...(source.field_overrides?.[name] ?? {}) };
-      const usable = source.from === 'html' ? effective.css !== undefined || effective.attr !== undefined : effective.path !== undefined;
+      const usable = source.from === 'html' ? effective.css !== undefined || effective.attr !== undefined : effective.path !== undefined || effective.join !== undefined;
+      if (source.from === 'html' && effective.join !== undefined) issues.push({ path: `${at}/join`, code: 'field_locator_mismatch', message: `la source « ${source.id} » est HTML : join n'a pas de sens` });
+      if (effective.join !== undefined && (effective.path !== undefined || effective.fallback_paths !== undefined)) issues.push({ path: `${at}/join`, code: 'field_locator_mismatch', message: 'join exclut path et fallback_paths' });
       if (!usable) issues.push({ path: at, code: 'field_missing_locator', message: `aucun ${source.from === 'html' ? 'sélecteur css' : 'chemin path'} pour la source « ${source.id} » (#${i})` });
       // Un repli est un sélecteur CSS pour une source HTML, un chemin JSONPath sinon.
       for (const [k, alt] of (effective.fallback_paths ?? []).entries()) {
         tryCompile(() => (source.from === 'html' ? compileSelector(alt) : compileJsonPath(alt)), `${at}/fallback_paths/${k}`, issues);
       }
       if (source.from !== 'html' && effective.css !== undefined && effective.path === undefined) issues.push({ path: at, code: 'field_locator_mismatch', message: `la source « ${source.id} » est JSON : css n'a pas de sens` });
+      if (source.from !== 'html' && effective.up !== undefined) issues.push({ path: `${at}/up`, code: 'field_locator_mismatch', message: `la source « ${source.id} » est JSON : up n'a pas de sens` });
+      if (source.from === 'html' && effective.up !== undefined && effective.css === undefined) issues.push({ path: `${at}/up`, code: 'field_missing_locator', message: 'up exige un sélecteur css' });
     }
   }
 
   checkPagination(spec, issues);
+  checkUrlTemplates(spec, issues);
 
   if (options.outputSchema !== undefined && isRecord(options.outputSchema)) {
     const required = options.outputSchema['required'];
@@ -471,6 +519,25 @@ export function validateDeclarativeSpec(input: unknown, options: ValidateSpecOpt
 function checkLocator(loc: FieldLocator, at: string, issues: SpecIssue[]): void {
   if (loc.path !== undefined) tryCompile(() => compileJsonPath(loc.path as string), `${at}/path`, issues);
   if (loc.css !== undefined) tryCompile(() => compileSelector(loc.css as string), `${at}/css`, issues);
+  if (loc.join !== undefined) {
+    for (const k of ['from', 'on', 'key', 'take', 'parent'] as const) {
+      const p = loc.join[k];
+      if (p !== undefined) tryCompile(() => compileJsonPath(p), `${at}/join/${k}`, issues);
+    }
+  }
+}
+
+/** `url_template` : l'hôte du modèle est un hôte de `allowed_hosts` (INV10 : un identifiant ne mène jamais hors des hôtes autorisés). */
+function checkUrlTemplates(spec: DeclarativeSpec, issues: SpecIssue[]): void {
+  for (const [name, field] of Object.entries(spec.fields)) {
+    for (const [i, op] of (field.ops ?? []).entries()) {
+      if (typeof op !== 'object' || op === null || op.op !== 'url_template') continue;
+      const url = parseUrlTemplate(op['template']);
+      if (url !== undefined && !spec.request.allowed_hosts.includes(url.hostname)) {
+        issues.push({ path: `/fields/${name}/ops/${i}`, code: 'host_not_allowed', message: "l'hôte du modèle d'URL n'est pas dans allowed_hosts" });
+      }
+    }
+  }
 }
 
 function checkPagination(spec: DeclarativeSpec, issues: SpecIssue[]): void {
@@ -483,9 +550,29 @@ function checkPagination(spec: DeclarativeSpec, issues: SpecIssue[]): void {
   if ((p.type === 'page_param' || p.type === 'offset' || p.type === 'cursor') && p.param === undefined) issues.push({ path: '/pagination/param', code: 'param_required', message: 'param obligatoire' });
   if (p.type === 'cursor' && p.next_path === undefined) issues.push({ path: '/pagination/next_path', code: 'next_path_required', message: 'next_path obligatoire' });
   if (p.next_path !== undefined) tryCompile(() => compileJsonPath(p.next_path as string), '/pagination/next_path', issues);
+  if (p.next_url !== undefined) {
+    let host: string | null;
+    try {
+      host = new URL(p.next_url).hostname.toLowerCase();
+    } catch {
+      host = null;
+    }
+    if ((p.type !== 'page_param' && p.type !== 'offset') || p.param === undefined || !p.param.startsWith('url.query.')) issues.push({ path: '/pagination/next_url', code: 'param_not_applicable', message: 'next_url ne vaut que pour page_param ou offset sur url.query.*' });
+    if (host === null || !spec.request.allowed_hosts.map((h) => h.toLowerCase()).includes(host)) issues.push({ path: '/pagination/next_url', code: 'host_not_allowed', message: 'next_url : hôte absent de allowed_hosts' });
+  }
   for (const [i, stop] of (p.stop ?? []).entries()) {
     if ('path' in stop) tryCompile(() => compileJsonPath(stop.path), `/pagination/stop/${i}/path`, issues);
     if (stop.when === 'repeated_cursor' && p.type !== 'cursor' && p.type !== 'next_link') issues.push({ path: `/pagination/stop/${i}`, code: 'stop_not_applicable', message: 'repeated_cursor ne vaut que pour cursor et next_link' });
+  }
+  // Numéro de page dans le chemin : motif obligatoire, `page_param` seulement, aucun segment `.` ni `..` (le chemin ne remonte pas).
+  if (p.param === 'url.path') {
+    if (p.type !== 'page_param') issues.push({ path: '/pagination/param', code: 'param_not_applicable', message: 'url.path ne vaut que pour page_param' });
+    if (p.path_pattern === undefined) issues.push({ path: '/pagination/path_pattern', code: 'path_pattern_required', message: 'path_pattern obligatoire avec url.path' });
+    else if (p.path_pattern.split('{page}').length !== 2 || p.path_pattern.split('/').some((seg) => seg === '..' || seg === '.')) {
+      issues.push({ path: '/pagination/path_pattern', code: 'invalid_path_pattern', message: 'path_pattern : un seul {page}, aucun segment . ou ..' });
+    }
+  } else if (p.path_pattern !== undefined) {
+    issues.push({ path: '/pagination/path_pattern', code: 'param_not_applicable', message: 'path_pattern ne vaut qu’avec param url.path' });
   }
   if (p.param !== undefined && !spec.request.params?.some((x) => x.at === p.param && x.role === 'pagination')) {
     issues.push({ path: '/pagination/param', code: 'param_not_declared', message: 'param doit figurer dans request.params avec le rôle pagination' });

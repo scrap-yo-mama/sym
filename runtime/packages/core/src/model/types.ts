@@ -66,7 +66,8 @@ export interface Api {
   legal_basis: string | null;
   contains_personal_data: boolean;
   allow_write_actions: boolean;
-  max_cost_usd: number;
+  /** Plafond de coût d'un run ; `null` : aucun plafond par run (défaut, D-123), le budget du jour reste le filet. */
+  max_cost_usd: number | null;
   budget_daily_usd: number;
   domain_pacing: DomainPacing;
   /** Mode « SYM ne lâche pas » (D-49, 04 §6) : opt-in, désactivé par défaut ; activé en console seulement. */

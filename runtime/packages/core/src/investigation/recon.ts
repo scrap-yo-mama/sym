@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Reconnaissance (tâche 2.1, 04 §4, S5) : à partir de ce qu'une passe sur la page a capturé (trafic XHR / fetch en E3,
-// document servi et rendu), les GISEMENTS de données : réponses JSON du site et blobs embarqués (`__NEXT_DATA__`, Nuxt,
-// état Apollo, JSON-LD), cherchés AVANT de conclure « pas d'API ». Chaque gisement porte des tableaux d'enregistrements
+// document servi et rendu), les GISEMENTS de données dans l'ordre de 04b §2 : réponses JSON du site, blobs embarqués
+// (`__NEXT_DATA__`, Nuxt, état Apollo, JSON-LD), puis BLOCS RÉPÉTÉS du DOM (liste HTML : cartes de même balise et mêmes
+// classes, emplacements vérifiés, pagination détectée, dom.ts), cherchés AVANT de conclure « pas d'API ». Chaque gisement porte des tableaux d'enregistrements
 // (chemin JSONPath RFC 9535), leur nombre, leur taille mesurée et un SQUELETTE (chemins et types du premier
 // enregistrement, aucune valeur) : c'est tout ce que le LLM d'enquête verra du site (08 §4, 17 §6 ; une valeur de la
 // page n'est jamais une consigne). Une requête qui porte un jeton ou une signature calculés côté client rend la voie
@@ -11,6 +12,7 @@ import type { Document } from 'domhandler';
 import { decodeEmbedded, type BlobKind, type BlobLocator } from '../dsl/blobs.js';
 import { elementAttribute, parseHtml, selectElements } from '../dsl/css.js';
 import { DEFAULT_DSL_LIMITS, type DslLimits } from '../dsl/limits.js';
+import { analyzeDomBlocks, DOM_MIN_BLOCKS, slotDescription, type DomBlocks, type DomPagination, type DomSlot } from './dom.js';
 import { narrativeUrl } from './events.js';
 
 /** Un échange capturé pendant la reconnaissance (requête de données de la page, ou sonde statique). */
@@ -35,20 +37,39 @@ export type ReconCapture = {
   readonly exchanges: readonly CapturedExchange[];
   /** Octets reçus par toute la passe (sous-ressources comprises) : base du coût estimé de E2 et E3. */
   readonly totalBytes: number;
+  /** Sous-ressources statiques d'hôtes tiers chargées pour le rendu (mode navigateur) : hôtes et requêtes, sans URL. */
+  readonly assets?: { readonly hosts: number; readonly requests: number };
+  /** Réponses de données (fetch, XHR) d'un domaine de l'API vues par la passe navigateur, capturées, écartées par raison (codes). */
+  readonly data?: { readonly seen: number; readonly captured: number; readonly skipped: Readonly<Record<string, number>> };
+  /**
+   * Bouton « charger plus » cliqué par la passe navigateur (R13) : sélecteur vérifié ; les réponses XHR qu'il a déclenchées
+   * (fragments HTML compris) sont dans `exchanges`.
+   */
+  readonly loadMore?: { readonly clicked: boolean; readonly selector: string };
 };
 
 /** Squelette d'un enregistrement : chemin relatif (`$.a.b`) → type JSON. Aucune valeur. */
 export type RecordSkeleton = Readonly<Record<string, string>>;
 
+/** Bloc répété du document (gisement `dom`) : emplacements vérifiés, pagination détectée ; aucune valeur d'un enregistrement. */
+export type DomCandidateInfo = {
+  readonly slots: readonly DomSlot[];
+  readonly pagination: DomPagination | null;
+  /** Bloc lu dans le DOM RENDU par Chromium (absent du document servi) : E1 ne le verra pas, E3 si. */
+  readonly rendered: boolean;
+  /** Rôle du bloc (R13) : carrousel (pénalisé) ou liste de résultats. */
+  readonly hints?: DomBlocks['hints'];
+};
+
 export type DataCandidate = {
-  /** `c1`, `c2`… dans l'ordre des sources de 04b §2 : API JSON, puis blob embarqué. */
+  /** `c1`, `c2`… dans l'ordre des sources de 04b §2 : API JSON, puis blob embarqué, puis blocs répétés du DOM. */
   readonly id: string;
-  readonly from: 'response' | 'embedded';
+  readonly from: 'response' | 'embedded' | 'dom';
   /** Requête de données (gisement `response`) ou page qui porte le blob (`embedded`). */
   readonly request: { readonly method: 'GET' | 'POST'; readonly url: string; readonly body_json?: unknown };
   readonly locator?: BlobLocator;
   readonly host: string;
-  /** JSONPath des enregistrements (RFC 9535). */
+  /** JSONPath des enregistrements (RFC 9535) ; sélecteur CSS des blocs pour un gisement `dom`. */
   readonly records: string;
   readonly count: number;
   /** Octets de la réponse (ou du document) qui porte le gisement. */
@@ -56,7 +77,37 @@ export type DataCandidate = {
   readonly skeleton: RecordSkeleton;
   /** Voie refusée sans tentative : paramètre calculé côté client (signature, jeton). */
   readonly unsupported?: 'client_signature';
+  /** Gisement `dom` : emplacements (clés `$.<nom>` du squelette) et pagination détectés par le code. */
+  readonly dom?: DomCandidateInfo;
+  /**
+   * Compteur de résultats affiché par la page (R13 : « 6197 annonces ») : contrôle de complétude d'un essai et plafond dur de
+   * pages à sa mesure. Absent d'un carrousel.
+   */
+  readonly counter?: number;
+  /** Gisement `response` : jointures vers d'autres tableaux de la même réponse, trouvées par le code (clés `<local>~<champ>` du squelette). */
+  readonly joins?: readonly CandidateJoin[];
+  /** Gisement `response` : URL de fiche déduite des liens de la page et d'un identifiant (clé `<local>^url` du squelette). */
+  readonly urls?: readonly CandidateUrl[];
 };
+
+/**
+ * Jointure d'un gisement (banc réel R05 : offres et équipes dans la même réponse GraphQL). `local` : chemin de la clé de
+ * liaison dans un enregistrement (`$.teamId`) ; `from` : tableau joint ; `key` : sa clé (`$.id`) ; `take` : champs lisibles
+ * de l'enregistrement joint, avec leur type ; `parent` : clé de son parent dans le même tableau (`$.parentTeamId`).
+ * Squelette : `<local>~<champ>` et, avec `parent`, `<local>~parent~<champ>`.
+ */
+export type CandidateJoin = {
+  readonly local: string;
+  readonly from: string;
+  readonly key: string;
+  readonly take: Readonly<Record<string, string>>;
+  readonly parent?: string;
+};
+
+/** URL de fiche (`<local>^url`) : `template` porte un seul `{value}`, l'identifiant de `local` ; hôte = hôte du gisement. */
+export type CandidateUrl = { readonly local: string; readonly template: string };
+
+export const JOIN_PARENT_SEGMENT = '~parent~';
 
 /** Nombre de gisements gardés au plus (les plus gros tableaux d'abord). */
 export const MAX_CANDIDATES = 8;
@@ -117,7 +168,7 @@ export function recordSkeleton(record: unknown): RecordSkeleton {
   return out;
 }
 
-type FoundArray = { path: string; count: number; first: Record<string, unknown> };
+type FoundArray = { path: string; count: number; first: Record<string, unknown>; items: Record<string, unknown>[] };
 
 /**
  * Tableaux d'objets d'un document JSON (enregistrements possibles), les plus longs d'abord. Une clé non sûre
@@ -132,7 +183,12 @@ export function findRecordArrays(root: unknown, max = MAX_ARRAYS_PER_SOURCE): Fo
     if (visited > 20_000 || depth > MAX_WALK_DEPTH) return;
     if (Array.isArray(value)) {
       const objects = value.filter(isRecord);
-      if (objects.length > 0 && objects.length >= value.length / 2) found.push({ path: `${path}[*]`, count: objects.length, first: objects[0]! });
+      if (objects.length > 0 && objects.length >= value.length / 2) {
+      const entry: FoundArray = { path: `${path}[*]`, count: objects.length, first: objects[0]!, items: [] };
+      // Enregistrements gardés hors de la forme énumérable (jointures seulement) : les comparaisons de la forme restent inchangées.
+      Object.defineProperty(entry, 'items', { value: objects, enumerable: false });
+      found.push(entry);
+      }
       // Un tableau d'enregistrements n'est pas parcouru plus loin (ses sous-tableaux seraient des champs).
       if (objects.length > 0) return;
       value.slice(0, 50).forEach((child, i) => walk(child, `${path}[${i}]`, depth + 1));
@@ -142,6 +198,123 @@ export function findRecordArrays(root: unknown, max = MAX_ARRAYS_PER_SOURCE): Fo
   };
   walk(root, '$', 0);
   return found.sort((a, b) => b.count - a.count).slice(0, max);
+}
+
+const LINK_KEY = /(?:^|_)id$|[a-z0-9]Id$|[a-z0-9]ID$/;
+const MAX_JOINS = 6;
+const MAX_JOIN_FIELDS = 6;
+
+const scalarKey = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : undefined);
+
+/**
+ * Jointures d'un tableau d'enregistrements avec les AUTRES tableaux de la même réponse (banc réel R05, offres et équipes) :
+ * une clé de liaison (`teamId`, `department_id`) dont (presque) toutes les valeurs sont des identifiants (`id`) d'un autre
+ * tableau. Le code n'expose au LLM que des chemins virtuels du squelette (`$.teamId~name`), jamais une valeur ; il construit
+ * lui-même la jointure (`join` de la stratégie déclarative). Les clés de liaison sont des noms en `…Id` / `…_id` ; un tableau
+ * lié à lui-même n'est pas joint. `urls` : l'identifiant d'un enregistrement se retrouve dans les liens de la page (même hôte) :
+ * le modèle d'URL en est déduit (`https://hôte/chemin/{value}`), jamais inventé.
+ */
+export function detectJoins(
+  found: FoundArray,
+  arrays: readonly FoundArray[],
+  capture: ReconCapture,
+  host: string,
+  allowedHosts: ReadonlySet<string>,
+): { joins: CandidateJoin[]; urls: CandidateUrl[]; skeleton: Record<string, string> } {
+  const joins: CandidateJoin[] = [];
+  const urls: CandidateUrl[] = [];
+  const skeleton: Record<string, string> = {};
+  for (const [key, sample] of Object.entries(found.first)) {
+    if (!isSafeKey(key) || scalarKey(sample) === undefined || !LINK_KEY.test(key) || joins.length >= MAX_JOINS) continue;
+    const values = found.items.map((r) => scalarKey(r[key]));
+    const present = values.filter((v): v is string => v !== undefined);
+    if (present.length === 0) continue;
+    for (const other of arrays) {
+      if (other.path === found.path || !('id' in other.first) || key === 'id') continue;
+      const index = new Map<string, Record<string, unknown>>();
+      for (const item of other.items) {
+        const id = scalarKey(item['id']);
+        if (id !== undefined && !index.has(id)) index.set(id, item);
+      }
+      const matched = present.filter((v) => index.has(v)).length;
+      if (matched === 0 || matched < present.length * 0.8) continue;
+      const take: Record<string, string> = {};
+      for (const [k, v] of Object.entries(other.first)) {
+        if (!isSafeKey(k) || k === 'id' || LINK_KEY.test(k) || !['string', 'number', 'integer', 'boolean'].includes(jsonType(v)) || Object.keys(take).length >= MAX_JOIN_FIELDS) continue;
+        take[k] = jsonType(v);
+      }
+      // Parent dans le même tableau : une clé dont les valeurs non nulles sont toutes des identifiants du tableau (équipe → département).
+      let parent: string | undefined;
+      for (const [k, v] of Object.entries(other.first)) {
+        if (!isSafeKey(k) || k === 'id' || (scalarKey(v) === undefined && v !== null)) continue;
+        const refs = other.items.map((r) => scalarKey(r[k])).filter((x): x is string => x !== undefined);
+        if (refs.length > 0 && refs.every((x) => index.has(x)) && LINK_KEY.test(k)) {
+          parent = k;
+          break;
+        }
+      }
+      if (Object.keys(take).length === 0) continue;
+      const local = '$' + pathSegment(key);
+      joins.push({ local, from: other.path, key: '$.id', take, ...(parent === undefined ? {} : { parent: '$' + pathSegment(parent) }) });
+      for (const [k, t] of Object.entries(take)) {
+        skeleton[`${local}~${k}`] = t;
+        if (parent !== undefined) skeleton[`${local}${JOIN_PARENT_SEGMENT}${k}`] = t;
+      }
+      break;
+    }
+  }
+  // URL de la fiche : seulement si la réponse n'en porte aucune et que les liens de la page la déduisent.
+  const hasUrl = Object.entries(found.first).some(([k, v]) => /url|link|href/i.test(k) || (typeof v === 'string' && /^https?:\/\//i.test(v)));
+  if (!hasUrl && scalarKey(found.first['id']) !== undefined) {
+    const ids = found.items.map((r) => scalarKey(r['id'])).filter((v): v is string => v !== undefined);
+    const template = urlTemplateFromLinks(capture, ids, host, allowedHosts);
+    if (template !== null) {
+      urls.push({ local: '$.id', template });
+      skeleton['$.id^url'] = 'string';
+    }
+  }
+  return { joins, urls, skeleton };
+}
+
+/**
+ * Modèle d'URL (`…/{value}…`) d'après les liens du document (servi ou rendu) qui portent l'identifiant d'enregistrements :
+ * au moins 5 identifiants (ou tous s'il y en a moins) retrouvés dans un lien du même hôte, tous au même modèle.
+ */
+function urlTemplateFromLinks(capture: ReconCapture, ids: readonly string[], host: string, allowedHosts: ReadonlySet<string>): string | null {
+  const doc = capture.document;
+  if (doc === null || ids.length === 0 || !allowedHosts.has(host)) return null;
+  const html = doc.renderedHtml ?? doc.html;
+  let parsed: Document;
+  try {
+    parsed = parseHtml(html, DEFAULT_DSL_LIMITS);
+  } catch {
+    return null;
+  }
+  const hrefs: URL[] = [];
+  for (const a of selectElements('a[href]', parsed, 5_000)) {
+    const raw = elementAttribute(a, 'href');
+    if (raw === undefined) continue;
+    try {
+      const url = new URL(raw, doc.url);
+      if ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname.toLowerCase() === host && url.username === '') hrefs.push(url);
+    } catch {
+      // lien illisible : ignoré
+    }
+  }
+  const templates = new Map<string, number>();
+  let hits = 0;
+  for (const id of new Set(ids.slice(0, 300))) {
+    const link = hrefs.find((u) => u.pathname.split('/').includes(encodeURIComponent(id)) || u.pathname.split('/').includes(id));
+    if (link === undefined) continue;
+    const segments = link.pathname.split('/').map((s) => (s === id || s === encodeURIComponent(id) ? '{value}' : s));
+    const template = `${link.origin}${segments.join('/')}${link.search}`;
+    if (template.split('{value}').length !== 2 || /\{(?!value\})|(?<!\{value)\}/.test(template.replace('{value}', ''))) continue;
+    templates.set(template, (templates.get(template) ?? 0) + 1);
+    hits += 1;
+  }
+  const best = [...templates.entries()].sort((a, b) => b[1] - a[1])[0];
+  const needed = Math.min(5, new Set(ids.slice(0, 300)).size);
+  return best !== undefined && hits >= needed && best[1] >= hits * 0.9 ? best[0] : null;
 }
 
 /**
@@ -270,7 +443,7 @@ function blobsOf(doc: Document, limits: DslLimits): { locator: BlobLocator; valu
 }
 
 /**
- * Gisements d'une capture, dans l'ordre de 04b §2 (API JSON, puis blob embarqué). `allowedHosts` : seuls les échanges
+ * Gisements d'une capture, dans l'ordre de 04b §2 (API JSON, puis blob embarqué, puis blocs répétés du DOM). `allowedHosts` : seuls les échanges
  * vers un domaine de l'API comptent (une sous-ressource tierce n'est jamais un gisement).
  */
 export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly string[], limits: DslLimits = DEFAULT_DSL_LIMITS): DataCandidate[] {
@@ -296,7 +469,9 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
     }
     const request = { method, url: exchange.url, ...(bodyJson === undefined ? {} : { body_json: bodyJson }) } as const;
     const unsupported = hasClientSignature(request);
-    for (const found of findRecordArrays(root)) {
+    const arrays = findRecordArrays(root, 8);
+    for (const found of arrays.slice(0, MAX_ARRAYS_PER_SOURCE)) {
+      const joined = unsupported ? { joins: [], urls: [], skeleton: {} } : detectJoins(found, arrays, capture, host, hosts);
       candidates.push({
         from: 'response',
         request,
@@ -304,7 +479,9 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
         records: found.path,
         count: found.count,
         bytes: exchange.bytes,
-        skeleton: recordSkeleton(found.first),
+        skeleton: { ...recordSkeleton(found.first), ...joined.skeleton },
+        ...(joined.joins.length === 0 ? {} : { joins: joined.joins }),
+        ...(joined.urls.length === 0 ? {} : { urls: joined.urls }),
         ...(unsupported ? { unsupported: 'client_signature' as const } : {}),
       });
     }
@@ -336,8 +513,80 @@ export function analyzeCapture(capture: ReconCapture, allowedHosts: readonly str
         }
       }
     }
+    // Blocs répétés du DOM (04b §2, troisième source) : document servi d'abord (E1 le lit tel quel), puis les blocs du DOM
+    // RENDU absents du document servi (E2, E3), au plus 3 (R13 : un carrousel « Nouveautés » servi et la liste de résultats
+    // rendue après un XHR). Carrousel en dernier (ordre du score sinon) ; compteur de résultats affiché et pagination par bouton
+    // « charger plus » (fragment HTML capturé après le clic) portés par chaque bloc qui n'est pas un carrousel.
+    const served = analyzeDomBlocks(doc.html, doc.url, limits);
+    const rendered = doc.renderedHtml !== null && doc.renderedHtml !== doc.html ? analyzeDomBlocks(doc.renderedHtml, doc.url, limits) : null;
+    const counter = served?.counter ?? rendered?.counter ?? null;
+    const blocks = [
+      ...(served?.blocks ?? []).map((b) => ({ b, rendered: false })),
+      ...(rendered?.blocks ?? []).filter((b) => !(served?.blocks ?? []).some((s) => s.records === b.records)).map((b) => ({ b, rendered: true })),
+    ]
+      .sort((x, y) => Number(x.b.hints?.carousel === true) - Number(y.b.hints?.carousel === true))
+      .slice(0, 3);
+    for (const { b, rendered: fromRendered } of blocks) {
+      const carousel = b.hints?.carousel === true;
+      const loadMore = carousel ? null : loadMorePagination(capture, b.records, b.count, docHost, limits);
+      const { pagination: own, ...block } = b;
+      candidates.push({
+        from: 'dom',
+        request: { method: 'GET', url: doc.url },
+        host: docHost,
+        records: block.records,
+        count: block.count,
+        bytes: doc.bytes,
+        skeleton: Object.fromEntries(block.slots.map((slot) => [`$.${slot.name}`, slotDescription(slot, block.count)])),
+        dom: { slots: block.slots, pagination: loadMore ?? own, rendered: fromRendered, ...(block.hints === undefined ? {} : { hints: block.hints }) },
+        // Compteur porté par la liste de résultats (ou, à défaut, le premier bloc qui n'est pas un carrousel), jamais par un
+        // bloc de texte éditorial voisin.
+        ...(carousel || counter === null || !(block.hints?.results === true || b === blocks.find((x) => x.b.hints?.carousel !== true)?.b) ? {} : { counter }),
+      });
+    }
   }
-  return candidates.slice(0, MAX_CANDIDATES).map((c, i) => ({ id: `c${i + 1}`, ...c }));
+  // Les blocs du DOM gardent leur place même derrière beaucoup de réponses JSON : ils sont la seule voie sans LLM d'une liste HTML.
+  const dom = candidates.filter((c) => c.from === 'dom');
+  const others = candidates.filter((c) => c.from !== 'dom');
+  const kept = [...others.slice(0, Math.max(0, MAX_CANDIDATES - dom.length)), ...dom].slice(0, MAX_CANDIDATES);
+  return kept.map((c, i) => ({ id: `c${i + 1}`, ...c }));
+}
+
+/** Paramètre entier d'une URL de « charger plus » qui vaut le nombre de cartes de la page 1 (décalage) ou 2 (numéro de page). */
+const PAGE_PARAM_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/**
+ * Pagination par bouton « charger plus » (R13) : après le clic de la reconnaissance, une réponse XHR GET du même hôte dont le
+ * corps est un fragment HTML où le sélecteur des enregistrements trouve des cartes ; son paramètre entier qui vaut le nombre
+ * de cartes de la page 1 est un décalage (`begin=24` : départ 0, pas de 24), celui qui vaut 2 un numéro de page. La page 1
+ * reste la page, les suivantes cette URL (`next_url`, paramètre remis au départ). `null` sinon.
+ */
+function loadMorePagination(capture: ReconCapture, records: string, count: number, host: string, limits: DslLimits): DomPagination | null {
+  if (capture.loadMore?.clicked !== true) return null;
+  for (const exchange of capture.exchanges) {
+    if (exchange.method.toUpperCase() !== 'GET' || exchange.status < 200 || exchange.status >= 300 || !/html/i.test(exchange.contentType) || hostOf(exchange.url) !== host) continue;
+    let found: number;
+    try {
+      found = selectElements(records, parseHtml(exchange.body, limits), 10_000).length;
+    } catch {
+      continue;
+    }
+    if (found < DOM_MIN_BLOCKS && found < count) continue;
+    const url = new URL(exchange.url);
+    for (const [name, value] of url.searchParams) {
+      if (!PAGE_PARAM_NAME.test(name) || !/^\d{1,7}$/.test(value)) continue;
+      const n = Number(value);
+      if (n === count) {
+        url.searchParams.set(name, '0');
+        return { type: 'offset', param: `url.query.${name}`, start: 0, step: count, last: null, next_url: url.href };
+      }
+      if (n === 2) {
+        url.searchParams.set(name, '1');
+        return { type: 'page_param', param: `url.query.${name}`, start: 1, last: null, next_url: url.href };
+      }
+    }
+  }
+  return null;
 }
 
 const SCRIPT_URL_PATTERNS: readonly RegExp[] = [
@@ -406,8 +655,14 @@ function queryNames(url: string): string[] {
 
 export function storedCandidate(c: DataCandidate): StoredCandidate {
   const body = c.request.body_json;
+  // Gisement `dom` : ni emplacements ni libellés constants dans l'état (sélecteurs et forme relus au run suivant).
+  const { dom, joins: _joins, urls: _urls, ...rest } = c;
+  void _joins;
+  void _urls;
+  const skeleton = dom === undefined ? c.skeleton : Object.fromEntries(Object.entries(c.skeleton).map(([k, v]) => [k, v.split(';').filter((part) => !/^(prefix|suffix|value)=/.test(part)).join(';')]));
   return {
-    ...c,
+    ...rest,
+    skeleton,
     request: {
       method: c.request.method,
       url: narrativeUrl(c.request.url),

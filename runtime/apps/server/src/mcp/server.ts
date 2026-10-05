@@ -48,7 +48,7 @@ import { waitSecondsOf } from '../rest/shared.js';
 import { UUID } from '../routes/account-helpers.js';
 import { createdView, waitApiLeavesEnquete } from '../routes/apis.js';
 import { audit, MCP_CHANNEL_HEADER, type Actor } from '../routes/guard.js';
-import { attemptsOf, createdSummary, renderNarrative } from './narrative.js';
+import { attemptsOf, createdSummary, renderNarrative, schemaValidationLines } from './narrative.js';
 import { createProgressSink, progressMessage, type ProgressSink } from './progress.js';
 import { promptBody, PROMPT_ARG_SCHEMAS } from './prompts.js';
 import { actionTemplate, blockedTemplate, elicitationCatalog, parseLang, PROMPT_ARGS, PROMPT_MENU, PROMPT_NAMES, type McpLocale } from './texts.js';
@@ -98,10 +98,11 @@ const GUIDES: Record<string, ErrorGuide> = {
     retryable: false,
   },
   investigation_in_progress: { what_to_do: 'An investigation is running for this API: follow it with get_api or get_run, then call again when it is done.', retryable: true },
+  unknown_source: { what_to_do: 'Use a source id found by the reconnaissance (listed in message), or call validate_schema without source_id.', retryable: true },
   not_awaiting_validation: { what_to_do: 'This API is not waiting for a schema validation: read its state with get_api.', retryable: false },
   queue_full: { what_to_do: 'The instance queue is full: wait about 30 seconds, then call again.', retryable: true },
   user_queue_full: { what_to_do: 'Too many of your runs are active: wait for them (get_run) or cancel one (cancel_run), then call again.', retryable: true },
-  budget_exceeded: { what_to_do: 'The daily USD budget of this account is spent (LLM and proxy costs): do not retry today; tell the user it resets at 00:00 UTC.', retryable: false },
+  budget_exceeded: { what_to_do: 'The daily USD budget of this account is spent (LLM and proxy costs): do not retry today; tell the user it resets at 00:00 UTC and that an admin can raise it (USER_BUDGET_DAILY_USD).', retryable: false },
   key_rate_limited: { what_to_do: 'Too many runs started with this key in the last minute: wait one minute, then call again.', retryable: true },
   responsible_use_ack_required: { what_to_do: 'Ask the user to read the Responsible use page in the console and tick that they read it, then call again.', retryable: false },
   run_not_active: { what_to_do: 'This run is already finished: read its result with get_run.', retryable: false },
@@ -370,6 +371,37 @@ function schemaElicitation(view: Json, locale: McpLocale) {
   });
 }
 
+/** Validation enregistrée par `validate_schema` (état de l'enquête du propriétaire, sous RLS) ; null hors validation de l'utilisateur. */
+async function validationOf(ctx: ServerContext, actor: Actor, apiId: string): Promise<{ schema: unknown; validation: Json } | null> {
+  const row = await withActor(ctx.pool, actor, async (db) => (await db.query<{ investigation: Json | null }>('SELECT investigation FROM apis WHERE id = $1 AND owner_id = $2', [apiId, actor.userId])).rows[0]);
+  const state = row?.investigation ?? null;
+  if (state === null || state['validated_by'] !== 'user' || typeof state['validation'] !== 'object' || state['validation'] === null) return null;
+  return { schema: state['validated_schema'] ?? null, validation: state['validation'] as Json };
+}
+
+/**
+ * `schema_validation` (constat Barnes) dans la réponse de `validate_schema` : schéma RETENU, ce qui a changé par rapport à la
+ * proposition, ce qui n'est pas appliqué (jamais tu), consignes reçues et transmises au rôle `investigate`, source choisie ; et
+ * la même chose en texte, dans la langue de la personne, en tête de la réponse.
+ */
+function withSchemaValidation(result: CallToolResult, validated: { schema: unknown; validation: Json } | null, locale: McpLocale): CallToolResult {
+  if (validated === null || result.isError === true) return result;
+  const v = validated.validation;
+  const instructions = typeof v['instructions'] === 'string' ? v['instructions'] : null;
+  const block: Json = {
+    output_schema: validated.schema,
+    corrected: v['corrected'] === true,
+    changes: v['changes'] ?? null,
+    not_applied: v['not_applied'] ?? [],
+    instructions: instructions === null ? null : { received: true, chars: instructions.length, used_by: 'investigate' },
+    source_id: typeof v['source_id'] === 'string' ? v['source_id'] : null,
+  };
+  const lines = schemaValidationLines(v, validated.schema, locale);
+  const first = result.content[0];
+  const content = first !== undefined && first.type === 'text' ? [{ ...first, text: `${lines.join('\n')}\n\n${first.text}` }, ...result.content.slice(1)] : [{ type: 'text' as const, text: lines.join('\n') }, ...result.content];
+  return { ...result, content, structuredContent: { ...(result.structuredContent ?? {}), schema_validation: block } };
+}
+
 /** Remarque de la personne : texte court, sans caractères de contrôle ; une donnée, jamais une consigne. */
 // eslint-disable-next-line no-control-regex
 const cleanRemark = (v: unknown): string => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 500) : '');
@@ -402,9 +434,11 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     const answer = await rest(ctx, caller, 'POST', `/api/apis/${apiId}/validate-schema${query({ wait: 0 })}`, body);
     const runId = answer.body['run_id'];
     if ((answer.status === 202 || answer.status === 200) && typeof runId === 'string') {
+      // Ce qui a été validé (constat Barnes), lu AVANT l'attente : schéma retenu, changements, non appliqué, consignes, source.
+      const validated = await validationOf(ctx, caller.actor, apiId);
       await waitRun(ctx, caller, call, runId, wait(args));
       const envelope = await runResultOf(ctx, caller.actor, runId);
-      if (envelope !== null) return runResultAnswer(envelope, call);
+      if (envelope !== null) return withSchemaValidation(runResultAnswer(envelope, call), validated, call.locale);
     }
     return restError(answer);
   };
@@ -506,7 +540,9 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
           // Accusé du dossier aussi dans l'enveloppe RunResult : version, rapport et récit du code.
           const { brief_narrative: runNarrative, ...runBrief } = ((await createdView(ctx, caller.actor, apiId, runId)) as unknown as Json);
           const briefLines = narrativeLines(runNarrative);
-          return withBriefLines(runResultAnswer(briefLines.length === 0 ? envelope : { ...envelope, ...pickBrief(runBrief) }, call), briefLines);
+          // `api_id` et `slug` toujours (banc réel, passage 2) : le client suit l'API créée sans relire le run.
+          const identity: Json = { api_id: apiId, slug: runBrief['slug'] };
+          return withBriefLines(runResultAnswer(briefLines.length === 0 ? { ...envelope, ...identity } : { ...envelope, ...identity, ...pickBrief(runBrief) }, call), briefLines);
         }
       }
       const view = (await createdView(ctx, caller.actor, apiId, runId)) as unknown as Json;
@@ -525,7 +561,9 @@ function handlers(ctx: ServerContext): Record<GenericToolName, Handler> {
     async validate_schema(args, caller, call) {
       const apiId = String(args['api_id']);
       if (!UUID.test(apiId)) return notFoundError();
-      return validateFlow(apiId, args['output_schema'] === undefined ? {} : { output_schema: args['output_schema'] }, args, caller, call);
+      const body: Json = {};
+      for (const key of ['output_schema', 'instructions', 'source_id'] as const) if (args[key] !== undefined) body[key] = args[key];
+      return validateFlow(apiId, body, args, caller, call);
     },
 
     async run_api(args, caller, call) {

@@ -21,6 +21,7 @@ import {
   buildHtmlStrategy,
   condenseHtml,
   HTML_COMPILE_MAX_PROPOSALS,
+  HTML_COMPILE_MAX_REPEATS,
   HTML_COMPILE_PROPOSAL_SCHEMA,
   htmlCompileSupport,
   parseHtmlCompileProposal,
@@ -64,6 +65,8 @@ export type HtmlCompileMessagesArgs = {
   readonly items: readonly unknown[];
   /** Limite d'entrée de l'essai E4 (`limits.max_input_chars`) : borne du HTML épuré. */
   readonly maxInputChars: number;
+  /** Éléments = les PREMIERS de la page (essai E4 en échantillon, banc R06 et R08) : la recette doit en rendre au moins autant. */
+  readonly sampled?: boolean;
   /** Tentative précédente refusée : sa recette et le différentiel du rejeu. */
   readonly previous?: { readonly proposal: HtmlCompileProposal; readonly diff: HtmlDiff | { readonly reason: string } };
 };
@@ -114,9 +117,12 @@ export function htmlCompileMessages(args: HtmlCompileMessagesArgs, token = rando
   const user = [
     `REQUEST (from the API owner): ${maskTextForLlm(args.description).slice(0, MAX_REQUEST_CHARS)}`,
     `OUTPUT SCHEMA (one record): ${JSON.stringify(args.outputSchema).slice(0, MAX_SCHEMA_CHARS)}`,
-    `RECORD COUNT: ${args.items.length}`,
+    args.sampled === true
+      ? `RECORD COUNT: the RECORDS are the first ${args.items.length} records of the page, a sample; the page holds more. "records" must match every record of the page, in document order, the first ones giving these RECORDS.`
+      : `RECORD COUNT: ${args.items.length}`,
     `TOKEN: ${token}`,
     page.truncated ? 'NOTE: the page HTML was truncated to the input limit.' : '',
+    page.omitted > 0 ? `NOTE: ${page.omitted} repeated elements were removed from the HTML (at most ${HTML_COMPILE_MAX_REPEATS} siblings of the same kind are shown); the recipe must match them too.` : '',
     previous,
     `<untrusted_records_${token}>`,
     neutralize(records),
@@ -170,7 +176,7 @@ export async function compileHtmlStrategy(client: LlmClient, args: HtmlCompileAr
   let previous: HtmlCompileMessagesArgs['previous'];
   let last: HtmlCompileOutcome = { ok: false, reason: 'not_attempted', proposals: 0, diff: null };
   for (let n = 1; n <= HTML_COMPILE_MAX_PROPOSALS; n += 1) {
-    const messages = htmlCompileMessages({ description: args.description, outputSchema: args.outputSchema, html: args.html, items: args.items, maxInputChars: args.maxInputChars, ...(previous === undefined ? {} : { previous }) });
+    const messages = htmlCompileMessages({ description: args.description, outputSchema: args.outputSchema, html: args.html, items: args.items, maxInputChars: args.maxInputChars, ...(args.sampled === true ? { sampled: true } : {}), ...(previous === undefined ? {} : { previous }) });
     const ceiling = args.price === undefined ? 0 : htmlCompileCallCeilingUsd(messages, args.price);
     const result = await client.generateStructured<unknown>('investigate', {
       messages,
@@ -192,8 +198,8 @@ export async function compileHtmlStrategy(client: LlmClient, args: HtmlCompileAr
       continue;
     }
     // Valeurs écrites en mot : table déduite par le code des éléments de l'agent, puis vérification sans LLM.
-    const spec = alignHtmlStrategy(built.spec, args.html, args.items, args.outputSchema);
-    const check = verifyHtmlStrategy(spec, args.html, args.items, args.outputSchema);
+    const spec = alignHtmlStrategy(built.spec, args.html, args.items, args.outputSchema, { sampled: args.sampled === true });
+    const check = verifyHtmlStrategy(spec, args.html, args.items, args.outputSchema, { sampled: args.sampled === true });
     if (check.ok) return { ok: true, spec, proposals: n, diff: check.diff };
     last = { ok: false, reason: check.diff.reason ?? 'values', proposals: n, diff: check.diff };
     previous = { proposal, diff: check.diff };

@@ -8,5 +8,6 @@ export * from './guard.js';
 export * from './evidence.js';
 export * from './params.js';
 export * from './declarative.js';
+export * from './charset.js';
 export * from './fetch.js';
 export * from './pacer.js';

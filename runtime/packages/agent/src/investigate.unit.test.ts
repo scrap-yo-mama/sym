@@ -40,6 +40,26 @@ describe('prompt du rôle investigate', () => {
     expect(investigatePromptVersion).toMatch(/^investigate-[0-9a-f]{12}$/);
   });
 
+  test('bloc HTML répété (gisement dom, constat Janssens) : « html blocks », noms et formes des emplacements ; ni sous-sélecteur, ni valeur', () => {
+    const dom = candidate({
+      id: 'c2',
+      from: 'dom',
+      request: { method: 'GET', url: 'https://shop.test/nos-maisons/?ref=zz-secret-ref' },
+      records: 'article.item-bien',
+      count: 10,
+      skeleton: { '$.a_href': 'link;shape=url;present=10/10', '$.li': 'text;shape=area;present=9/10;suffix=m²' },
+      dom: { slots: [{ name: 'li', css: 'li.leading-3:not(.pl-2)', attr: 'text', shape: 'area', present: 9, prefix: null, suffix: 'm²', decimal: '.' }], pagination: { type: 'page_param', param: 'url.path', path_pattern: '/nos-maisons/page/{page}/', start: 1, last: 52 }, rendered: false },
+    });
+    const [system, user] = investigateMessages({ description: 'liste des biens', candidates: [dom] }, 'tok456');
+    expect(String(system!.content)).toContain('"html blocks"');
+    const text = String(user!.content);
+    expect(text).toContain('"source":"html blocks in https://shop.test/nos-maisons/"');
+    expect(text).toContain('"$.li":"text;shape=area;present=9/10;suffix=m²"');
+    expect(text).not.toContain('li.leading-3');
+    expect(text).not.toContain('zz-secret-ref');
+    expect(text).not.toContain('path_pattern');
+  });
+
   test('réponse structurée validée ; une réponse hors schéma est refusée par la couche LLM', async () => {
     const fake = await createFakeProvider();
     try {
@@ -75,6 +95,28 @@ describe('prompt du rôle investigate', () => {
     } finally {
       await fake.close();
     }
+  });
+});
+
+describe('validate_schema avec corrections du client (constat Barnes)', () => {
+  test('schéma validé : les descriptions guident l’affectation ; consignes du client après la demande, masquées et bornées', () => {
+    const fixedSchema = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference without the carousel- prefix' } } };
+    const instructions = 'Use the results list, not the carousel; write to zz.owner@example.test. ' + 'x'.repeat(3000);
+    const [, user] = investigateMessages({ description: 'liste des biens', candidates: [candidate()], fixedSchema, ownerCorrections: instructions }, 'tok789');
+    const text = String(user!.content);
+    expect(text).toMatch(/VALIDATED OUTPUT SCHEMA \(use exactly these field names and types; each description says what the field must hold/);
+    expect(text).toContain('Listing reference without the carousel- prefix');
+    const line = text.split('\n').find((l) => l.startsWith('OWNER CORRECTIONS'))!;
+    expect(line).toContain('Use the results list, not the carousel');
+    expect(line).not.toContain('zz.owner@example.test');
+    expect(line.length).toBeLessThan(2_200);
+    // Après la demande et le schéma, avant les gisements (donnée non fiable) : jamais dans l’enveloppe du site.
+    expect(text.indexOf('OWNER CORRECTIONS')).toBeGreaterThan(text.indexOf('VALIDATED OUTPUT SCHEMA'));
+    expect(text.indexOf('OWNER CORRECTIONS')).toBeLessThan(text.indexOf('<untrusted_candidates_tok789>'));
+  });
+  test('sans consignes : aucune ligne', () => {
+    const [, user] = investigateMessages({ description: 'liste', candidates: [candidate()] }, 'tok');
+    expect(String(user!.content)).not.toContain('OWNER CORRECTIONS');
   });
 });
 

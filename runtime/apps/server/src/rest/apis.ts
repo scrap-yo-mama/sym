@@ -43,7 +43,7 @@ export type ApiRow = {
   legal_basis: string | null;
   contains_personal_data: boolean;
   allow_write_actions: boolean;
-  max_cost_usd: string;
+  max_cost_usd: string | null;
   budget_daily_usd: string;
   mcp_exposed: boolean;
   pinned: boolean;
@@ -219,7 +219,8 @@ export async function apiDetail(db: Queryable, actor: Actor, r: ApiRow, persiste
         project_id: r.project_id,
         purpose: r.purpose === '' ? null : r.purpose,
         legal_basis: r.legal_basis,
-        max_cost_usd: usd(r.max_cost_usd),
+        // D-123 : `null` = aucun plafond par run (jamais 0).
+        max_cost_usd: usdOrNull(r.max_cost_usd),
         budget_daily_usd: usd(r.budget_daily_usd),
         domain_pacing: r.domain_pacing,
         // Mode « SYM ne lâche pas » (2.16, D-49) : interrupteur, plafond effectif, prochain essai et dépense du cycle.

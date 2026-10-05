@@ -6,7 +6,8 @@
  * dépendances (session sur tel domaine, tunnel), coût moyen, exemples d'appel MCP et REST à copier, et le formulaire
  * Lancer avec le coût estimé avant lancement. Aucun bouton Lancer pour une API bloquée (le panneau offre Ré-enquêter).
  * Section « Agent instruit » (tâche 2.13) pour une API non compilable qui a des étapes instruites, jamais sur une API
- * bloquée ; mode actif : rappel du coût par run dans le formulaire Lancer.
+ * bloquée ; mode actif : rappel du coût par run dans le formulaire Lancer. « Coût max par run » (D-123) : propriétaire
+ * seulement (`max_cost_usd` présent dans la fiche, même `null`), facultatif, vide par défaut.
  * @component
  * @example <ApiOverviewTab :detail="detail" slug="zz-books" />
  */
@@ -17,6 +18,7 @@ import ExecutionBadge from '@/components/catalog/ExecutionBadge.vue';
 import NetworkBadge from '@/components/catalog/NetworkBadge.vue';
 import InstructedStepsPanel from '@/components/api/InstructedStepsPanel.vue';
 import LaunchForm from '@/components/api/LaunchForm.vue';
+import RunCostCapForm from '@/components/api/RunCostCapForm.vue';
 import { Button } from '@/components/ui/button';
 import { useApiActions } from '@/composables/useApiActions';
 import type { ApiDetail } from '@/composables/useApiDetail';
@@ -46,6 +48,8 @@ async function toggleInstructed(on: boolean): Promise<void> {
 }
 
 const canLaunch = computed(() => props.detail.status !== 'bloquee' && !props.detail.metadata_only);
+/** Champ « coût max par run » : la politique du propriétaire n'est servie qu'à lui (`max_cost_usd` absent pour un lecteur). */
+const ownsPolicy = computed(() => !props.detail.metadata_only && 'max_cost_usd' in props.detail);
 const launchedRun = ref<string | null>(null);
 
 async function launch(input: Record<string, unknown>, version: number | undefined): Promise<void> {
@@ -103,6 +107,8 @@ async function copy(kind: 'rest' | 'mcp'): Promise<void> {
         <RouterLink :to="`/runs/${launchedRun}`" class="underline underline-offset-4">{{ t('launch.followRun') }}</RouterLink>
       </p>
     </section>
+
+    <RunCostCapForm v-if="ownsPolicy" :detail="detail" :slug="slug" @updated="emit('updated', $event)" />
 
     <InstructedStepsPanel
       v-if="showInstructed && detail.instructed"

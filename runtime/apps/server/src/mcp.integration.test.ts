@@ -619,6 +619,45 @@ describe('enveloppe RunResult (05 § 4.1, § 4.3, § 4.4)', () => {
     expect(toolError(await call(client, 'validate_schema', { api_id: view.api_id })).code).toBe('not_awaiting_validation');
   });
 
+  test('validate_schema (constat Barnes) : corrections, consignes et source transmises ; schema_validation montre le schéma retenu et ce qui a changé ; source inconnue → erreur claire', async () => {
+    const client = await connect(a.key);
+    const created = await call(client, 'create_api', { description: 'zz_test biens immobiliers', url: 'https://zz-test-barnes.example/', wait_seconds: 0 });
+    const view = created.structuredContent as { api_id: string; run_id: string };
+    const proposed = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference' }, type: { type: 'string', description: 'Type' } } };
+    await withClient(srv.db.url, async (c) => {
+      await c.query("UPDATE apis SET investigation_phase = 'awaiting_schema_validation', investigation = investigation || jsonb_build_object('proposed_schema', $2::jsonb, 'candidates', $3::jsonb) WHERE id = $1", [
+        view.api_id,
+        JSON.stringify(proposed),
+        JSON.stringify([{ id: 'c1' }, { id: 'c2' }]),
+      ]);
+      await c.query("UPDATE runs SET state = 'succeeded', outcome = 'clean', finished_at = now() WHERE id = $1", [view.run_id]);
+    });
+    const unknown = toolError(await call(client, 'validate_schema', { api_id: view.api_id, source_id: 'results-list', wait_seconds: 0 }));
+    expect(unknown).toMatchObject({ code: 'unknown_source', retryable: true });
+    expect(unknown.message).toContain('c1, c2');
+    expect(unknown.what_to_do).toContain('c1, c2');
+
+    const corrected = { type: 'object', properties: { reference: { type: 'string', description: 'Listing reference without the carousel- prefix' }, property_type: { type: 'string', description: 'Type' } } };
+    const validated = await call(client, 'validate_schema', { api_id: view.api_id, output_schema: corrected, instructions: 'Use the results list, not the carousel.', source_id: 'c2', wait_seconds: 0 });
+    expect(validated.isError ?? false).toBe(false);
+    expect(validated.structuredContent).toMatchObject({
+      state: 'queued',
+      schema_validation: {
+        output_schema: corrected,
+        corrected: true,
+        changes: { renamed: [{ from: 'type', to: 'property_type' }], description_changed: ['reference'] },
+        not_applied: [],
+        instructions: { received: true, used_by: 'investigate' },
+        source_id: 'c2',
+      },
+    });
+    const text = (validated.content[0] as { text: string }).text;
+    expect(text).toMatch(/^Schema validated with your corrections: renamed type → property_type; descriptions changed: reference; your instructions guide the field mapping; trials limited to source c2\./);
+    expect(text).toContain('Retained schema:');
+    // Le texte des consignes n'est jamais recopié dans la réponse (seulement leur réception).
+    expect(text).not.toContain('Use the results list');
+  });
+
   test('list_apis et get_api : forme de 05 § 4.1 ; report_problem consigne le problème (audit, acteur mcp)', async () => {
     const api = await seedApi(srv.db.url, a.user.id, { slug: 'zz-test-catalog-shape' });
     const client = await connect(a.key);
@@ -849,6 +888,50 @@ describe('create_api et dossier d’enquête (05 § 4.1, 19c § 9) : volets MCP 
     } finally {
       await withClient(srv.db.url, (c) => c.query("UPDATE users SET locale = 'en' WHERE id = $1", [a.user.id]));
     }
+  });
+
+  /** Termine l'enquête en file la plus récente du propriétaire (hors `before`), comme le ferait le worker. */
+  const completeNewInvestigation = async (before: readonly string[]): Promise<void> => {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const id = await withClient(srv.db.url, async (c) => (await c.query<{ id: string }>("SELECT r.id FROM runs r JOIN apis x ON x.id = r.api_id WHERE x.owner_id = $1 AND r.kind = 'investigation' AND r.state = 'queued' AND r.id <> ALL($2::uuid[]) ORDER BY r.created_at DESC LIMIT 1", [a.user.id, before])).rows[0]?.id);
+      if (id) {
+        await completeRun(id, [{ title: 'zz_test fini pendant l’attente' }]);
+        return;
+      }
+      if (Date.now() > deadline) throw new Error('aucun run créé');
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  };
+
+  test('banc réel passage 2 : enquête terminée pendant wait_seconds — la réponse de création porte toujours slug et api_id (REST et MCP)', async () => {
+    await withClient(srv.db.url, (c) => c.query("INSERT INTO responsible_use_acks (user_id, version) VALUES ($1, '2026-10-01') ON CONFLICT DO NOTHING", [a.user.id]));
+    const known = async () => withClient(srv.db.url, async (c) => (await c.query<{ id: string }>('SELECT id FROM runs WHERE owner_id = $1', [a.user.id])).rows.map((r) => r.id));
+    // REST : POST /api/apis, auto_validate, l'enquête se termine pendant l'attente (réponse RunResult).
+    let before = await known();
+    const done = completeNewInvestigation(before);
+    const created = await srv.app.inject({
+      method: 'POST',
+      url: '/api/apis',
+      headers: { authorization: `Bearer ${a.key}`, 'content-type': 'application/json' },
+      payload: JSON.stringify({ description: 'zz_test slug rest', url: 'https://zz-test-slug-rest.example/', auto_validate: true, wait_seconds: 3 }),
+    });
+    await done;
+    expect(created.statusCode).toBe(201);
+    const body = created.json() as Record<string, unknown>;
+    const row = (await withClient(srv.db.url, (c) => c.query<{ id: string; slug: string }>("SELECT id, slug FROM apis WHERE owner_id = $1 AND description = 'zz_test slug rest'", [a.user.id]))).rows[0]!;
+    expect(body).toMatchObject({ api_id: row.id, slug: row.slug });
+    expect(row.slug).not.toBe('');
+    // MCP : create_api, même cas.
+    before = await known();
+    const client = await connect(a.key);
+    const doneMcp = completeNewInvestigation(before);
+    const result = await call(client, 'create_api', { description: 'zz_test slug mcp', url: 'https://zz-test-slug-mcp.example/', auto_validate: true, wait_seconds: 3 });
+    await doneMcp;
+    expect(result.isError ?? false, JSON.stringify(result)).toBe(false);
+    const mcpRow = (await withClient(srv.db.url, (c) => c.query<{ id: string; slug: string }>("SELECT id, slug FROM apis WHERE owner_id = $1 AND description = 'zz_test slug mcp'", [a.user.id]))).rows[0]!;
+    expect(result.structuredContent).toMatchObject({ api_id: mcpRow.id, slug: mcpRow.slug });
+    expect(String(result.content[0]!.text)).toContain(mcpRow.slug);
   });
 
   test('assert_brief_secret_rejected (MCP) : secret_in_brief sur un dossier à cookie, en-tête Authorization ou ?access_token= ; rien créé, valeur absente de la réponse', async () => {

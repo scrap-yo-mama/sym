@@ -70,7 +70,8 @@ export type ApiExportApi = {
   purpose?: string | null;
   legal_basis?: string | null;
   contains_personal_data?: boolean;
-  max_cost_usd?: number;
+  /** Plafond de coût d'un run ; absent ou `null` : aucun plafond (D-123). */
+  max_cost_usd?: number | null;
   budget_daily_usd?: number;
   network_policy?: { allow: string[] };
   alert_targets?: { ref: string; events: string[] }[];
@@ -120,7 +121,8 @@ export const API_EXPORT_SCHEMA = {
         purpose: NULLABLE_TEXT,
         legal_basis: NULLABLE_TEXT,
         contains_personal_data: { type: 'boolean' },
-        max_cost_usd: { type: 'number', minimum: 0, maximum: 1000 },
+        // D-123 : null (ou absent) = aucun plafond par run.
+        max_cost_usd: { type: ['number', 'null'], minimum: 0, maximum: 1000 },
         budget_daily_usd: { type: 'number', minimum: 0, maximum: 100000 },
         network_policy: {
           type: 'object',

@@ -33,6 +33,7 @@
 // (browser/guarded-contexts.unit.test.ts) échoue sur tout autre appel du code du worker et du paquet agent.
 import { buildUserAgent } from '@runtime/core/access';
 import type { ProviderCapabilities } from '@sym/contracts/browser';
+import type { StaticAssetAllowance } from '@runtime/core/net';
 import type { APIRequest, APIRequestContext, Browser, BrowserContext, Page, Request } from 'playwright-core';
 import { browserEngineIdentity } from './engine-identity.js';
 import { installPageGuard } from './page-guard.js';
@@ -79,6 +80,12 @@ export type RunContextOptions = {
   readonly allowedHosts: readonly string[];
   /** Portées de site admises en plus (domaine et sous-domaines) : reconnaissance de l'enquête seulement (2.1, 04b §2). */
   readonly allowedHostSuffixes?: readonly string[];
+  /**
+   * Sous-ressources statiques (script, feuille de style, police, préchargement ; GET) d'hôtes TIERS admises, bornées : reconnaissance de l'enquête
+   * seulement (banc R05, application rendue en JavaScript servie par un CDN). Le même objet est passé au proxy d'egress de
+   * la passe. Toute autre requête vers un tiers reste coupée.
+   */
+  readonly staticAssets?: Pick<StaticAssetAllowance, 'admit'>;
   /**
    * Requête coupée par la politique de domaines (hôte seulement ; la requête Chromium quand il y en a une, absente pour
    * un WebSocket) : E3 en script tue alors l'enfant du bac à sable si la requête lui est imputable.
@@ -231,6 +238,9 @@ export async function openRunContext(browser: Browser, options: RunContextOption
         // Retombée sur les routes posées avant celle-ci (aucune sur un contexte neuf : la requête part).
         if (admitted) await route.fallback();
         else await route.abort('blockedbyclient');
+      } else if (options.staticAssets !== undefined && options.staticAssets.admit(url, route.request().resourceType(), route.request().method())) {
+        // Code et styles d'un tiers (CDN) pendant la reconnaissance : la page se rend ; rien d'autre ne sort vers ce tiers.
+        await route.fallback();
       } else {
         note(url, route.request());
         await route.abort('blockedbyclient');

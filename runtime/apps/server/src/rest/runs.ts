@@ -12,7 +12,7 @@ import type { ServerContext } from '../context.js';
 import type { Actor } from '../routes/guard.js';
 import { runErrorOf, runInvestigationFailed, runNotStarted } from './run-error.js';
 import { iso, reasonMessage, usd, usdOrNull } from './shared.js';
-import { investigationTimeline } from './timeline.js';
+import { investigationProgress, investigationTimeline } from './timeline.js';
 
 type Queryable = Pick<pg.ClientBase, 'query'>;
 
@@ -289,6 +289,8 @@ export async function buildRunResult(ctx: ServerContext, actor: Actor, r: RunRow
   const truncated = total > items.length;
   const nextCursor = truncated && r.dataset_id !== null ? itemsCursor(lastSeq ?? -1) : null;
   const active = !isTerminalRunState(r.state);
+  // Chronologie d'une enquête (05 § 1.2, tâche 3.10) : dérivée de `investigation_events`, la source unique du récit.
+  const timeline = r.kind === 'investigation' ? await investigationTimeline(ctx, actor, r.id, r.api_slug ?? '') : [];
   const nextAction = active
     ? { tool: 'get_run', args: { run_id: r.id } }
     : awaitingSchema
@@ -310,8 +312,9 @@ export async function buildRunResult(ctx: ServerContext, actor: Actor, r: RunRow
     ...errorField(r),
     next_action: nextAction,
     poll_after_seconds: active && r.paused_at === null ? 5 : null,
-    // Chronologie d'une enquête (05 § 1.2, tâche 3.10) : dérivée de `investigation_events`, la source unique du récit.
-    timeline: r.kind === 'investigation' ? await investigationTimeline(ctx, actor, r.id, r.api_slug ?? '') : [],
+    // Enquête en cours : ce que fait SYM, lisible par le client pendant les essais (il n'a pas à extraire le site lui-même).
+    progress: active && r.kind === 'investigation' ? investigationProgress(timeline) : null,
+    timeline,
     cost: cost(r),
     console_url: `${ctx.publicUrl}/runs/${r.id}`,
   };

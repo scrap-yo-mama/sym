@@ -708,6 +708,85 @@ const contracts: Record<string, Contract> = {
     expect((await fx.get(host, '/catalogue/page-4.html')).status).toBe(404);
   },
 
+  async html_list() {
+    const host = H('html_list');
+    const cards = (body: string): number => (body.match(/<article class="item-bien block h-full {2}css-card-bien js-card-bien">/g) ?? []).length;
+    const first = await fx.get(host, '/nos-maisons/');
+    expect(first.status).toBe(200);
+    expect(cards(first.body)).toBe(10);
+    expect(first.body).toContain('href="/nos-maisons/page/2/"');
+    expect(first.body).toContain('href="/nos-maisons/page/52/"');
+    expect(first.body).not.toContain('rel="next"');
+    const last = await fx.get(host, '/nos-maisons/page/52/');
+    expect(cards(last.body)).toBe(9);
+    expect(last.body).toContain('href="# "');
+    const beyond = await fx.get(host, '/nos-maisons/page/53/');
+    expect(beyond.status).toBe(200);
+    expect(cards(beyond.body)).toBe(0);
+    expect((await fx.get(host, '/nos-maisons/page/1/')).status).toBe(301);
+    const page2 = (await fx.get(host, '/nos-maisons/page/2/')).body;
+    expect(page2).toContain('Prix : Nous consulter');
+    expect(page2).toMatch(/<li class="leading-3">\s+[0-9]+\.[0-9]{2}\s+m²\s+<\/li>/);
+    expect(page2).toContain('data-ref="ZZ0011va"');
+  },
+
+  async catalogue_pages() {
+    const host = H('catalogue_pages');
+    const dir = '/catalogue/category/books/zz-default_15/';
+    const pods = (body: string): number => (body.match(/<article class="product_pod">/g) ?? []).length;
+    const first = (await fx.get(host, `${dir}index.html`)).body;
+    expect(pods(first)).toBe(20);
+    expect(first).toContain('<li class="next"><a href="page-2.html">next</a></li>');
+    expect(first).toMatch(/<p class="star-rating (One|Two|Three|Four|Five)">/);
+    expect(first).toContain('title="Zz001 livre fictif du banc, une histoire inventee de bout en bout">Zz001 livre fictif d...</a>');
+    expect(first).not.toContain('rel="next"');
+    expect(pods((await fx.get(host, `${dir}page-8.html`)).body)).toBe(12);
+    expect((await fx.get(host, `${dir}page-8.html`)).body).not.toContain('class="next"');
+    expect((await fx.get(host, `${dir}page-9.html`)).status).toBe(404);
+  },
+
+  async table_pages() {
+    const host = H('table_pages');
+    const rows = (body: string): number => (body.match(/<tr><td>/g) ?? []).length;
+    const first = (await fx.get(host, '/fairs/zz_trade-shows_fr.html')).body;
+    expect(rows(first)).toBe(50);
+    expect(first).toContain('<thead><tr><th>Exhibition Name</th>');
+    expect(first).toContain('href="zz_trade-shows_fr_1.html"');
+    const last = (await fx.get(host, '/fairs/zz_trade-shows_fr_2.html')).body;
+    expect(rows(last)).toBe(37);
+    expect(last).not.toContain('<u>Next</u>');
+    expect((await fx.get(host, '/fairs/zz_trade-shows_fr_3.html')).status).toBe(404);
+  },
+
+  async wiki_table() {
+    const host = H('wiki_table');
+    const body = (await fx.get(host, '/wiki/Liste_des_communes_de_Zztest')).body;
+    expect((body.match(/<tr><td style="text-align:left;">/g) ?? []).length).toBe(151);
+    expect(body).toContain('<tr><th scope="row">');
+    expect(body).toContain('99000<br/>99140');
+  },
+
+  async agency_dupes() {
+    const host = H('agency_dupes');
+    const cards = (body: string): string[] => [...body.matchAll(/href="([^"]+)" class="card-stretched-link"/g)].map((m) => m[1]!);
+    expect(cards((await fx.get(host, '/achat/40')).body)).toHaveLength(16);
+    const all = new Set<string>();
+    for (let n = 1; n <= 7; n += 1) for (const c of cards((await fx.get(host, `/achat/40?page=${n}`)).body)) all.add(c);
+    expect(all.size).toBe(76);
+    const neuf = (await fx.get(host, '/achat/40?page=5')).body;
+    expect(neuf).not.toContain('c-card-property__name');
+    expect(neuf).toContain('<p class="c-card-property__address">');
+    expect(cards((await fx.get(host, '/achat/40?page=8')).body)).toHaveLength(0);
+  },
+
+  async jobs_grouped() {
+    const host = H('jobs_grouped');
+    const body = (await fx.get(host, '/zzentreprise')).body;
+    expect((body.match(/class="posting" /g) ?? []).length).toBe(18);
+    expect((body.match(/class="posting-category-title large-category-label"/g) ?? []).length).toBe(6);
+    expect(body).toContain('workplaceTypes">Hybrid — </span>');
+  },
+
   async search_guarded() {
     const host = H('search_guarded');
     expect((await fx.get(host, '/recherche?q=lampe')).body).toContain('/api/search?q=lampe&page=1');

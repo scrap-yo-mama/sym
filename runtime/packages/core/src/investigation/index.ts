@@ -10,3 +10,8 @@ export * from './trials.js';
 export * from './events.js';
 export * from './milestones.js';
 export * from './html-compile.js';
+export * from './dom.js';
+export * from './fidelity.js';
+export * from './sources.js';
+export * from './schema-validation.js';
+export * from './field-fix.js';

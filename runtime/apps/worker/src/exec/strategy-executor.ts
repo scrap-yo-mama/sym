@@ -120,7 +120,7 @@ import { runScriptExecutor, type ScriptPort } from './script-executor.js';
 import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser.js';
 import { runRequestValues, type AgentRequestGate } from '../browser/agent-request-gate.js';
 import { runAgentExecutor, runAgentFetchExecutor, runHybridExecutor, type AgentOutcome, type EngineFactory, type LlmSpend } from './agent-executors.js';
-import { AttemptCost } from './attempt-cost.js';
+import { AttemptCost, relabelRunBudget } from './attempt-cost.js';
 import { runTunnelExecutor, TunnelSession, type TunnelStop } from './tunnel-executor.js';
 import { StepsHost, type StepPageTools, type StepsTrialInfo } from './steps-host.js';
 import { STEPS_INTERPRETER_SOURCE } from './steps-interpreter.js';
@@ -184,8 +184,11 @@ export type StrategyExecutorDeps = {
    * jugement SÉPARÉ après le run (`scheduleJudge`) : le rejeu lui-même ne fait aucun appel LLM et ne lit aucune mémoire.
    */
   readonly quality?: QualityPorts;
-  /** Plafonds d'instance (`MAX_COST_USD_PER_RUN`, PA-02) : bornent le `max_cost_usd` lu en base, importé ou antérieur. */
-  readonly costCaps?: Pick<CostCaps, 'maxCostUsdPerRun'>;
+  /**
+   * Plafonds d'instance (`MAX_COST_USD_PER_RUN`, PA-02) : bornent le `max_cost_usd` lu en base, importé ou antérieur ;
+   * `USER_BUDGET_DAILY_USD` borne un run sans plafond fixé (D-123 : budget du jour restant ; défaut de l'instance sinon).
+   */
+  readonly costCaps?: Pick<CostCaps, 'maxCostUsdPerRun'> & Partial<Pick<CostCaps, 'userBudgetDailyUsd'>>;
 };
 
 /** Stratégie figée d'un run (version, exécution, réseau, spécification). */
@@ -633,6 +636,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       outputSchema: target.api.outputSchema,
       itemPolicy,
       signal: ctx.signal,
+      ...(ctx.pageSampling === true ? { samplePages: true } : {}),
       ...(pacer === undefined ? {} : { pacer }),
       ...(target.api.domainPacing.max_requests_per_run === undefined ? {} : { maxRequests: target.api.domainPacing.max_requests_per_run }),
       ...(deps.classify === undefined ? {} : { classify: deps.classify }),
@@ -919,6 +923,12 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
         await ctx.log('info', 'subjects_excluded', { dropped });
         result = { ...result, records: kept };
       }
+    }
+    // Liste HTML paginée (banc réel R02) : doublons écartés entre les pages, et écart avec le compteur de l'en-tête (« 359
+    // annonces » pour 268 fiches distinctes) dits au journal du run, comptes seulement.
+    if (result.ok && (result.duplicates ?? 0) > 0) await ctx.log('info', 'duplicates_dropped', { dropped: result.duplicates, delivered: result.records.length });
+    if (result.ok && result.announced !== undefined && result.announced !== result.records.length && !result.truncated && result.stop !== 'max_pages_input' && result.stop !== 'hard_max_pages') {
+      await ctx.log('warn', 'announced_count_mismatch', { announced: result.announced, delivered: result.records.length, dropped_duplicates: result.duplicates ?? 0 });
     }
     // Éléments émis par un script E3, essai réussi ou non (schéma non conforme, violation, refus, plafond…) : inscrits au
     // registre du run, qui masque aussi `error_detail` et toute écriture ultérieure de `run_logs`.
@@ -1252,8 +1262,13 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
 
   const executeRun = async (ctx: RunCtx): Promise<RunResult> => {
     const started = now();
+    // Borne de coût du run lue à son ouverture (D-123) : plafond de l'API s'il est fixé, sinon budget du jour restant.
     const target = await loadRunTarget(deps.pool, { apiId: ctx.apiId, ownerId: ctx.ownerId, version: ctx.strategyVersion, ...(deps.costCaps === undefined ? {} : { caps: deps.costCaps }) });
     if (target === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'api_not_found' };
+    return relabelRunBudget(await executeLoaded(ctx, started, target), target.api.costCapUsd);
+  };
+
+  const executeLoaded = async (ctx: RunCtx, started: number, target: RunTarget): Promise<RunResult> => {
     const strategy = target.strategy;
     if (strategy === null) return { state: 'failed', failure_class: 'code_error', retryable: false, error_detail: 'no_strategy_version' };
 

@@ -4,16 +4,70 @@
 // n'est jamais élargi (aucun couple ajouté) et le rattrapage du moins cher (`runTrials`, `catchUp`) reste : la stratégie
 // retenue est la moins chère conforme, comme sans dossier (INV2). Puis les états finaux de chaque indice (`used`,
 // `verified_unused`, `probe_failed`, `ignored`, `unverified`), la source de la version (`source.brief`) et les faits du code.
-import { parseHtml, selectElements } from '../dsl/css.js';
+import type { Element } from 'domhandler';
+import { elementText, parseHtml, selectElements } from '../dsl/css.js';
 import { DEFAULT_DSL_LIMITS } from '../dsl/limits.js';
 import type { TrialPair } from '../investigation/plan.js';
 import type { BriefHintKind, BriefHintState, BriefReason } from './schema.js';
-import type { BriefDigest, DigestHint } from './digest.js';
+import type { BriefDigest, DigestHint, ParsedHint } from './digest.js';
 import type { ProbeFacts, ProbeRun } from './probe.js';
 import { matchTemplate, templatePath } from './url.js';
 
 /** Gisement vu par la reconnaissance (forme minimale de `DataCandidate`). */
-export type BriefCandidateView = { readonly id: string; readonly from: 'response' | 'embedded'; readonly method: string; readonly url: string; readonly locator: string | null };
+export type BriefCandidateView = {
+  readonly id: string;
+  readonly from: 'response' | 'embedded' | 'dom';
+  readonly method: string;
+  readonly url: string;
+  readonly locator: string | null;
+  /** Gisement `dom` : sélecteur CSS de ses blocs (un indice `selector` qui y tombe le désigne). */
+  readonly records?: string;
+};
+
+/** L'élément `inner` est `outer` ou l'un de ses descendants. */
+function within(inner: Element, outer: Element): boolean {
+  for (let n: Element | null = inner; n !== null; n = n.parent !== null && n.parent.type === 'tag' ? (n.parent as Element) : null) if (n === outer) return true;
+  return false;
+}
+
+/** Motif de pagination (`/liste/page/{page}/`, `/liste/?page={page}`) en expression : `{page}` = un entier. */
+function patternRegex(pattern: string): RegExp {
+  const [head, tail] = pattern.split('{page}');
+  const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, (c) => `\\${c}`);
+  return new RegExp(`^${esc(head ?? '')}[0-9]{1,6}${esc(tail ?? '')}$`);
+}
+
+/** Contrôles qui chargent la suite d'une liste (bouton, lien, rôle bouton). */
+const LOAD_MORE_CONTROLS = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
+const foldText = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
+const LOAD_MORE_TEXT = /\b(?:load more|show more|see more|more results|charger plus|voir plus|afficher plus|plus de resultats|suivant(?:e|es|s)?|next)\b/;
+
+/** Texte d'un contrôle : contient le libellé déclaré (sans casse ni accents) ; sans libellé, un libellé usuel de « charger plus ». */
+function loadMoreText(text: string, label: string | undefined): boolean {
+  const t = foldText(text);
+  if (t === '' || t.length > 120) return false;
+  return label === undefined ? LOAD_MORE_TEXT.test(t) : t.includes(foldText(label));
+}
+
+/** Réponse de données d'un gisement désignée par un indice `xhr` : même hôte et requête nommée, ou paramètre nommé. */
+function xhrMatches(p: Extract<ParsedHint, { kind: 'pagination' }>, candidateUrl: string): boolean {
+  let c: URL;
+  try {
+    c = new URL(candidateUrl);
+  } catch {
+    return false;
+  }
+  if (p.param !== null) return c.searchParams.has(p.param.replace(/^url\.query\./, ''));
+  if (p.host !== undefined && c.hostname.toLowerCase() !== p.host) return false;
+  if (p.pattern !== undefined) {
+    const [path, query] = p.pattern.split('?');
+    const pathOk = path!.includes('{page}') ? patternRegex(path!).test(c.pathname) : pathMatches(templatePath(path!), templatePath(c.pathname)) || path!.toLowerCase() === c.pathname.toLowerCase();
+    const names = [...new URLSearchParams(query ?? '').keys()];
+    return pathOk && names.every((n) => c.searchParams.has(n));
+  }
+  if (p.endpoint !== undefined) return pathMatches(p.endpoint, templatePath(c.pathname)) || pathMatches(p.endpoint, c.pathname);
+  return true;
+}
 
 export type HintProvenance = 'probe' | 'traffic' | 'dom';
 
@@ -53,13 +107,15 @@ function urlMatches(hintUrl: URL, candidateUrl: string): boolean {
  * - `endpoint` / `example_url` sondés avec succès : provenance « sonde » ; non sondés (session, tunnel, gabarit, non GET) :
  *   retenus seulement si leur gabarit est retrouvé dans le trafic de la page déjà chargée (provenance « trafic »), un
  *   `endpoint` non GET seulement avec la même méthode observée ;
- * - `embedded_data` : blob du même type trouvé dans le document ; `selector` : au moins un élément dans le document ;
- * - `pagination` : paramètre déclaré présent dans la requête d'un gisement.
+ * - `embedded_data` : blob du même type trouvé dans le document ; `selector` : au moins un élément dans le document (il
+ *   désigne le gisement `dom` dont un bloc est, contient ou est contenu par cet élément) ;
+ * - `pagination` : paramètre déclaré présent dans la requête d'un gisement ; motif d'URL retrouvé dans un lien de la page
+ *   (même hôte) ou sélecteur du lien suivant présent dans le document (il désigne les gisements `dom`).
  */
 export function matchBriefHints(
   digest: BriefDigest,
   probes: ProbeRun | null,
-  recon: { readonly candidates: readonly BriefCandidateView[]; readonly exchanges: readonly { readonly url: string; readonly method: string }[]; readonly html: string | null },
+  recon: { readonly candidates: readonly BriefCandidateView[]; readonly exchanges: readonly { readonly url: string; readonly method: string }[]; readonly html: string | null; readonly pageUrl?: string },
 ): BriefMatch {
   const confirmed = new Map<string, { provenance: HintProvenance; candidates: string[] }>();
   const verified = new Set((probes?.results ?? []).filter((r) => r.outcome === 'verified').map((r) => r.id));
@@ -74,6 +130,26 @@ export function matchBriefHints(
     }
     return doc;
   };
+  /** Éléments d'un sélecteur dans le document de la reconnaissance (plusieurs : le cas courant d'une liste). */
+  const select = (selector: string): Element[] => {
+    const d = document();
+    if (d === null) return [];
+    try {
+      return selectElements(selector, d, 10_000);
+    } catch {
+      return [];
+    }
+  };
+  /** Gisements `dom` qui contiennent (ou sont contenus par) un élément trouvé ; sans élément : tous les gisements `dom`. */
+  const domCandidatesOf = (found: readonly Element[]): string[] =>
+    recon.candidates
+      .filter((c) => c.from === 'dom' && c.records !== undefined)
+      .filter((c) => {
+        if (found.length === 0) return true;
+        const blocks = select(c.records!);
+        return found.some((el) => blocks.some((b) => within(el, b) || within(b, el)));
+      })
+      .map((c) => c.id);
   for (const hint of digest.hints) {
     const p = hint.parsed;
     if (p === null || hint.decision === 'ignored' || hint.decision === 'unverifiable') continue;
@@ -94,15 +170,46 @@ export function matchBriefHints(
       continue;
     }
     if (p.kind === 'selector') {
-      const d = document();
-      const found = ((): number => {
+      // Plusieurs éléments (les cartes d'une liste) : c'était un refus silencieux (borne de 1 résultat), constat Janssens.
+      const found = select(p.selector);
+      if (found.length > 0) confirmed.set(hint.id, { provenance: 'dom', candidates: domCandidatesOf(found) });
+      continue;
+    }
+    if (p.kind === 'pagination' && p.family === 'xhr') {
+      // Liste chargée par XHR / fetch : les réponses de données vues par la reconnaissance (celles de la requête nommée, ou
+      // portant le paramètre nommé). Rien de vu : l'indice reste non vérifié, transmis tel quel au prompt.
+      const candidates = recon.candidates.filter((c) => c.from === 'response' && xhrMatches(p, c.url)).map((c) => c.id);
+      if (candidates.length > 0) confirmed.set(hint.id, { provenance: 'traffic', candidates });
+      continue;
+    }
+    if (p.kind === 'pagination' && p.family === 'load_more') {
+      // Bouton « charger plus » présent dans la page déjà chargée (sélecteur, ou libellé dans un bouton ou un lien) : il
+      // désigne les listes du DOM. Aucun clic ici : la reconnaissance ne fait que le retrouver.
+      const found = p.selector !== undefined ? select(p.selector) : select(LOAD_MORE_CONTROLS).filter((el) => loadMoreText(elementText(el, 200), p.label));
+      if (found.length > 0) confirmed.set(hint.id, { provenance: 'dom', candidates: domCandidatesOf([]) });
+      continue;
+    }
+    if (p.kind === 'pagination' && p.selector !== undefined) {
+      if (select(p.selector).length > 0) confirmed.set(hint.id, { provenance: 'dom', candidates: domCandidatesOf([]) });
+      continue;
+    }
+    if (p.kind === 'pagination' && p.pattern !== undefined) {
+      const re = patternRegex(p.pattern);
+      let page: URL | null = null;
+      try {
+        page = new URL(recon.pageUrl ?? '');
+      } catch {
+        page = null;
+      }
+      const seen = select('a[href], link[href]').some((el) => {
         try {
-          return d === null ? 0 : selectElements(p.selector, d, 1).length;
+          const u = new URL(el.attribs['href'] ?? '', page ?? 'https://brief.invalid/');
+          return (page === null || u.hostname === page.hostname) && re.test(`${u.pathname}${u.search}`);
         } catch {
-          return 0;
+          return false;
         }
-      })();
-      if (found > 0) confirmed.set(hint.id, { provenance: 'dom', candidates: [] });
+      });
+      if (seen) confirmed.set(hint.id, { provenance: 'dom', candidates: domCandidatesOf([]) });
       continue;
     }
     if (p.kind === 'pagination' && p.param !== null) {

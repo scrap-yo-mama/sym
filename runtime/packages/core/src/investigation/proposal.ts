@@ -10,12 +10,13 @@
 // Fonctions pures, sans I/O.
 import { extractRecords } from '../dsl/extract.js';
 import type { BlobLocator } from '../dsl/blobs.js';
-import { validateDeclarativeSpec, type DeclarativeSpec, type PaginationSpec, type StopCondition } from '../dsl/spec.js';
+import { HARD_MAX_PAGES_LIMIT, validateDeclarativeSpec, type DeclarativeSpec, type PaginationSpec, type StopCondition } from '../dsl/spec.js';
 import { assertSchemaAcceptable, DRAFT_2020_12, SchemaError, validateOutput } from '../schema/validator.js';
-import type { DataCandidate, ReconCapture } from './recon.js';
+import { classValueOps, HTML_LIST_HARD_MAX_PAGES, type DomPagination, type DomSlot } from './dom.js';
+import { JOIN_PARENT_SEGMENT, pathSegment, type DataCandidate, type ReconCapture } from './recon.js';
 
-/** Types d'un champ proposé (scalaires seulement en V1). */
-export const PROPOSAL_FIELD_TYPES = ['string', 'number', 'integer', 'boolean'] as const;
+/** Types d'un champ proposé : scalaires, ou `array` (liste de chaînes : étiquettes, banc réel R10). */
+export const PROPOSAL_FIELD_TYPES = ['string', 'number', 'integer', 'boolean', 'array'] as const;
 export type ProposalFieldType = (typeof PROPOSAL_FIELD_TYPES)[number];
 
 /** Opérateurs sans paramètre que le LLM peut demander (sous-ensemble de la liste fermée de 04b §2). */
@@ -147,7 +148,7 @@ export const SAMPLE_SIZE = 5;
 export function outputSchemaOf(fields: readonly ProposalField[]): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   for (const f of fields) {
-    properties[f.name] = { type: f.type, ...(f.description.trim() === '' ? {} : { description: f.description.trim().slice(0, 500) }), ...(f.personal ? { 'x-personal': true } : {}) };
+    properties[f.name] = { type: f.type, ...(f.type === 'array' ? { items: { type: 'string' }, maxItems: 200 } : {}), ...(f.description.trim() === '' ? {} : { description: f.description.trim().slice(0, 500) }), ...(f.personal ? { 'x-personal': true } : {}) };
   }
   return {
     $schema: DRAFT_2020_12,
@@ -198,6 +199,126 @@ function paginationOf(p: ProposalPagination): { pagination?: PaginationSpec; par
   }
 }
 
+// ---------------------------------------------------------------------------------------------------- liste HTML (dom)
+
+/** Premier nombre d'un texte (« 1 650 000 € », « 187.33 m² », « 3 chambres ») : I-Regexp, un seul quantificateur non borné. */
+const FIRST_NUMBER = '[0-9][0-9 .,]*';
+const slotNameOf = (path: string): string | null => /^\$\.([a-z][a-z0-9_]{0,63})$/.exec(path)?.[1] ?? /^\$\['([a-z][a-z0-9_]{0,63})'\]$/.exec(path)?.[1] ?? null;
+
+/**
+ * Champ d'une source `html` née d'un bloc du DOM : sous-sélecteur et attribut de l'emplacement (vérifiés par le code), puis
+ * opérateurs fixés par le CODE selon le type et la forme : un nombre est lu par le premier nombre du texte (devise, unité,
+ * astérisque ignorés) avec le séparateur décimal vu sur la page ; un lien ou une image devient une URL absolue (base : la
+ * page) ; un code entre parenthèses perd ses parenthèses. Les opérateurs proposés par le LLM ne gardent que la casse et les
+ * espaces (aucune conversion de sa main).
+ */
+function domField(slot: DomSlot, type: string, required: boolean, proposed: readonly string[], pageUrl: string): Record<string, unknown> {
+  // Valeur en classe (« star-rating Three ») : opérateurs du code (classe voisine, table des mots-nombres), jamais du modèle.
+  if (slot.classValue !== undefined) return { ...(slot.css === null ? {} : { css: slot.css }), attr: 'class', type, ...(required ? { required: true } : {}), ops: classValueOps(slot.classValue, type) };
+  // Liste (étiquettes) : tous les éléments du sélecteur, chacun nettoyé.
+  if (type === 'array') return { ...(slot.css === null ? {} : { css: slot.css }), attr: slot.attr, ...(slot.up === undefined ? {} : { up: slot.up }), type, reduce: 'all', ...(required ? { required: true } : {}), ops: ['collapse_spaces', 'trim'] };
+  const ops: (string | Record<string, unknown>)[] = ['collapse_spaces', 'trim'];
+  // Partie d'un texte composé (« À vendre Maison | Mougins », R13) : le code coupe au séparateur et retire le libellé de tête.
+  if (slot.part !== undefined) ops.push(...partOps(slot.part));
+  // Préfixe technique d'un identifiant (« carousel-APM-… », R13) : retiré par le code.
+  if (slot.strip !== undefined) ops.push({ op: 'regex_extract', pattern: `${slot.strip}(.+)`, group: 1 });
+  if (type === 'number' || type === 'integer') {
+    // Surface : le nombre suivi de son unité (banc réel R02 : « Du studio au 4 pièces » d'un programme neuf lu « 4 m² »).
+    const area = slot.shape.split('|')[0] === 'area';
+    ops.push(area ? { op: 'regex_extract', pattern: `(${FIRST_NUMBER}) ?(m²|m2|ft²|ha)`, group: 1 } : { op: 'regex_extract', pattern: FIRST_NUMBER, group: 0 }, 'trim', { op: type === 'number' ? 'to_number' : 'to_integer', decimal: slot.decimal });
+  } else if (type === 'boolean') {
+    ops.push('to_boolean');
+  } else {
+    if (slot.attr === 'href' || slot.attr === 'src') ops.push({ op: 'abs_url', base: pageUrl });
+    // Séparateur final de toutes les valeurs (« Hybrid — ») : la valeur s'arrête au dernier caractère qui n'en est pas un.
+    else if (slot.trailing !== undefined) ops.push({ op: 'regex_extract', pattern: `(.*[^ ${/[-|^\\\]]/.test(slot.trailing) ? '\\' : ''}${slot.trailing}])`, group: 1 });
+    else if (slot.shape.split('|')[0] === 'paren_code') ops.push({ op: 'regex_extract', pattern: '[^()]+', group: 0 }, 'trim');
+    for (const op of proposed) if (op === 'lower' || op === 'upper') ops.push(op);
+  }
+  return { ...(slot.css === null ? {} : { css: slot.css }), attr: slot.attr, ...(slot.up === undefined ? {} : { up: slot.up }), type, ...(required ? { required: true } : {}), ops };
+}
+
+/** Opérateurs d'une partie de texte composé : I-Regexp, séparateur échappé, libellé de tête (lettres et espaces) retiré. */
+function partOps(part: NonNullable<DomSlot['part']>): Record<string, unknown>[] {
+  const sep = part.sep === '|' ? '\\|' : part.sep;
+  const notSep = part.sep === '|' ? '[^\\|]+' : `[^${part.sep}]+`;
+  const pattern = part.index === 1 ? `${sep}(.+)` : part.lead !== undefined ? `${part.lead} (${notSep})` : `(${notSep})`;
+  return [{ op: 'regex_extract', pattern, group: 1 }, { op: 'trim' }];
+}
+
+/**
+ * Pagination déclarative d'une liste HTML, détectée par le CODE (jamais proposée par le LLM) : numéro dans le chemin ou
+ * paramètre de page, décalage, ou lien `rel=next`. Règles d'arrêt : page vide (`records_empty`), et dans l'exécuteur page
+ * 404 ou page déjà vue (`no_next`) ; plafond dur `HTML_LIST_HARD_MAX_PAGES`.
+ */
+function domPaginationOf(p: DomPagination | null, size: { readonly counter?: number; readonly count?: number } = {}): { pagination?: PaginationSpec; param?: string } {
+  if (p === null) return {};
+  const limits = { max_pages_input: 'input.max_pages', hard_max_pages: hardMaxPagesFor(size.counter, size.count) };
+  const next = 'next_url' in p && p.next_url !== undefined ? { next_url: p.next_url } : {};
+  switch (p.type) {
+    case 'page_param':
+      return 'path_pattern' in p
+        ? { pagination: { type: 'page_param', param: 'url.path', path_pattern: p.path_pattern, start: p.start, stop: [{ when: 'records_empty' }], limits }, param: 'url.path' }
+        : { pagination: { type: 'page_param', param: p.param, start: p.start, ...next, stop: [{ when: 'records_empty' }], limits }, param: p.param };
+    case 'offset':
+      return { pagination: { type: 'offset', param: p.param, start: p.start, step: p.step, ...next, stop: [{ when: 'records_empty' }], limits }, param: p.param };
+    case 'next_link':
+      return { pagination: { type: 'next_link', stop: [{ when: 'records_empty' }, { when: 'repeated_cursor' }], limits } };
+  }
+}
+
+/**
+ * Plafond dur de pages d'une liste HTML (04b §2) : `HTML_LIST_HARD_MAX_PAGES`, ou, quand la page affiche un compteur de
+ * résultats (R13 : « 6197 annonces » à 24 par page), le nombre de pages qu'il annonce plus une marge, borné par le format.
+ */
+export function hardMaxPagesFor(counter: number | undefined, perPage: number | undefined): number {
+  if (counter === undefined || perPage === undefined || perPage <= 0) return HTML_LIST_HARD_MAX_PAGES;
+  return Math.min(HARD_MAX_PAGES_LIMIT, Math.max(HTML_LIST_HARD_MAX_PAGES, Math.ceil(counter / perPage) + 5));
+}
+
+/**
+ * Stratégie déclarative `html` d'UNE page (compilée d'un essai E4) augmentée de la pagination détectée par le code sur cette
+ * page (constat Janssens) : `request.params` déclare l'emplacement, `hard_max_pages` borne la liste ; revalidée (liste
+ * fermée, INV10 : le motif de chemin ne change jamais l'hôte). `null` si la pagination ne s'applique pas à cette requête.
+ */
+export function paginateHtmlSpec(spec: DeclarativeSpec, detected: DomPagination, outputSchema: unknown): DeclarativeSpec | null {
+  const { pagination, param } = domPaginationOf(detected);
+  if (pagination === undefined) return null;
+  const raw = {
+    ...spec,
+    request: { ...spec.request, params: [...(spec.request.params ?? []).filter((p) => p.role !== 'pagination'), ...(param === undefined ? [] : [{ at: param, role: 'pagination' as const }])] },
+    pagination,
+  };
+  const check = validateDeclarativeSpec(raw, { outputSchema });
+  return check.ok ? check.spec : null;
+}
+
+/**
+ * Champs requis à relâcher pour un bloc du DOM (« required only when every record has the value ») : la page 1 ne dit pas
+ * ce que montreront les suivantes (constat Janssens : surface sur les 10 cartes de la page 1, absente d'une carte de la page
+ * 2). Ne reste requis qu'un champ relié à un emplacement présent sur TOUS les blocs et qui identifie l'enregistrement : le
+ * lien, un attribut `data-*`, le titre (`h1`-`h6`). Un champ numérique sur une forme mêlée (« Prix : Nous consulter ») ne
+ * l'est jamais. Le reste de la proposition est inchangé.
+ */
+function domRelaxedFields(proposal: InvestigationProposal, candidates: readonly DataCandidate[]): Set<string> {
+  const relaxed = new Set<string>();
+  for (const source of proposal.sources) {
+    const candidate = candidates.find((c) => c.id === source.candidate);
+    if (candidate?.dom === undefined) continue;
+    for (const p of source.paths) {
+      const name = slotNameOf(p.path);
+      const slot = candidate.dom.slots.find((s) => s.name === name);
+      const field = proposal.fields.find((f) => f.name === p.field);
+      if (slot === undefined || field === undefined) continue;
+      const numeric = field.type === 'number' || field.type === 'integer';
+      const identifying = slot.attr === 'href' || slot.attr.startsWith('data-') || /^h[1-6](?![a-z0-9])/.test(slot.css ?? '') || (slot.attr === 'text' && /^h[1-6]$/.test(slot.tag ?? '') && slot.up === undefined);
+      // Libellé constant de la page 1 (« In stock ») : une autre page peut dire autre chose ou rien ; jamais requis.
+      if (slot.present < candidate.count || !identifying || slot.constant !== undefined || (numeric && slot.shape.includes('|'))) relaxed.add(field.name);
+    }
+  }
+  return relaxed;
+}
+
 export type BuiltStrategy = {
   readonly candidate: DataCandidate;
   readonly spec: DeclarativeSpec;
@@ -217,8 +338,30 @@ export type ProposalOutcome =
     }
   | { readonly ok: false; readonly reason: 'invalid_schema' | 'no_valid_source' | 'no_conformant_sample'; readonly rejected: readonly { readonly candidate: string; readonly reason: string }[] };
 
-/** Corps capturé d'un gisement : réponse JSON (`response`) ou document servi (`embedded`). */
-function capturedBody(candidate: DataCandidate, capture: ReconCapture): string | undefined {
+/** Champ d'un chemin virtuel du squelette (jointure, URL de fiche), `undefined` si le chemin n'en est pas un. */
+export function virtualField(path: string, candidate: DataCandidate, type: string, required: boolean): Record<string, unknown> | undefined {
+  const url = /^(.+)\^url$/.exec(path);
+  if (url !== null) {
+    const hit = candidate.urls?.find((u) => u.local === url[1]);
+    return hit === undefined ? undefined : { path: hit.local, type, ...(required ? { required: true } : {}), ops: [{ op: 'url_template', template: hit.template }] };
+  }
+  const parent = path.indexOf(JOIN_PARENT_SEGMENT);
+  const plain = parent === -1 ? path.lastIndexOf('~') : -1;
+  const local = parent !== -1 ? path.slice(0, parent) : plain !== -1 ? path.slice(0, plain) : undefined;
+  const take = parent !== -1 ? path.slice(parent + JOIN_PARENT_SEGMENT.length) : plain !== -1 ? path.slice(plain + 1) : undefined;
+  if (local === undefined || take === undefined) return undefined;
+  const join = candidate.joins?.find((j) => j.local === local);
+  if (join === undefined || !(take in join.take) || (parent !== -1 && join.parent === undefined)) return undefined;
+  return {
+    join: { from: join.from, on: join.local, key: join.key, take: '$' + pathSegment(take), ...(parent !== -1 ? { parent: join.parent } : {}) },
+    type,
+    ...(required ? { required: true } : {}),
+  };
+}
+
+/** Corps capturé d'un gisement : réponse JSON (`response`), document servi (`embedded`, `dom`) ou rendu (`dom` vu après rendu). */
+export function capturedBody(candidate: DataCandidate, capture: ReconCapture): string | undefined {
+  if (candidate.from === 'dom') return candidate.dom?.rendered === true ? (capture.document?.renderedHtml ?? undefined) : capture.document?.html;
   if (candidate.from === 'embedded') return capture.document?.html;
   return capture.exchanges.find((e) => e.url === candidate.request.url && e.method.toUpperCase() === candidate.request.method)?.body;
 }
@@ -240,6 +383,7 @@ export function buildFromProposal(
 ): ProposalOutcome {
   const rejected: { candidate: string; reason: string }[] = [];
   let outputSchema: Record<string, unknown>;
+  let relaxed = new Set<string>();
   if (options.fixedSchema !== undefined) {
     try {
       assertSchemaAcceptable(options.fixedSchema);
@@ -254,7 +398,8 @@ export function buildFromProposal(
       if (names.has(f.name)) return { ok: false, reason: 'invalid_schema', rejected };
       names.add(f.name);
     }
-    outputSchema = outputSchemaOf(proposal.fields);
+    relaxed = domRelaxedFields(proposal, candidates);
+    outputSchema = outputSchemaOf(proposal.fields.map((f) => (relaxed.has(f.name) ? { ...f, required: false } : f)));
     try {
       assertSchemaAcceptable(outputSchema);
     } catch (error) {
@@ -262,7 +407,7 @@ export function buildFromProposal(
       throw error;
     }
   }
-  const types = options.fixedSchema !== undefined ? schemaFieldTypes(outputSchema) : new Map(proposal.fields.map((f) => [f.name, { type: f.type, required: f.required }]));
+  const types = options.fixedSchema !== undefined ? schemaFieldTypes(outputSchema) : new Map(proposal.fields.map((f) => [f.name, { type: f.type, required: f.required && !relaxed.has(f.name) }]));
   const strategies: BuiltStrategy[] = [];
   let sample: Record<string, unknown>[] = [];
   for (const source of proposal.sources) {
@@ -276,12 +421,32 @@ export function buildFromProposal(
       continue;
     }
     const fields: Record<string, unknown> = {};
+    const dom = candidate.from === 'dom' ? candidate.dom : undefined;
     for (const p of source.paths) {
       const t = types.get(p.field);
       if (t === undefined) continue;
-      fields[p.field] = { path: p.path, type: t.type, ...(t.required ? { required: true } : {}), ...(p.ops.length === 0 ? {} : { ops: [...p.ops] }) };
+      if (dom !== undefined) {
+        // Bloc du DOM : le chemin désigne un emplacement par son nom ; le code pose sélecteur, attribut et opérateurs.
+        const slot = dom.slots.find((s) => s.name === slotNameOf(p.path));
+        if (slot !== undefined) fields[p.field] = domField(slot, t.type, t.required, p.ops, candidate.request.url);
+        continue;
+      }
+      // Chemin virtuel du squelette d'un gisement JSON : jointure vers un autre tableau de la réponse (`$.teamId~name`,
+      // `$.teamId~parent~name`) ou URL de la fiche déduite des liens de la page (`$.id^url`) ; le code pose la jointure
+      // (opérateur fermé) et le modèle d'URL (hôte déjà dans allowed_hosts), jamais le LLM.
+      const virtual = candidate.from === 'response' ? virtualField(p.path, candidate, t.type, t.required) : undefined;
+      if (virtual !== undefined) {
+        fields[p.field] = virtual;
+        continue;
+      }
+      // Liste lue par un joker (`$.tags[*]`) : toutes les valeurs ; par la clé du tableau (`$.tags`) : le tableau lui-même.
+      fields[p.field] = { path: p.path, type: t.type, ...(t.type === 'array' && /\[\*\]$/.test(p.path) ? { reduce: 'all' } : {}), ...(t.required ? { required: true } : {}), ...(p.ops.length === 0 ? {} : { ops: [...p.ops] }) };
     }
-    const { pagination, param } = paginationOf(source.pagination);
+    if (dom !== undefined && Object.keys(fields).length === 0) {
+      rejected.push({ candidate: candidate.id, reason: 'no_known_slot' });
+      continue;
+    }
+    const { pagination, param } = dom !== undefined ? domPaginationOf(dom.pagination, { ...(candidate.counter === undefined ? {} : { counter: candidate.counter }), count: candidate.count }) : paginationOf(source.pagination);
     const request: Record<string, unknown> = {
       method: candidate.request.method,
       url: candidate.request.url,
@@ -292,7 +457,9 @@ export function buildFromProposal(
     const sourceSpec: Record<string, unknown> =
       candidate.from === 'response'
         ? { id: 'api', from: 'response', format: 'json', records: candidate.records }
-        : { id: 'ssr', from: 'embedded', locator: candidate.locator as BlobLocator, records: candidate.records };
+        : candidate.from === 'dom'
+          ? { id: 'page', from: 'html', records: candidate.records }
+          : { id: 'ssr', from: 'embedded', locator: candidate.locator as BlobLocator, records: candidate.records };
     const raw = {
       schema_version: 1,
       kind: 'declarative',

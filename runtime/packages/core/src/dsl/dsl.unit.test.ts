@@ -26,8 +26,8 @@ const throwsCode = (fn: () => unknown, code: string): void => {
 };
 
 describe('opérateurs : liste fermée', () => {
-  it('la liste est exactement celle de 04b § 2', () => {
-    expect([...OPERATOR_NAMES]).toEqual(['trim', 'lower', 'upper', 'collapse_spaces', 'to_number', 'to_integer', 'to_boolean', 'parse_date', 'abs_url', 'regex_extract', 'default', 'map_value', 'join', 'first', 'count']);
+  it('la liste est exactement celle de 04b § 2, plus url_template (banc réel R05 : URL d\u2019une offre construite d\u2019un modèle fermé)', () => {
+    expect([...OPERATOR_NAMES]).toEqual(['trim', 'lower', 'upper', 'collapse_spaces', 'to_number', 'to_integer', 'to_boolean', 'parse_date', 'abs_url', 'regex_extract', 'default', 'map_value', 'join', 'first', 'count', 'url_template']);
   });
 
   it('nettoyage de texte', () => {
@@ -220,7 +220,7 @@ describe('validation à l\'enregistrement', () => {
     expect(errors(p({ type: 'page_param', param: 'url.query.page', stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 10 } }))).toEqual([]);
     expect(errors(p({ type: 'page_param', param: 'url.query.autre', stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 10 } }))).toContain('param_not_declared');
     expect(errors(p({ type: 'none' }))).toEqual([]);
-    expect(errors(p({ type: 'cursor', param: 'url.query.page', stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 500 } }))).toContain('schema_maximum');
+    expect(errors(p({ type: 'cursor', param: 'url.query.page', stop: [{ when: 'records_empty' }], limits: { hard_max_pages: 1500 } }))).toContain('schema_maximum');
   });
 });
 

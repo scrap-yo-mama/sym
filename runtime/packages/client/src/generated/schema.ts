@@ -2176,6 +2176,7 @@ export interface components {
             legal_basis?: string | null;
             contains_personal_data?: boolean;
             allow_write_actions?: boolean;
+            /** @description Plafond de coût d'un run ; `null` = aucun plafond par run (D-123). */
             max_cost_usd?: number | null;
             budget_daily_usd?: number | null;
             domain_pacing?: components["schemas"]["DomainPacing"];
@@ -2352,6 +2353,21 @@ export interface components {
             run_state?: components["schemas"]["RunState"];
             status?: components["schemas"]["ApiStatus"];
             error?: components["schemas"]["RunError"];
+            /** @description Enquête encore en cours à la réponse (validation automatique plus longue que l'attente) : relire `get_run` (ou GET /api/runs/{id}) après ce délai ; `null` en pause. Absent si l'enquête est terminée. */
+            poll_after_seconds?: number | null;
+            /** @description Enquête encore en cours à la réponse : même indice que `RunResult.progress` (phase, essais, phrase). */
+            progress?: {
+                phase: string;
+                strategies_tried: number;
+                last_attempt: {
+                    execution: string;
+                    network: string;
+                    result: string;
+                } | null;
+                message: string;
+            };
+            /** @description Enquête encore en cours à la réponse : l'appel suivant (`get_run` avec `run_id`). */
+            next_action?: components["schemas"]["NextAction"];
         };
         /** @description Champs modifiables. Un schéma (`output_schema`, `input_schema`) ne change que par un brouillon puis une promotion (19 § 6, itération) : en place, 409 `draft_required`. `access_policy` n'est pas modifiable (INV11) ; une API avec session reste `private` (400 `session_api_private`). */
         ApiPatch: {
@@ -2372,7 +2388,7 @@ export interface components {
             purpose?: string | null;
             legal_basis?: string | null;
             contains_personal_data?: boolean;
-            /** @description Plafond de coût d'un run ; `null` revient au défaut de l'instance (0,5 $). */
+            /** @description Plafond de coût d'un run, facultatif ; `null` retire le plafond (D-123 : aucun plafond par run par défaut, le budget du jour de l'utilisateur `USER_BUDGET_DAILY_USD` reste le filet). Borné par `MAX_COST_USD_PER_RUN` (400 `cost_cap_exceeded` au-delà). */
             max_cost_usd?: number | null;
             /** @description Budget quotidien de l'API ; `null` revient au défaut de l'instance (5 $). */
             budget_daily_usd?: number | null;
@@ -2441,7 +2457,8 @@ export interface components {
             purpose?: string | null;
             legal_basis?: string | null;
             contains_personal_data?: boolean;
-            max_cost_usd?: number;
+            /** @description Plafond de coût d'un run ; absent ou `null` = aucun plafond par run (D-123). */
+            max_cost_usd?: number | null;
             budget_daily_usd?: number;
             /** @description Niveaux réseau exportables seulement (jamais le tunnel ni un identifiant de proxy). */
             network_policy?: {
@@ -2575,10 +2592,15 @@ export interface components {
                 dataset_url?: string;
             };
         };
+        /** @description Validation (ou correction) du schéma proposé. Le schéma validé est celui de l'appelant : propriétés renommées, retirées ou ajoutées et descriptions modifiées sont appliquées, et l'affectation des champs est refaite par le rôle `investigate` (les descriptions guident l'affectation). Ce qui a changé par rapport à la proposition et ce qui n'est pas appliqué (marques `x-personal` de l'appelant ignorées, celles détectées gardées) entrent dans la chronologie du run des essais (entrée `schema_validated`) et dans `schema_validation` de la réponse MCP. */
         ValidateSchemaRequest: {
             output_schema?: {
                 [key: string]: unknown;
             };
+            /** @description Consignes de l'utilisateur (jamais du site), traitées comme la description de l'API : transmises au rôle `investigate` pour refaire l'affectation des champs (quelle liste lire, préfixe à retirer…) et ajoutées à la consigne des voies agentiques. */
+            instructions?: string;
+            /** @description Source candidate de la reconnaissance (`candidates[].id` de l'événement `reconnaissance.finished`, ex. `c2`) : les essais déclaratifs se limitent aux stratégies construites sur elle ; les voies agentiques sur la page restent essayées en dernier (les retirer par `exclude_executions`). Identifiant inconnu ou inutilisable : 400 `unknown_source`, la liste des identifiants valides dans `message` et `what_to_do`. */
+            source_id?: string;
             /** @description Plan d'essais restreint avant exécution (06 § 2, tâche 3.5), dans les bornes de la politique réseau ; jamais d'ajout. */
             exclude_executions?: components["schemas"]["Execution"][];
             wait_seconds?: number;
@@ -2616,6 +2638,13 @@ export interface components {
             brief_report?: components["schemas"]["BriefReportEntry"][];
             /** @description Récit du dossier en gabarits fermés (narrative.brief.*), sans texte du dossier. */
             brief_narrative?: string[];
+            /**
+             * Format: uuid
+             * @description Réponse de création d'API (`auto_validate`, enquête terminée pendant l'attente) : l'API créée, toujours présente.
+             */
+            api_id?: string;
+            /** @description Réponse de création d'API (`auto_validate`, enquête terminée pendant l'attente) : le slug de l'API créée, toujours présent. */
+            slug?: string;
             /** Format: uuid */
             run_id: string;
             state: components["schemas"]["RunState"];
@@ -2633,6 +2662,17 @@ export interface components {
             error?: components["schemas"]["RunError"];
             next_action: components["schemas"]["NextAction"] | null;
             poll_after_seconds: number | null;
+            /** @description Enquête en cours : phase, stratégies déjà essayées, dernier essai et une phrase (anglais) pour le client, qui rappelle que SYM fait l'extraction ; `null` sinon. */
+            progress?: {
+                phase: string;
+                strategies_tried: number;
+                last_attempt: {
+                    execution: string;
+                    network: string;
+                    result: string;
+                } | null;
+                message: string;
+            } | null;
             timeline: {
                 [key: string]: unknown;
             }[];
@@ -3762,7 +3802,7 @@ export interface components {
                 "application/json": components["schemas"]["RunAccepted"];
             };
         };
-        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. Exception : `budget_exceeded` (budget USD du jour de l'appelant, `USER_BUDGET_DAILY_USD` : dépense du jour, enveloppes maximales des runs actifs et enveloppe du nouveau run, 08b § 3) n'a PAS de `Retry-After` et n'est pas réessayable avant minuit UTC. */
+        /** @description File pleine (08b § 3) ; `queue_full` au-delà de `MAX_CONCURRENT_RUNS` runs actifs sur l'instance, `user_queue_full` au-delà de `MAX_ACTIVE_RUNS_PER_USER` pour l'appelant, `key_rate_limited` au-delà de `MAX_RUNS_PER_KEY_PER_MINUTE` créations par clé d'API ; réessayer après `Retry-After`. Exception : `budget_exceeded` (budget USD du jour de l'appelant, `USER_BUDGET_DAILY_USD` : dépense du jour, enveloppes maximales des runs actifs et enveloppe du nouveau run, 08b § 3 ; une API sans plafond par run ne réserve aucune enveloppe, D-123) n'a PAS de `Retry-After` et n'est pas réessayable avant minuit UTC ; un admin peut relever `USER_BUDGET_DAILY_USD`. */
         QueueFull: {
             headers: {
                 "Retry-After"?: number;

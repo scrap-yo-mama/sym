@@ -3,16 +3,18 @@
 // requête modèle, pagination, extraction validée contre `output_schema` (INV1), cadence par domaine avant chaque
 // requête (1.9), plafond de requêtes par run. Seul le transport change d'un exécuteur à l'autre. Aucun `eval` :
 // l'interpréteur de 1.1b fait toute l'extraction ; une réponse refusée (classe d'échec) n'est jamais extraite.
-import { selectElements, elementAttribute, parseHtml } from '../dsl/css.js';
+import { parseHtml } from '../dsl/css.js';
+import { findNextHref } from '../dsl/next-link.js';
 import { DslError } from '../dsl/errors.js';
 import { extractRecords, type ItemPolicy } from '../dsl/extract.js';
 import { queryValues } from '../dsl/jsonpath.js';
 import { parseJsonBounded, resolveLimits, type DslLimits } from '../dsl/limits.js';
+import { detectHtmlPagination } from '../investigation/dom.js';
 import { advancePagination, initialParam, resolveNextUrl, ScrollTracker, startPagination, type StopReason } from '../dsl/pagination.js';
 import type { DeclarativeSpec } from '../dsl/spec.js';
 import { renderRequest, type RenderedRequest, type TemplateContext } from '../dsl/template.js';
 import { classifyExchange, classifyTransportError, TransportRefusal, type ClassifyContext } from './classify.js';
-import { applyParamAt } from './params.js';
+import { applyParamAt, applyPathPattern } from './params.js';
 import type { ExecFailure, HttpExchange, RequestPacer, ScrollTransport, Transport } from './types.js';
 
 export type DeclarativeRunOptions = {
@@ -36,9 +38,25 @@ export type DeclarativeRunOptions = {
    * Chaque défilement passe par le contrôle d'accès, la cadence et la garde de classification comme une requête.
    */
   readonly scroll?: ScrollTransport;
+  /**
+   * Enquête, vérification de la règle d'arrêt d'une longue liste HTML paginée par numéro de page (banc réel R01 : 53 pages
+   * lues au rythme du domaine, 278 s) : après la page 1, lit seulement la page 2, une page du milieu, la dernière page
+   * ANNONCÉE par le pager et la suivante (5 pages au plus), au lieu de toute la liste. Sans dernière page lisible, ou pour une
+   * liste de 6 pages au plus, la lecture reste complète. Jamais posé pour un run : la lecture complète se fait au run.
+   */
+  readonly samplePages?: boolean;
 };
 
-export type DeclarativeStop = StopReason | 'max_requests_per_run' | 'max_items';
+export type DeclarativeStop = StopReason | 'max_requests_per_run' | 'max_items' | 'sampled_pages';
+
+/** Liste de plus de pages que ce seuil : la vérification de l'enquête n'en lit qu'un échantillon. */
+export const SAMPLE_MIN_LAST_PAGE = 7;
+
+/** Numéros de page à lire après la page 1 : la 2e, une du milieu, la dernière annoncée et la suivante (sans doublon, croissant). */
+export function samplePageNumbers(start: number, last: number): number[] {
+  const mid = Math.round((start + last) / 2);
+  return [...new Set([start + 1, mid, last, last + 1])].filter((n) => n > start).sort((a, b) => a - b);
+}
 
 export type DeclarativeRunResult =
   | {
@@ -51,6 +69,12 @@ export type DeclarativeRunResult =
       readonly stop: DeclarativeStop;
       /** Arrêt imposé par un plafond (requêtes par run, items) avant la fin naturelle de la pagination. */
       readonly truncated: boolean;
+      /** Liste HTML paginée : enregistrements écartés comme doublons d'une fiche déjà livrée (banc réel R02). */
+      readonly duplicates?: number;
+      /** Liste HTML paginée : nombre annoncé par l'en-tête de la première page (« 359 annonces »), s'il est lisible. */
+      readonly announced?: number;
+      /** Lecture par échantillon de pages (`samplePages`) : les enregistrements ne sont pas toute la liste (complétude, R13). */
+      readonly sampled?: boolean;
       /**
        * Échange d'une page dont des enregistrements ont été écartés (sinon la dernière page), corps borné : preuve remise à
        * la garde quand la casse vient du seuil des items non conformes (D-49), pour le squelette du rôle `repair` (04 §5
@@ -106,11 +130,11 @@ function tryParseJson(body: string, limits: DslLimits): unknown {
 
 /** Lien « suivant » d'une page HTML (`<link rel="next">` ou `<a rel="next">`), rendu comme un en-tête `Link`. */
 function htmlNextLink(body: string, limits: DslLimits): string | undefined {
-  if (!/rel\s*=\s*["']?next/i.test(body)) return undefined;
   try {
     const doc = parseHtml(body, limits);
-    const [first] = selectElements('link[rel~="next"], a[rel~="next"]', doc, 1);
-    const href = first === undefined ? undefined : elementAttribute(first, 'href');
+    // `rel=next` d'abord, puis le lien « suivant » reconnu par libellé, flèche ou classe (banc réel R07 : `li.next > a`,
+    // relatif, sans rel) : même règle qu'à la reconnaissance. L'URL est résolue puis vérifiée (hôte) par l'appelant.
+    const href = findNextHref(doc);
     return href === undefined || href === '' ? undefined : `<${href}>; rel="next"`;
   } catch {
     return undefined;
@@ -122,6 +146,65 @@ function maxPagesFromInput(spec: DeclarativeSpec, input: Record<string, unknown>
   if (ref === undefined || !ref.startsWith('input.')) return undefined;
   const value = input[ref.slice('input.'.length)];
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : undefined;
+}
+
+/** Champ dont le nom dit « référence » : change d'une ligne à l'autre pour une même fiche (lots d'un programme neuf, R02). */
+const REFERENCE_NAME = /(^|_)(ref|reference|id|lot|code|sku|numero|num|no|n)(_|$)/i;
+
+/** URL canonique d'une fiche : sans fragment ni paramètres de suivi, hôte en minuscules, sans `/` final. */
+function canonicalUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    url.hash = '';
+    for (const name of [...url.searchParams.keys()]) if (/^(utm_|fbclid$|gclid$|mc_|ref$)/i.test(name)) url.searchParams.delete(name);
+    const path = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
+    return `${url.protocol}//${url.host.toLowerCase()}${path}${url.search}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Clé de dédoublonnage d'une liste HTML paginée (banc réel R02 : 12 programmes neufs servis 94 fois, la référence de chaque
+ * lot différant d'une ligne à l'autre). 1. L'URL canonique de la fiche, si un champ lien existe ET qu'il identifie les cartes
+ * de la première page (présent et distinct sur chacune : un « # » ou un lien de liste commun à toutes n'est pas une clé) ;
+ * 2. sinon l'empreinte des champs principaux (texte, nombres), sans les champs de référence ; 3. sinon le contenu entier.
+ */
+function dedupeKeys(spec: DeclarativeSpec): { prepare: (firstPage: readonly Record<string, unknown>[]) => void; key: (record: Record<string, unknown>) => string } {
+  const linkFields = Object.entries(spec.fields)
+    .filter(([, f]) => f.attr === 'href' || (f.ops ?? []).some((o) => typeof o === 'object' && o !== null && (o as { op?: unknown }).op === 'abs_url'))
+    .map(([name]) => name);
+  let linkField: string | undefined;
+  const fingerprint = (record: Record<string, unknown>): string => {
+    const main = Object.entries(record).filter(([name, v]) => !REFERENCE_NAME.test(name) && !linkFields.includes(name) && v !== null && v !== '' && !Array.isArray(v));
+    return `f:${JSON.stringify(main.length >= 1 ? main : Object.entries(record))}`;
+  };
+  return {
+    prepare: (firstPage) => {
+      for (const name of linkFields) {
+        const urls = firstPage.map((r) => (typeof r[name] === 'string' ? canonicalUrl(r[name]) : undefined));
+        if (urls.every((u) => u !== undefined) && (firstPage.length < 2 || new Set(urls).size === urls.length)) {
+          linkField = name;
+          return;
+        }
+      }
+    },
+    key: (record) => {
+      const raw = linkField === undefined ? undefined : record[linkField];
+      const link = typeof raw === 'string' ? canonicalUrl(raw) : undefined;
+      return link === undefined ? fingerprint(record) : `u:${link}`;
+    },
+  };
+}
+
+/** Compteur annoncé par l'en-tête d'une liste (« 359 annonces », « 1 437 salons ») : nombre entier, ou `undefined`. */
+function announcedCount(body: string): number | undefined {
+  const text = body.slice(0, 400_000).replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]{0,2000}>/g, ' ').replace(/&nbsp;/g, ' ');
+  const m = /(?:^|[^\d.,])(\d{1,3}(?:[ \u00a0\u202f.]\d{3})+|\d{1,7})\s+(?:annonces?|r[ée]sultats?|biens?|offres?|programmes?|salons?|produits?|items?|results?|listings?|properties|jobs)\b/i.exec(text);
+  if (m === null) return undefined;
+  const n = Number((m[1] as string).replace(/[ \u00a0\u202f.]/g, ''));
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
 
 /** Exécute la stratégie : renvoie les enregistrements conformes, ou la classe d'échec du premier refus. */
@@ -199,22 +282,49 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
     /**
      * Pagination par paramètre (`page_param`, `offset`) : contenu de la page précédente. Une page identique à la précédente
      * veut dire que le site ignore le paramètre (pagination changée côté site) : casse `extraction` (réparation), jamais une
-     * sortie pleine de doublons jusqu'au plafond dur rendue comme un succès (faux succès, 15 §11).
+     * sortie pleine de doublons jusqu'au plafond dur rendue comme un succès (faux succès, 15 §11). Au-delà de la page 2, une
+     * page déjà vue (site qui ramène une page hors liste à la dernière page ou à la première) est la FIN de la liste.
      */
     let previousPage: string | undefined;
+    const seenPages = new Set<string>();
+    /**
+     * Liste HTML paginée : enregistrements déjà livrés (contenu identique) écartés ; une page qui n'apporte QUE des doublons
+     * est la fin de la liste (banc réel R02 : les 6 dernières pages ne servent que 12 programmes répétés).
+     */
+    const htmlList = spec.sources.every((s) => s.from === 'html') && (pagination?.type === 'page_param' || pagination?.type === 'offset' || pagination?.type === 'next_link');
+    const delivered = new Set<string>();
+    const dedupe = dedupeKeys(spec);
+    let duplicates = 0;
+    let announced: number | undefined;
+    /** Pages restantes d'un échantillon (`samplePages`) ; `undefined` : lecture séquentielle ordinaire. */
+    let sampleQueue: number[] | undefined;
     const scrollVia: Transport | undefined = options.scroll === undefined ? undefined : (_request, sig) => options.scroll!(sig);
     /** Preuve d'une sortie réussie : première page aux enregistrements écartés, sinon la dernière page lue. */
     let rejectedPage: HttpExchange | undefined;
     let lastPage: HttpExchange | undefined;
     const done = (stop: DeclarativeStop, truncated: boolean): DeclarativeRunResult => {
       const proof = rejectedPage ?? lastPage;
-      return { ok: true, records, pages, requests, escalated, stop, truncated, ...(proof === undefined ? {} : { evidence: boundedEvidence(proof) }) };
+      return { ok: true, records, pages, requests, escalated, stop, truncated, ...(duplicates > 0 ? { duplicates } : {}), ...(announced === undefined ? {} : { announced }), ...(sampleQueue === undefined ? {} : { sampled: true }), ...(proof === undefined ? {} : { evidence: boundedEvidence(proof) }) };
     };
 
     for (;;) {
       ctx.page = { number: state.pages + 1, offset: state.received, ...(param === undefined ? {} : { value: param.value }), ...(state.cursor === null ? {} : { cursor: state.cursor }) };
       let request = nextUrl === undefined ? renderRequest(spec.request, allowed, ctx) : { ...renderRequest(spec.request, allowed, ctx), method: 'GET' as const, url: nextUrl, body: undefined };
-      if (nextUrl === undefined && param !== undefined) request = applyParamAt(request, param.at, param.value);
+      if (nextUrl === undefined && param !== undefined) {
+        if (pagination?.next_url !== undefined) {
+          // Pages suivantes servies par une autre URL (R13, bouton « charger plus » en XHR) : la page 1 est la requête telle
+          // quelle, la page N l'URL des pages suivantes (GET, hôte revérifié contre allowed_hosts) avec le paramètre posé.
+          if (state.pages >= 1) {
+            const next = renderRequest({ method: 'GET', url: pagination.next_url, ...(spec.request.headers === undefined ? {} : { headers: spec.request.headers }) }, allowed, ctx);
+            request = applyParamAt(next, param.at, param.value);
+          }
+        } else {
+          request =
+            param.at === 'url.path' && pagination?.path_pattern !== undefined
+              ? applyPathPattern(request, pagination.path_pattern, param.value, pagination.start ?? 1)
+              : applyParamAt(request, param.at, param.value);
+        }
+      }
       if (request.body === undefined) delete (request as { body?: unknown }).body;
 
       let exchange: HttpExchange;
@@ -222,6 +332,10 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
         exchange = await (scrolling && scrollVia !== undefined ? send(request, scrollVia) : send(request));
       } catch (error) {
         if (error instanceof RequestCapReached && pages > 0) return done('max_requests_per_run', true);
+        // Page suivante absente (404, 410) après la première : fin de la liste, pas une casse (04b §2, règle d'arrêt).
+        if (error instanceof RunFailure && error.failure.failure_class === 'not_found' && pages > 0 && (pagination?.type === 'page_param' || pagination?.type === 'offset' || pagination?.type === 'next_link')) {
+          return done('no_next', false);
+        }
         throw error;
       }
       pages += 1;
@@ -238,12 +352,30 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
       const got = out.ok ? (pagination?.type === 'infinite_scroll' ? scrollSeen.fresh(out.records) : out.records) : [];
       if ((pagination?.type === 'page_param' || pagination?.type === 'offset') && got.length > 0) {
         const content = JSON.stringify(got);
-        if (content === previousPage) return failed({ failure_class: 'extraction', retryable: false, detail: 'pagination_repeated_page' });
+        if (content === previousPage && pages <= 2) return failed({ failure_class: 'extraction', retryable: false, detail: 'pagination_repeated_page' });
+        if (seenPages.has(content)) return done('no_next', false);
+        seenPages.add(content);
         previousPage = content;
       }
       escalated ||= out.ok && out.escalated;
       if (rejectedPage === undefined && out.ok && out.attempts[out.source_index]?.problems.some((p) => p.record !== null) === true) rejectedPage = exchange;
-      for (const r of got) records.push(r);
+      if (htmlList && got.length > 0) {
+        if (pages === 1) {
+          dedupe.prepare(got);
+          announced = announcedCount(exchange.body);
+        }
+        const fresh = got.filter((r) => {
+          const key = dedupe.key(r);
+          if (delivered.has(key)) {
+            duplicates += 1;
+            return false;
+          }
+          delivered.add(key);
+          return true;
+        });
+        if (fresh.length === 0 && pages > 1) return done('no_next', false);
+        for (const r of fresh) records.push(r);
+      } else for (const r of got) records.push(r);
       if (records.length >= limits.maxItems) {
         records.length = limits.maxItems;
         return done('max_items', true);
@@ -261,6 +393,18 @@ export async function runDeclarative(options: DeclarativeRunOptions): Promise<De
         maxPagesInput,
       );
       if (decision.done) return done(decision.reason, false);
+      if (options.samplePages === true && pages === 1 && pagination?.type === 'page_param' && param !== undefined && nextUrl === undefined) {
+        const detected = detectHtmlPagination(exchange.body, exchange.url, got.length);
+        const last = detected?.type === 'page_param' ? detected.last : null;
+        if (last !== null && last >= SAMPLE_MIN_LAST_PAGE) sampleQueue = samplePageNumbers(pagination.start ?? 1, last);
+      }
+      if (sampleQueue !== undefined) {
+        const value = sampleQueue.shift();
+        if (value === undefined) return done('sampled_pages', true);
+        param = { at: param?.at ?? (pagination?.param as string), value };
+        nextUrl = undefined;
+        continue;
+      }
       if (decision.scroll === true) {
         // Pas de page à faire défiler (E1, E2) : la liste n'est pas lue au-delà de la première page (sortie tronquée : signal
         // `pagination_short`, 04 §6).

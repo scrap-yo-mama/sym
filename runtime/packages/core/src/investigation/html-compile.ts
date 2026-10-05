@@ -99,19 +99,30 @@ const escapeAttr = (s: string): string => escapeText(s).replace(/"/g, '&quot;');
 /** Lien réduit à son chemin : ni requête, ni fragment (jetons d'URL, 08 §4 mesure 5). */
 const linkPath = (s: string): string => s.split(/[?#]/, 1)[0] ?? '';
 
-export type CondensedHtml = { readonly html: string; readonly truncated: boolean };
+/** Frères de même signature (balise et classes) gardés au plus sous un même parent : la structure suffit au modèle (banc R08). */
+export const HTML_COMPILE_MAX_REPEATS = 15;
+
+/** `omitted` : éléments répétés retirés au-delà de `HTML_COMPILE_MAX_REPEATS` (comptés, jamais montrés). */
+export type CondensedHtml = { readonly html: string; readonly truncated: boolean; readonly omitted: number };
 
 /**
  * HTML capturé, épuré pour le prompt de compilation : balises et texte visibles, attributs utiles aux sélecteurs (`class`,
  * `id`, `data-*`…), liens réduits à leur chemin, espaces normalisés ; ni script, ni style, ni commentaire. Borné à
  * `maxChars` caractères (limite d'entrée de l'essai E4). `mapText` : masquage appliqué à chaque texte et valeur d'attribut.
+ * Liste échantillonnée (banc R06, R08 : 500 cartes envoyées au modèle) : sous un même parent, au-delà de `maxRepeats` frères
+ * de même balise et mêmes classes, les suivants sont retirés et comptés (`omitted`) ; la recette est vérifiée ensuite par le
+ * code sur la page ENTIÈRE.
  */
-export function condenseHtml(html: string, options: { readonly maxChars: number; readonly mapText?: (text: string) => string }): CondensedHtml {
+export function condenseHtml(html: string, options: { readonly maxChars: number; readonly mapText?: (text: string) => string; readonly maxRepeats?: number }): CondensedHtml {
   const map = options.mapText ?? ((s: string) => s);
+  const maxRepeats = options.maxRepeats ?? HTML_COMPILE_MAX_REPEATS;
   const out: string[] = [];
   let size = 0;
   let truncated = false;
   let skipDepth = 0;
+  let omitted = 0;
+  /** Éléments ouverts gardés (hors vides et retirés) : compte de leurs enfants par signature. */
+  const frames: Map<string, number>[] = [new Map()];
   const push = (s: string) => {
     if (truncated) return;
     if (size + s.length > options.maxChars) {
@@ -132,6 +143,16 @@ export function condenseHtml(html: string, options: { readonly maxChars: number;
           if (!VOID.has(name)) skipDepth = 1;
           return;
         }
+        const siblings = frames.at(-1)!;
+        const sig = `${name}.${(attrs['class'] ?? '').split(/\s+/).filter((c) => c !== '').sort().join('.')}`;
+        const seen = (siblings.get(sig) ?? 0) + 1;
+        siblings.set(sig, seen);
+        if (seen > maxRepeats) {
+          omitted += 1;
+          if (!VOID.has(name)) skipDepth = 1;
+          return;
+        }
+        if (!VOID.has(name)) frames.push(new Map());
         const kept: string[] = [];
         for (const [key, raw] of Object.entries(attrs)) {
           if (!KEPT_ATTRS.has(key) && !/^data-[a-z0-9_-]{1,40}$/.test(key)) continue;
@@ -153,6 +174,7 @@ export function condenseHtml(html: string, options: { readonly maxChars: number;
           return;
         }
         if (SKIPPED.has(name) || VOID.has(name)) return;
+        if (frames.length > 1) frames.pop();
         push(`</${name}>`);
       },
     },
@@ -160,7 +182,7 @@ export function condenseHtml(html: string, options: { readonly maxChars: number;
   );
   parser.write(html);
   parser.end();
-  return { html: out.join(''), truncated };
+  return { html: out.join(''), truncated, omitted };
 }
 
 // ---------------------------------------------------------------------------------------------------- construction
@@ -299,6 +321,28 @@ function quarantined(spec: DeclarativeSpec, html: string, outputSchema: unknown)
   }
 }
 
+/** Nombres écrits en mot (anglais, français) : seul complément d'une table d'échantillon que le code s'autorise. */
+const NUMBER_WORDS: Readonly<Record<string, number>> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  zéro: 0, un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, sept: 7, huit: 8, neuf: 9, dix: 10,
+};
+
+/** Complète une table déduite d'un échantillon (voir `alignHtmlStrategy`), en place ; un texte non déductible reste absent. */
+function completeSampledTable(table: Map<string, unknown>, type: string, texts: readonly unknown[]): void {
+  const unseen = [...new Set(texts.filter((t): t is string => typeof t === 'string' && t !== '' && t.length <= MAX_MAP_KEY && !table.has(t)))];
+  if (unseen.length === 0) return;
+  if (type === 'integer' || type === 'number') {
+    const word = (t: string): number | undefined => NUMBER_WORDS[t.trim().toLowerCase()];
+    if (![...table.entries()].every(([t, v]) => word(t) === v)) return;
+    for (const t of unseen) if (word(t) !== undefined && table.size < MAX_MAP_ENTRIES) table.set(t, word(t));
+    return;
+  }
+  if (type === 'boolean' && table.size === 1 && unseen.length === 1) {
+    const seen = [...table.values()][0];
+    if (typeof seen === 'boolean') table.set(unseen[0]!, !seen);
+  }
+}
+
 /**
  * Tables de correspondance déduites par le CODE (constat UX-30) : un champ entier, nombre ou booléen dont la conversion
  * échoue sur la page (note « Three », disponibilité « In stock ») est relu en texte (opérateurs d'avant la conversion), puis
@@ -306,10 +350,16 @@ function quarantined(spec: DeclarativeSpec, html: string, outputSchema: unknown)
  * table n'est posée que si chaque texte a une seule valeur, que chaque élément de l'agent est couvert, et qu'elle compte au
  * plus une entrée pour deux éléments (une note, un état ; jamais une table qui recopierait les prix). Sinon le champ reste
  * tel quel et la vérification dit pourquoi. Le résultat est revalidé (liste fermée) ; la vérification sans LLM décide.
+ * `sampled` (essai E4 en échantillon, banc R06 et R08) : les éléments de l'agent sont les premiers de la page ; la table vient
+ * d'eux, la limite d'entrées se compte sur toute la page, et un texte de la page absent de l'échantillon n'est complété que
+ * par le code : nombre écrit en mot (lexique fermé, si toutes les entrées vues le suivent) ou second état d'un booléen à deux
+ * textes. Sinon la table reste incomplète et la vérification refuse.
  */
-export function alignHtmlStrategy(spec: DeclarativeSpec, html: string, expected: readonly unknown[], outputSchema: unknown): DeclarativeSpec {
+export function alignHtmlStrategy(spec: DeclarativeSpec, html: string, expected: readonly unknown[], outputSchema: unknown, options: { readonly sampled?: boolean } = {}): DeclarativeSpec {
+  const sampled = options.sampled === true;
+  const covers = (n: number) => (sampled ? n >= expected.length : n === expected.length);
   const first = quarantined(spec, html, outputSchema);
-  if (first === null || !first.ok || first.records.length !== expected.length || expected.length === 0) return spec;
+  if (first === null || !first.ok || !covers(first.records.length) || expected.length === 0) return spec;
   const failing = new Set(
     (first.attempts[first.source_index]?.problems ?? []).filter((p) => p.field !== undefined && (p.code === 'type_mismatch' || p.code === 'operator_failed')).map((p) => p.field as string),
   );
@@ -321,10 +371,11 @@ export function alignHtmlStrategy(spec: DeclarativeSpec, html: string, expected:
     const cut = ops.findIndex((o) => CONVERSIONS.has(opName(o)));
     const textOps = cut === -1 ? [...ops] : ops.slice(0, cut);
     const probe = quarantined({ ...spec, fields: { ...spec.fields, [name]: { ...field, type: 'string', required: false, ops: textOps } } }, html, undefined);
-    if (probe === null || !probe.ok || probe.records.length !== expected.length) continue;
+    if (probe === null || !probe.ok || !covers(probe.records.length)) continue;
     const table = new Map<string, unknown>();
     let usable = true;
     for (const [i, record] of probe.records.entries()) {
+      if (i >= expected.length) break;
       const want = (expected[i] as Record<string, unknown> | undefined)?.[name];
       if (want === undefined || want === null) continue;
       const text = record[name];
@@ -334,7 +385,8 @@ export function alignHtmlStrategy(spec: DeclarativeSpec, html: string, expected:
       }
       table.set(text, want);
     }
-    if (!usable || table.size === 0 || table.size > MAX_MAP_ENTRIES || table.size > Math.max(1, Math.floor(expected.length / 2))) continue;
+    if (!usable || table.size === 0 || table.size > MAX_MAP_ENTRIES || table.size > Math.max(1, Math.floor((sampled ? probe.records.length : expected.length) / 2))) continue;
+    if (sampled) completeSampledTable(table, field.type, probe.records.map((r) => r[name]));
     fields = { ...fields, [name]: { ...field, ops: [...textOps, { op: 'map_value', table: Object.fromEntries(table) }] } };
   }
   if (fields === spec.fields) return spec;
@@ -392,7 +444,11 @@ function problemSummary(result: ExtractResult): HtmlProblem[] {
  * relus en mode quarantaine pour comparer les valeurs champ par champ, et les motifs du mode strict sont résumés par champ
  * (constat UX-30 : 20/20 éléments refusés en « extraction, ratio 0 » sans rien dire à la nouvelle tentative).
  */
-export function verifyHtmlStrategy(spec: DeclarativeSpec, html: string, expected: readonly unknown[], outputSchema: unknown): HtmlVerification {
+/**
+ * `sampled` : les éléments de l'agent sont les PREMIERS de la page (essai E4 d'enquête en échantillon, banc R06 et R08) :
+ * la recette doit en rendre au moins autant, et les mêmes valeurs en tête ; les suivants ne sont pas comparés.
+ */
+export function verifyHtmlStrategy(spec: DeclarativeSpec, html: string, expected: readonly unknown[], outputSchema: unknown, options: { readonly sampled?: boolean } = {}): HtmlVerification {
   const fail = (reason: HtmlDiff['reason'], got: number, problems: HtmlProblem[] = []): HtmlVerification => ({
     ok: false,
     records: [],
@@ -429,6 +485,6 @@ export function verifyHtmlStrategy(spec: DeclarativeSpec, html: string, expected
   const valuesOk = compared > 0 && matched / compared >= HTML_COMPILE_MIN_MATCH;
   const schemaOk = got.every((r) => validateOutput(outputSchema, r).ok);
   const reason: HtmlDiff['reason'] =
-    got.length !== expected.length ? 'count' : !valuesOk ? 'values' : !schemaOk || problems.some((p) => p.code === 'schema_mismatch') ? 'schema' : !strict.ok ? 'extraction' : null;
+    (options.sampled === true ? got.length < expected.length : got.length !== expected.length) ? 'count' : !valuesOk ? 'values' : !schemaOk || problems.some((p) => p.code === 'schema_mismatch') ? 'schema' : !strict.ok ? 'extraction' : null;
   return { ok: reason === null, records: got, diff: { expected: expected.length, got: got.length, compared, matched, ratio, mismatches, problems, reason } };
 }

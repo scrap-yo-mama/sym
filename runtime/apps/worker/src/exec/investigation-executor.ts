@@ -42,6 +42,7 @@
 // dans un prompt.
 import {
   buildCatalogDossier,
+  E4_SAMPLE_INPUT_CHARS,
   DslError,
   validateAgentFetchSpec,
   computeSignature,
@@ -52,6 +53,7 @@ import {
   renderCatalogMemory,
   type CatalogDossier,
   type CostCaps,
+  type DeclarativeSpec,
   type FailureClass,
   type InvestigationFailureCause,
   type InvestigationPhase,
@@ -105,11 +107,25 @@ import {
   type TrialPair,
   type TrialPurpose,
   type TrialsOutcome,
+  detectHtmlPagination,
   htmlCompileSupport,
+  paginateHtmlSpec,
+  capturedBody,
+  fidelityCheck,
+  fidelityDiff,
+  fixFieldMapping,
+  fidelitySamples,
+  missingRequiredFields,
+  relaxRequired,
+  relaxSpecRequired,
+  type FidelityIssue,
+  hardMaxPagesFor,
+  sourceViews,
 } from '@runtime/core/investigation';
 import {
   buildNetworkRungs,
   checkSiteDomain,
+  createStaticAssetAllowance,
   loadProxyCredentials,
   openBrowserEgress,
   openNetworkSession,
@@ -164,6 +180,8 @@ import {
 } from '@runtime/core';
 import {
   compileHtmlStrategy,
+  fidelityJudgePromptVersion,
+  judgeFidelity,
   htmlCompilePromptVersion,
   investigateCallCeilingUsd,
   investigateMessages,
@@ -297,11 +315,38 @@ function unpricedModel(config: LlmConfig | null, role: 'extract' | 'agent' | 'in
   return null;
 }
 
+/** Plafond dur de pages d'une spécification (`pagination.limits.hard_max_pages`), sinon celui d'une stratégie proposée. */
+function hardMaxPagesOf(spec: unknown): number {
+  const hard = (spec as { pagination?: { limits?: { hard_max_pages?: unknown } } } | null)?.pagination?.limits?.hard_max_pages;
+  return typeof hard === 'number' && Number.isInteger(hard) && hard >= 1 ? hard : PROPOSAL_HARD_MAX_PAGES;
+}
+
 /**
  * Entrée d'une exécution d'essai : les N exécutions d'échantillon lisent au plus 2 pages (la page 2 est exigée, 04 §4) ;
- * l'exécution de vérification de la règle d'arrêt va jusqu'au plafond dur de pages (tâche 2.2).
+ * l'exécution de vérification de la règle d'arrêt va jusqu'au plafond dur de pages de la spécification (tâche 2.2 ; 200
+ * pour une liste HTML, dont la dernière page est souvent au-delà de 50), borné à `STOP_CHECK_MAX_PAGES` (R13 : 259 pages au
+ * rythme du domaine dépassent l'échéance de l'enquête ; au-delà, la règle d'arrêt est dite « non vérifiée », 04 §4).
  */
-const trialInput = (paginated: boolean, purpose: TrialPurpose): Record<string, unknown> => (paginated ? { max_pages: purpose === 'stop_check' ? PROPOSAL_HARD_MAX_PAGES : 2 } : {});
+const STOP_CHECK_MAX_PAGES = 60;
+const trialInput = (paginated: boolean, purpose: TrialPurpose, hardMaxPages: number = PROPOSAL_HARD_MAX_PAGES): Record<string, unknown> =>
+  paginated ? { max_pages: purpose === 'stop_check' ? Math.min(hardMaxPages, STOP_CHECK_MAX_PAGES) : 2 } : {};
+
+/** Fins de liste naturelles d'une exécution (règle d'arrêt atteinte, pas un plafond). */
+const NATURAL_STOPS = new Set(['records_empty', 'path_equals', 'path_missing', 'no_next', 'repeated_cursor', 'no_pagination']);
+/**
+ * Complétude contre le compteur affiché (R13 : « 6197 annonces », 24 livrées, statut « sain ») : une liste lue jusqu'à sa
+ * fin naturelle qui sert moins de 80 % du compteur (et au moins 10 de moins) n'est pas conforme ; SYM essaie le niveau
+ * suivant (navigateur, cookies du site). Les cartes servies comptent les doublons écartés d'une liste HTML (R02 : le compteur
+ * « 359 annonces » compte les lots, 350 cartes servies pour 268 fiches distinctes : conforme, écart dit au journal du run).
+ */
+const COMPLETENESS_MIN_SHARE = 0.8;
+export function incompleteVsCounter(counter: number | undefined, runs: readonly { readonly records: number; readonly stop: string | null }[]): { counter: number; delivered: number } | null {
+  if (counter === undefined) return null;
+  const natural = runs.filter((r) => r.stop !== null && NATURAL_STOPS.has(r.stop));
+  if (natural.length === 0) return null;
+  const delivered = Math.max(...natural.map((r) => r.records));
+  return delivered < counter * COMPLETENESS_MIN_SHARE && counter - delivered >= 10 ? { counter, delivered } : null;
+}
 
 /** Récit de la vérification de la règle d'arrêt (codes et nombres, aucune valeur du site). */
 const stopCheckView = (o: PairOutcome) => (o.stop_check === null ? undefined : { verified: o.stop_check.verified, stop: o.stop_check.stop, pages: o.stop_check.pages, ...(o.stop_check.reason === undefined ? {} : { reason: o.stop_check.reason }) });
@@ -435,10 +480,17 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     // `investigation_budget_usd` ; une tentative du mode « SYM ne lâche pas » (2.16) le borne encore au reste de son
     // plafond et du budget du jour (`budget_cap_usd`) : le plafond annoncé est strict.
     const budgetUsd = Math.min(request.budget_usd, state.budget_cap_usd ?? Number.POSITIVE_INFINITY, deps.costCaps?.userBudgetDailyUsd ?? Number.POSITIVE_INFINITY);
-    const pageUrl = new URL(request.url).href;
-    const host = new URL(pageUrl).hostname.toLowerCase();
+    // Plafond par run de l'API pour chaque essai : `costCapUsd` s'il est fixé ; sinon aucun (D-123), le budget d'enquête restant
+    // (fini, réservé dans le budget du jour à l'admission) est la seule borne. Jamais `target.api.maxCostUsd` : pour une
+    // enquête, ce reste du budget du jour compte déjà sa propre réservation.
+    const runCapUsd = target.api.costCapUsd ?? Number.POSITIVE_INFINITY;
+    // Page de la demande ; l'étape 0 peut adopter l'URL finale d'une redirection permanente vers un autre site (R09).
+    let pageUrl = new URL(request.url).href;
+    let host = new URL(pageUrl).hostname.toLowerCase();
     // Domaines de l'API (04b §2) : la page et ses sous-domaines (ou ceux du domaine sans `www.`), jamais un voisin.
-    const scope = siteScope(host);
+    let scope = siteScope(host);
+    /** URL de la demande quand l'étape 0 a adopté sa redirection permanente (dit dans le récit). */
+    let redirectedFrom: string | null = null;
     const baseElapsed = state.elapsed_ms;
     const deadlineMs = started + Math.max(0, request.timeout_s * 1000 - baseElapsed);
     // `investigation_timeout_s` borne CHAQUE phase (étape 0, reconnaissance, appel LLM, essais), pas seulement les essais.
@@ -572,6 +624,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
     let dossier: CatalogDossier | null = null;
     /** HTML de la page vue à la reconnaissance de ce passage (signature de la version retenue) ; null sinon. */
     let reconHtml: string | null = null;
+    /** Gisements et capture de la reconnaissance de ce passage : contrôle de fidélité (emplacements, fragments du juge). */
+    let reconCandidates: readonly DataCandidate[] = [];
+    let reconCapture: ReconCapture | null = null;
 
     // --- réseau autorisé (politique de l'API, proxys de l'admin) et identité du robot ------------------------------
     let rungs: NetworkRung[];
@@ -656,8 +711,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           return await finishStopped('proxy_not_configured', 'proxy_credentials_unavailable', 'setup');
         }
       }
-      // Étape 0 et reconnaissance sous le plus petit de `max_cost_usd` et du budget restant de l'enquête.
-      const ceiling = Math.max(0, Math.min(target.api.maxCostUsd, budgetUsd - spent));
+      // Étape 0 et reconnaissance sous le plus petit de `max_cost_usd` (s'il est fixé, D-123) et du budget restant de l'enquête.
+      const ceiling = Math.max(0, Math.min(runCapUsd, budgetUsd - spent));
       const sessionBase: SessionBase = {
         rung,
         guard: deps.guard,
@@ -666,24 +721,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         userAgent,
         ...(from === null ? {} : { from }),
       };
-      const session: NetworkSession = openNetworkSession({
-        ...sessionBase,
-        allowedHosts: [host],
-        allowedHostSuffixes: [scope],
-        costCeiling: { maxUsd: ceiling },
-      });
-      ports = {
-        mode: 'server',
-        probe: sessionAccessProbe(session),
-        reconProbe: sessionAccessProbe(session, STATIC_MAX_BYTES),
-        pacer,
-        proxyUsd: () => session.usage().costUsd,
-        tunnel: null,
-        server: { sessionBase, ceiling },
-        close: async () => {
-          await session.close().catch(() => undefined);
-        },
-      };
+      ports = serverAccessPorts({ sessionBase, ceiling }, host, scope, pacer);
     }
     /** Arrêt du tunnel (extension hors ligne, défi, site non connecté) : il prime sur l'échec vu par l'étape. */
     const tunnelOutcome = async (at: string): Promise<RunResult | null> => {
@@ -700,10 +738,56 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
 
       // --- 0. Rapport d'accès -------------------------------------------------------------------------------------
       // En tunnel, la sonde part du Chrome de l'utilisateur : sa langue réelle, non relevée (21 § 6.4, § 6.6).
-      const report: AccessReport = await buildAccessReport({ url: pageUrl, probe: ports.probe, requestsFrom: ports.mode === 'tunnel' ? 'user_browser' : 'engine', ...(pacer === undefined ? {} : { pacer }), signal, now });
+      let report: AccessReport = await buildAccessReport({ url: pageUrl, probe: ports.probe, requestsFrom: ports.mode === 'tunnel' ? 'user_browser' : 'engine', ...(pacer === undefined ? {} : { pacer }), signal, now });
       const stopped0 = await tunnelOutcome('access_check');
       if (stopped0 !== null) return stopped0;
-      const accessWritten = await recordAccessReport(deps.pool, { runId: ctx.runId, ownerId: ctx.ownerId, payload: accessReportEventPayload(report) }, { onRenderedSentence: 'scrub' });
+      // Page qui sort du site par redirection (banc R09 : `lu.ma/paris` répond 301 vers `luma.com/paris`) : si la redirection
+      // est PERMANENTE et que la garde SSRF admet l'hôte final, il devient le domaine de l'API (essais, stratégie, cadence),
+      // sa mémoire de refus est relue, et l'étape 0 est refaite sur l'URL finale ; le récit le dit (`redirected_from`).
+      const server0 = ports.server;
+      if (!report.verdict.proceed && report.verdict.failure?.detail === 'domain_not_allowed' && server0 !== null && state.imported === undefined) {
+        const moved = await permanentRedirectTarget({ sessionBase: server0.sessionBase, guard: deps.guard, url: pageUrl, ceiling: server0.ceiling, signal, ...(pacer === undefined ? {} : { pacer }) });
+        if (moved.proxyUsd > 0) {
+          await charge(ctx, moved.proxyUsd);
+          spent = round6(spent + moved.proxyUsd);
+        }
+        if (moved.url !== null) {
+          redirectedFrom = pageUrl;
+          pageUrl = moved.url;
+          host = new URL(pageUrl).hostname.toLowerCase();
+          scope = siteScope(host);
+          await ctx.log('info', 'start_url_redirect_adopted', { from_host: new URL(redirectedFrom).hostname, to_host: host });
+          let movedDomain: string;
+          try {
+            movedDomain = registrableDomain(host);
+          } catch {
+            movedDomain = host;
+          }
+          if (movedDomain !== domain) {
+            domain = movedDomain;
+            const movedMemory = await (deps.memory?.read ?? ((a) => readCatalogMemory(deps.pool, a)))({ ownerId: ctx.ownerId, apiId: ctx.apiId, domain });
+            const movedRefusal = priorRefusalDecision(movedMemory.refusals, domain, movedMemory.statusReason);
+            if (movedRefusal.action === 'stop') {
+              await save('done');
+              await ctx.log('warn', 'prior_refusal', { domain, at: movedRefusal.refusal.at, reason: movedRefusal.reason });
+              await event(EV.finished, { outcome: 'failed', failure_class: 'forbidden', detail: 'prior_refusal', at: 'memory', budget: budgetView() });
+              await applyStatus({ type: 'prior_refusal' });
+              return { state: 'failed', failure_class: 'forbidden', retryable: false, error_detail: 'prior_refusal' };
+            }
+          }
+          // Session de l'étape 0 rouverte sur le domaine adopté (coût de la première imputé avant sa fermeture).
+          await charge(ctx, ports.proxyUsd());
+          spent = round6(spent + ports.proxyUsd());
+          await ports.close();
+          ports = serverAccessPorts(server0, host, scope, pacer);
+          report = await buildAccessReport({ url: pageUrl, probe: ports.probe, requestsFrom: 'engine', ...(pacer === undefined ? {} : { pacer }), signal, now });
+        }
+      }
+      const accessWritten = await recordAccessReport(
+        deps.pool,
+        { runId: ctx.runId, ownerId: ctx.ownerId, payload: { ...accessReportEventPayload(report), ...(redirectedFrom === null ? {} : { redirected_from: narrativeUrl(redirectedFrom), url: narrativeUrl(pageUrl), domain: host }) } },
+        { onRenderedSentence: 'scrub' },
+      );
       await codesOnlyRefused('access_report', accessWritten.scrubbed ?? []);
       if (!report.verdict.proceed) {
         await charge(ctx, ports.proxyUsd());
@@ -736,7 +820,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               agentic: deps.agentic === true ? { ...(rolePrice(config, 'extract') === undefined ? {} : { extract: rolePrice(config, 'extract')! }), ...(rolePrice(config, 'agent') === undefined ? {} : { agent: rolePrice(config, 'agent')! }) } : {},
               pageUrl,
               pageHost: host,
-              instruction: request.description,
+              instruction: agenticInstruction(request.description, state.validated_by === 'user' ? state.validation?.instructions : undefined),
               documentBytes: state.page?.document_bytes ?? 0,
               totalBytes: state.page?.total_bytes ?? 0,
             })
@@ -826,11 +910,14 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         reconHtml = capture.document?.renderedHtml ?? capture.document?.html ?? null;
         const fresh = recon.failure === null ? analyzeCapture(capture, apiHostsOf(capture, host, scope)) : [];
         const candidates: readonly DataCandidate[] = firstRun ? fresh : rematchCandidates(state.candidates ?? [], fresh);
+        reconCandidates = candidates;
+        reconCapture = capture;
         if (briefDigest !== null) {
           briefMatch = matchBriefHints(briefDigest, briefProbes, {
-            candidates: candidates.map((c) => ({ id: c.id, from: c.from, method: c.request.method, url: c.request.url, locator: c.locator?.kind ?? null })),
+            candidates: candidates.map((c) => ({ id: c.id, from: c.from, method: c.request.method, url: c.request.url, locator: c.locator?.kind ?? null, ...(c.from === 'dom' ? { records: c.records } : {}) })),
             exchanges: capture.exchanges.map((e) => ({ url: e.url, method: e.method })),
             html: capture.document?.renderedHtml ?? capture.document?.html ?? null,
+            pageUrl: capture.document?.url ?? pageUrl,
           });
           briefPreferred = briefPreferredSources(briefMatch);
           await event('brief.checked', {
@@ -841,10 +928,13 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             await save(phase, { brief: { version: briefRead.brief.version, sha256: briefRead.brief.sha256, confirmed: (briefProbes?.results ?? []).filter((r) => r.outcome === 'verified').map((r) => r.id) } });
           }
         }
+        const views = sourceViews(candidates, capture);
         await event(EV.reconnaissance, {
           mode: capture.mode,
           ...(recon.failure === null ? {} : { failure_class: recon.failure.failure_class, detail: recon.failure.detail }),
-          candidates: candidates.map((c) => ({
+          // Sources candidates (D-124) : type, compteur, aperçu de 3 éléments (pour le client, jamais pour le LLM), pagination.
+          candidates: candidates.map((c, i) => ({
+            ...views[i],
             id: c.id,
             from: c.from,
             request: { method: c.request.method, url: narrativeUrl(c.request.url) },
@@ -857,6 +947,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           })),
           document_bytes: capture.document?.bytes ?? 0,
           total_bytes: capture.totalBytes,
+          ...(capture.assets === undefined || capture.assets.requests === 0 ? {} : { third_party_assets: capture.assets }),
+          ...(capture.data === undefined || capture.data.seen === 0 ? {} : { data_responses: capture.data }),
           ...(recon.requests === undefined ? {} : { requests: recon.requests }),
           budget: budgetView(),
         });
@@ -874,13 +966,28 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
         // Voies agentiques essayables (E4 par le réseau, E6 avec Chromium) : un schéma sans gisement de données leur reste ouvert.
         const agenticOnly = deps.agentic === true && (rolePrice(config, 'extract') !== undefined || (deps.browsers !== null && rolePrice(config, 'agent') !== undefined));
         const fixed = state.validated_schema;
-        const remap = proposal !== undefined && fixed !== undefined && JSON.stringify(fixed) !== JSON.stringify(state.proposed_schema);
+        // Validation par l'appelant (constat Barnes) : schéma corrigé, consignes ou source choisie refont l'affectation des
+        // champs (rôle `investigate`, schéma validé) ; la source choisie limite les gisements montrés au modèle et construits.
+        const validation = !firstRun && state.validated_by === 'user' ? state.validation : undefined;
+        const mapCandidates = validation?.source_id === undefined ? candidates : candidates.filter((c) => c.id === validation.source_id);
+        if (validation !== undefined) {
+          await decide(EV.schemaValidated, {
+            by: 'user',
+            corrected: validation.corrected,
+            changes: validation.changes,
+            not_applied: validation.not_applied,
+            instructions: validation.instructions !== undefined,
+            ...(validation.source_id === undefined ? {} : { source_id: validation.source_id, source_found: mapCandidates.length > 0 }),
+          });
+        }
+        const remap =
+          proposal !== undefined && fixed !== undefined && (JSON.stringify(fixed) !== JSON.stringify(state.proposed_schema) || validation?.instructions !== undefined || validation?.source_id !== undefined);
         if (proposal === undefined || remap) {
           if (deps.llm === undefined || config === null || config.roles.investigate === undefined) {
             return await finishFailed({ failure_class: 'code_error', retryable: false, detail: 'llm_not_configured' }, 'setup');
           }
-          if (!agenticOnly && candidates.filter((c) => c.unsupported === undefined).length === 0) {
-            return await finishFailed({ failure_class: 'extraction', retryable: false, detail: candidates.length > 0 ? 'client_signature' : 'no_data_source' }, 'reconnaissance');
+          if (!agenticOnly && mapCandidates.filter((c) => c.unsupported === undefined).length === 0) {
+            return await finishFailed({ failure_class: 'extraction', retryable: false, detail: mapCandidates.length > 0 ? 'client_signature' : 'no_data_source' }, 'reconnaissance');
           }
           let client: LlmClient;
           try {
@@ -901,9 +1008,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           let args: Parameters<typeof investigateMessages>[0] = {
             description: request.description,
             ...(exampleOutput === undefined ? {} : { exampleOutput }),
-            candidates,
+            candidates: mapCandidates,
             accessFacts: accessFactsForPrompt(report),
             ...(fixed === undefined ? {} : { fixedSchema: fixed }),
+            ...(validation?.instructions === undefined ? {} : { ownerCorrections: validation.instructions }),
             ...(ctx.proseLocale === undefined ? {} : { proseLocale: ctx.proseLocale }),
             rules: renderRulesPrompt(ruled.resolved),
             ...(catalogMemory === '' ? {} : { catalogMemory }),
@@ -921,7 +1029,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               const rendered = renderAgentBrief({ brief: briefRead.brief.content, digest: briefDigest, states: finalizeBriefHints(briefDigest, briefProbes, briefMatch, null), receivedAt: briefRead.brief.created_at, memoryKeys, maxTokens: briefConfig.maxTokens });
               return rendered.text === '' ? {} : { agentBrief: rendered.text };
             })()),
-            allowedCouples: previewCouples({ networks, browser: deps.browsers !== null, agentic: deps.agentic === true ? agenticPrices(config) : {}, candidates, documentBytes: state.page?.document_bytes ?? capture.document?.bytes ?? 0, totalBytes: state.page?.total_bytes ?? capture.totalBytes }),
+            allowedCouples: previewCouples({ networks, browser: deps.browsers !== null, agentic: deps.agentic === true ? agenticPrices(config) : {}, candidates: mapCandidates, documentBytes: state.page?.document_bytes ?? capture.document?.bytes ?? 0, totalBytes: state.page?.total_bytes ?? capture.totalBytes }),
           };
           // Coût d'un appel borné AVANT l'envoi (sortie plafonnée, entrée estimée par excès) : jamais un appel qui
           // ferait dépasser `investigation_budget_usd` ; prix inconnu → aucun appel (08 §1, jamais 0).
@@ -975,7 +1083,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             await ctx.log('info', 'catalog_memory', { entries: dossier.refs.length, tokens: dossier.tokens, truncated: dossier.truncated, sha256: dossier.sha256 });
           }
         }
-        const built = buildFromProposal(proposal!, candidates, fixed === undefined ? capture : null, { ...(fixed === undefined ? {} : { fixedSchema: fixed }), agenticOnly });
+        const built = buildFromProposal(proposal!, mapCandidates, fixed === undefined ? capture : null, { ...(fixed === undefined ? {} : { fixedSchema: fixed }), agenticOnly });
         if (!built.ok) {
           await event(EV.schemaProposed, { ok: false, reason: built.reason, rejected: built.rejected, budget: budgetView() });
           return await finishFailed({ failure_class: 'extraction', retryable: false, detail: built.reason }, 'schema');
@@ -1060,6 +1168,10 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const lastRecords = new Map<TrialPair, Record<string, unknown>[]>();
       /** Sorties des N exécutions d'échantillon de chaque couple (contenu minimal, r4 R5). */
       const sampleOutputs = new Map<TrialPair, Record<string, unknown>[][]>();
+      /** Toutes les exécutions conformes d'un couple (échantillon et règle d'arrêt) : éléments lus et raison d'arrêt (complétude, R13). */
+      const runsFor = new Map<TrialPair, { records: number; stop: string | null }[]>();
+      /** Écart au compteur d'un couple refusé (`incomplete_vs_counter`) : paramètres du motif de l'essai. */
+      const incompleteFor = new Map<TrialPair, { counter: number; delivered: number }>();
       /** Trace E6 compilée en E5 par la dernière exécution conforme du couple (04 §3.1). */
       const compiledFor = new Map<TrialPair, unknown>();
       /** Contexte de la compilation au grain de l'étape (2.13) : trace de l'E6 conforme, modèle, date. */
@@ -1071,6 +1183,375 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       const spend = new Map<TrialPair, { proxy: number; llm: number | null; tokens: { in: number; cached: number; out: number; reasoning: number; estimated: boolean }; model: string | null; prompt: string | null; engine: string | null }>();
       const spentBeforeTrials = spent;
       let trialsUsd = 0;
+      /**
+       * Compilation de l'essai E4 conforme en stratégie déclarative `html` (constat UX-20, 04b §2, 19 §1 « Rejeu E1-E3 :
+       * 0 LLM »), sur le modèle de E6 → E5 : un appel du rôle `investigate` sur le HTML capturé et les éléments de l'agent
+       * (données non fiables), plafonné AVANT l'envoi par le budget d'enquête ; vérification SANS LLM sur le même HTML ;
+       * une nouvelle tentative au plus. Coût imputé au run d'enquête ; prix inconnu : aucun appel (jamais 0, 08 §1). Un refus
+       * est dit au récit (`strategy.compiled`, E4 gardé, avec sa raison) ; une réussite est dite par l'appelant, qui y ajoute
+       * la pagination vérifiée. `live` : dépense courante de l'enquête (pendant les essais : exécutions et compilations) ;
+       * `account` : impute le coût de l'appel.
+       */
+      const compileHtml = async (
+        pair: TrialPair,
+        entry: PlanEntry,
+        live: () => number,
+        account: (usd: number) => void,
+      ): Promise<{ spec: DeclarativeSpec; estCostUsd: number | null; proposals: number; records: number; ratio: number; costUsd: number } | null> => {
+        const refuse = async (reason: string, extra: Record<string, unknown> = {}) => {
+          await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: false, reason, ...extra, budget: budgetView() });
+          await ctx.log('info', 'html_compile_skipped', { reason });
+          return null;
+        };
+        const page = pageFor.get(pair);
+        if (page === undefined) return refuse('no_page');
+        // Types du schéma vérifiés AVANT tout appel (constat UX-31) : une compilation impossible n'est jamais payée.
+        const support = htmlCompileSupport(outputSchema);
+        if (!support.ok) return refuse('unsupported_field_type', { fields: support.fields.slice(0, 10) });
+        config ??= deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
+        const role = config?.roles.investigate;
+        if (deps.llm === undefined || config === null || role === undefined) return refuse('llm_not_configured');
+        const price = rolePrice(config, 'investigate');
+        if (price === null || price === undefined) {
+          await ctx.log('warn', 'llm_price_missing', { model: role.model, role: 'investigate' });
+          return refuse('llm_price_missing');
+        }
+        if (live() >= budgetUsd) return refuse('investigation_budget_usd');
+        if (timedOut()) return refuse('investigation_timeout_s');
+        let client: LlmClient;
+        try {
+          client = deps.llm.client({ ...config, roles: { investigate: role } });
+        } catch {
+          return refuse('llm_not_configured');
+        }
+        // Spec E4 de l'essai (défauts posés par la validation) : page, hôtes et limite d'entrée de la compilation.
+        const e4 = validateAgentFetchSpec(entry.spec);
+        if (!e4.ok) return refuse('invalid_agent_fetch_spec');
+        let out: HtmlCompileOutcome | null = null;
+        let failure: string | null = null;
+        try {
+          out = await compileHtmlStrategy(client, {
+            description: request.description,
+            outputSchema,
+            html: page.html,
+            pageUrl: e4.spec.request.url,
+            allowedHosts: e4.spec.request.allowed_hosts,
+            items: page.items,
+            // Essai en échantillon (banc R06, R08) : les éléments sont les premiers de la page ; la recette doit les rendre en tête.
+            ...(e4.spec.limits.sample_items === undefined ? {} : { sampled: true }),
+            maxInputChars: e4.spec.limits.max_input_chars,
+            price,
+            signal,
+            beforeCall: (ceiling) => {
+              if (live() + (client.meter.snapshot().cost_usd_known ?? 0) + ceiling > budgetUsd) throw new BudgetGuardError();
+            },
+          });
+        } catch (error) {
+          if (ctx.signal.aborted) throw error;
+          if (timedOut()) failure = 'investigation_timeout_s';
+          else if (error instanceof BudgetGuardError) failure = 'investigation_budget_usd';
+          else if (error instanceof LlmError) failure = `llm_${error.class}`;
+          else failure = 'proposal_unreadable';
+        }
+        // Coût de la compilation (tentatives échouées comprises), imputé au run d'enquête : inconnu si le prix manque.
+        const usage = client.meter.snapshot();
+        await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
+        await ctx.log('info', 'html_compile_call', { model: role.model, prompt_version: htmlCompilePromptVersion, llm_usd: usage.cost_usd, calls: usage.calls });
+        if (usage.cost_usd === null) {
+          await ctx.log('warn', 'llm_price_missing', { model: role.model, role: 'investigate' });
+          return refuse('llm_price_missing', { cost_usd: null });
+        }
+        account(usage.cost_usd);
+        if (out === null) return refuse(failure ?? 'proposal_unreadable', { cost_usd: usage.cost_usd });
+        if (!out.ok) {
+          return refuse(out.reason, { proposals: out.proposals, cost_usd: usage.cost_usd, ...(out.diff === null ? {} : { expected: out.diff.expected, got: out.diff.got, ratio: out.diff.ratio }) });
+        }
+        // Coût d'un rejeu : E1 sans LLM (octets de la page au prix du réseau du couple, calcul).
+        const perGbUsd = networks.find((n) => n.mode === entry.network)?.perGbUsd ?? 0;
+        const estCostUsd = estimateCostUsd('fetch', entry.network, { bytes: Buffer.byteLength(page.html), pages: 1, perGbUsd, llmPrice: null });
+        return { spec: out.spec, estCostUsd, proposals: out.proposals, records: out.diff.got, ratio: out.diff.ratio, costUsd: usage.cost_usd };
+      };
+
+
+      /**
+       * Essai E4 compilé : paginé et vérifié en page 2 si la page en a une, sinon vérifié sur sa page ; `verified` : une
+       * exécution E1 de la compilée, sans LLM, a été conforme (elle tient lieu des exécutions LLM suivantes, banc R06 et R08).
+       * `null` : compilation refusée (E4 gardé).
+       */
+      type Promoted = { spec: unknown; estCostUsd: number | null; paginated: boolean; records: Record<string, unknown>[] | null; verified: boolean };
+      const promotedFor = new Map<TrialPair, Promoted | null>();
+      /** Coût des compilations et vérifications de page 2 faites PENDANT les essais (hors exécutions des couples). */
+      let promotionUsd = 0;
+      const liveTrialSpent = () => round6(spentBeforeTrials + trialsUsd + promotionUsd);
+      /**
+       * Essai E4 conforme sur la page 1 (constat Janssens : 10 éléments corrects, jetés en `minimal_content` puis escalade
+       * vers le navigateur) : compilé en déclaratif `html` (sans LLM au rejeu), augmenté de la pagination détectée par le
+       * CODE sur la page de l'essai (`/page/N/`, `?page=N`, `rel=next`…, même hôte), puis vérifié par UNE exécution E1 de la
+       * stratégie compilée (2 pages si elle pagine, sinon sa page), sous toutes les gardes d'un run : page 2 atteinte (ou liste
+       * finie dès la page 1), au moins autant d'éléments que l'essai E4 (un échantillon des premiers, banc R06 et R08), sortie
+       * conforme au schéma (INV1) et contenu minimal. Réussi, la stratégie compilée sera retenue (paginée ou non) ; sinon la
+       * compilée d'une page (si la compilation a réussi) ou E4.
+       */
+      const promote = async (pair: TrialPair): Promise<Promoted | null> => {
+        if (promotedFor.has(pair)) return promotedFor.get(pair)!;
+        const entry = entries.get(pair)!;
+        const compiled = await compileHtml(pair, entry, liveTrialSpent, (usd) => {
+          promotionUsd = round6(promotionUsd + usd);
+        });
+        if (compiled === null) {
+          promotedFor.set(pair, null);
+          return null;
+        }
+        const page = pageFor.get(pair)!;
+        const single: Promoted = { spec: compiled.spec, estCostUsd: compiled.estCostUsd, paginated: false, records: null, verified: false };
+        const report = async (pagination: Record<string, unknown> | null) => {
+          await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: true, proposals: compiled.proposals, records: compiled.records, ratio: compiled.ratio, cost_usd: compiled.costUsd, est_cost_usd: compiled.estCostUsd, ...(pagination === null ? {} : { pagination }), budget: budgetView() });
+          await ctx.log('info', 'html_strategy_compiled', { proposals: compiled.proposals, records: compiled.records, ratio: compiled.ratio, llm_usd: compiled.costUsd, ...(pagination === null ? {} : { pagination: pagination['type'], verified: pagination['verified'] }) });
+        };
+        const detected = detectHtmlPagination(page.html, page.url, page.items.length);
+        const paginatedSpec = detected === null ? null : paginateHtmlSpec(compiled.spec, detected, outputSchema);
+        const paginates = detected !== null && paginatedSpec !== null;
+        const view = (extra: Record<string, unknown>): Record<string, unknown> | null =>
+          detected === null ? null : { type: detected.type, ...(paginates ? extra : { verified: false, reason: 'not_applicable' }) };
+        if (liveTrialSpent() >= budgetUsd || timedOut()) {
+          await report(view({ verified: false, reason: timedOut() ? 'investigation_timeout_s' : 'investigation_budget_usd' }));
+          promotedFor.set(pair, single);
+          return single;
+        }
+        // Une exécution E1 de la stratégie compilée (2 pages si elle pagine), plafond = le plus petit de max_cost_usd (s'il est fixé) et du
+        // budget restant ; aucun LLM.
+        const checkSpec = paginates ? paginatedSpec : compiled.spec;
+        const ceilingUsd = Math.max(0, Math.min(runCapUsd, budgetUsd - liveTrialSpent()));
+        const checkTarget: RunTarget = {
+          api: { ...target.api, outputSchema, maxCostUsd: ceilingUsd },
+          strategy: { version: 0, execution: 'fetch', network: entry.network, spec: checkSpec, scriptRef: null, estCostUsd: compiled.estCostUsd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
+        };
+        let checked: StrategyTrial | null = null;
+        try {
+          const timeout = AbortSignal.timeout(Math.max(1, deadlineMs - now()));
+          checked = await deps.strategy.trial({ ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: paginates ? { max_pages: 2 } : {} }, checkTarget, checkTarget.strategy!);
+        } catch (error) {
+          if (ctx.signal.aborted) throw error;
+          logger.warn(trialErrorLog(ctx.runId, 'fetch', error), 'enquête : vérification de la stratégie compilée en erreur');
+        }
+        if (checked !== null) promotionUsd = round6(promotionUsd + checked.proxyUsd + (checked.llmUsd ?? 0));
+        const r = checked?.result;
+        const natural = r?.ok === true && r.pages === 1 && (r.stop === 'records_empty' || r.stop === 'no_next' || r.stop === 'no_pagination');
+        const content = r?.ok === true ? minimalContentCheck([r.records], outputSchema) : null;
+        const enough = r?.ok === true && r.records.length > 0 && r.records.length >= page.items.length;
+        const verified = r?.ok === true && enough && (!paginates || r.pages >= 2 || natural) && content?.ok === true;
+        await report(
+          view({
+            verified,
+            pages: r?.pages ?? 0,
+            items: r?.ok === true ? r.records.length : 0,
+            ...(verified ? {} : { reason: r === undefined ? 'trial_error' : !r.ok ? (r.failure.detail ?? r.failure.failure_class) : content?.ok === false ? content.detail : !enough ? 'count' : 'pagination_page2' }),
+          }),
+        );
+        const promoted: Promoted = verified && r?.ok === true ? { spec: checkSpec, estCostUsd: compiled.estCostUsd, paginated: paginates, records: r.records, verified: true } : single;
+        promotedFor.set(pair, promoted);
+        return promoted;
+      };
+
+      // --- Contrôle de fidélité (banc réel, passage 1) --------------------------------------------------------------------
+      // Une stratégie déclarative conforme au schéma n'est retenue que si ses valeurs sont fidèles à la page : (a) contrôle
+      // déterministe (remplissage, doublons, formes), puis (b), pour une liste HTML, un juge LLM court sur 3 cartes et leur
+      // fragment HTML, appelé seulement si (a) passe, au plus 0,01 $ par appel. Refus : UNE nouvelle proposition des emplacements avec le
+      // différentiel (codes seulement), essayée par une exécution du même couple ; sinon l'échelon suivant. Coûts imputés à
+      // l'enquête (compte « hors couples » des essais).
+      const declarativeExecutions = new Set(['fetch', 'fetch_in_page', 'playwright']);
+      const fidelityBySpec = new Map<string, { ok: boolean; issues: readonly FidelityIssue[] }>();
+      const remapped = new Set<string>();
+      const autoValidated = state.validated_by === 'auto';
+      const investigateClient = async (): Promise<{ client: LlmClient; price: TokenPrice; model: string } | null> => {
+        config ??= deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
+        const role = config?.roles.investigate;
+        if (deps.llm === undefined || config === null || role === undefined) return null;
+        const price = rolePrice(config, 'investigate');
+        if (price === null || price === undefined) return null;
+        try {
+          return { client: deps.llm.client({ ...config, roles: { investigate: role } }), price, model: role.model };
+        } catch {
+          return null;
+        }
+      };
+      const chargeOutside = async (client: LlmClient): Promise<number | null> => {
+        const usage = client.meter.snapshot();
+        await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
+        if (usage.cost_usd !== null) promotionUsd = round6(promotionUsd + usage.cost_usd);
+        return usage.cost_usd;
+      };
+      /** Contrôle de fidélité d'une stratégie déclarative sur ses éléments ; verdict gardé par spécification (même spec, même verdict). */
+      const fidelityOf = async (spec: DeclarativeSpec, source: string, records: readonly Record<string, unknown>[]): Promise<{ ok: boolean; issues: readonly FidelityIssue[] }> => {
+        const key = JSON.stringify(spec);
+        const known = fidelityBySpec.get(key);
+        if (known !== undefined) return known;
+        const candidate = reconCandidates.find((c) => c.id === source) ?? null;
+        const det = fidelityCheck({ records, outputSchema, spec, candidate });
+        let verdict: { ok: boolean; issues: readonly FidelityIssue[] } = det;
+        let judged: string = 'not_needed';
+        // Juge LLM : cartes HTML seulement (le fragment montré est le bloc de la carte) ; une source JSON a ses clés pour
+        // le contrôle déterministe (clé au nom du champ laissée de côté, forme des valeurs).
+        if (det.ok && spec.sources[0]?.from !== 'html') judged = 'json_source';
+        else if (det.ok) {
+          const body = candidate === null || reconCapture === null ? undefined : capturedBody(candidate, reconCapture);
+          const samples = body === undefined ? [] : fidelitySamples(spec, body, outputSchema);
+          const llm = samples.length === 0 ? null : await investigateClient();
+          if (samples.length === 0) judged = 'no_samples';
+          else if (llm === null) judged = 'llm_unavailable';
+          else if (liveTrialSpent() >= budgetUsd || timedOut()) judged = 'investigation_budget_usd';
+          else {
+            try {
+              const out = await judgeFidelity(llm.client, {
+                description: request.description,
+                outputSchema,
+                samples,
+                price: llm.price,
+                signal,
+                beforeCall: (ceiling) => {
+                  if (liveTrialSpent() + (llm.client.meter.snapshot().cost_usd_known ?? 0) + ceiling > budgetUsd) throw new BudgetGuardError();
+                },
+              });
+              judged = out.judged ? 'judged' : out.reason;
+              if (out.judged) verdict = { ok: out.issues.length === 0, issues: out.issues };
+            } catch (error) {
+              if (ctx.signal.aborted) throw error;
+              // Juge indisponible (erreur du fournisseur, budget) : le contrôle déterministe a passé, l'essai suit son cours.
+              judged = error instanceof BudgetGuardError ? 'investigation_budget_usd' : 'judge_failed';
+            }
+            const cost = await chargeOutside(llm.client);
+            await ctx.log('info', 'fidelity_judge_call', { model: llm.model, prompt_version: fidelityJudgePromptVersion, llm_usd: cost, outcome: judged });
+          }
+        }
+        await ctx.log(verdict.ok ? 'info' : 'warn', 'fidelity_check', { source, ok: verdict.ok, judge: judged, issues: verdict.issues.map((i) => ({ field: i.field, code: i.code, ...(i.share === undefined ? {} : { share: i.share }), ...(i.other === undefined ? {} : { other: i.other }) })) });
+        fidelityBySpec.set(key, verdict);
+        return verdict;
+      };
+      /**
+       * Une nouvelle carte des champs d'un couple, essayée par UNE exécution du même couple (2 pages si elle pagine), puis jugée
+       * comme la première (contenu minimal, fidélité). Acceptée, elle remplace la spécification du couple (retenue avec lui).
+       * `event` : code du journal (`fidelity_remap`, `fidelity_fix`).
+       */
+      const tryMapping = async (pair: TrialPair, entry: PlanEntry, spec: Record<string, unknown>, paginated: boolean, event: string): Promise<boolean> => {
+        const strategy = { spec: spec as unknown as DeclarativeSpec, paginated };
+        const ceilingUsd = Math.max(0, Math.min(runCapUsd, budgetUsd - liveTrialSpent()));
+        const checkTarget: RunTarget = {
+          api: { ...target.api, outputSchema, maxCostUsd: ceilingUsd },
+          strategy: { version: 0, execution: entry.execution, network: entry.network, spec, scriptRef: null, estCostUsd: entry.est_cost_usd, compilable: 'unknown', sourceSteps: null, instructedSteps: null, instructedConfirmation: null },
+        };
+        let checked: StrategyTrial | null = null;
+        try {
+          const timeout = AbortSignal.timeout(Math.max(1, deadlineMs - now()));
+          checked = await deps.strategy.trial({ ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(strategy.paginated, 'sample') }, checkTarget, checkTarget.strategy!);
+        } catch (error) {
+          if (ctx.signal.aborted) throw error;
+          logger.warn(trialErrorLog(ctx.runId, entry.execution, error), 'enquête : essai de la nouvelle carte en erreur');
+        }
+        if (checked !== null) promotionUsd = round6(promotionUsd + checked.proxyUsd + (checked.llmUsd ?? 0));
+        const r = checked?.result;
+        const natural = r?.ok === true && r.pages === 1 && (r.stop === 'records_empty' || r.stop === 'no_next' || r.stop === 'no_pagination');
+        const pagesOk = r?.ok === true && (!strategy.paginated || r.pages >= 2 || natural);
+        const minimal = r?.ok === true ? minimalContentCheck([r.records], outputSchema) : null;
+        const verdict = r?.ok === true && pagesOk && minimal?.ok === true ? await fidelityOf(strategy.spec, entry.source, r.records) : null;
+        const ok = verdict?.ok === true && r?.ok === true;
+        await ctx.log('info', event, { source: entry.source, ok, reason: ok ? null : r === undefined ? 'trial_error' : !r.ok ? (r.failure.detail ?? r.failure.failure_class) : !pagesOk ? 'pagination_page2' : minimal?.ok === false ? minimal.detail : 'fidelity' });
+        if (!ok || r?.ok !== true) return false;
+        entries.set(pair, { ...entry, spec, paginated });
+        lastRecords.set(pair, r.records);
+        sampleOutputs.set(pair, [r.records]);
+        return true;
+      };
+      /**
+       * Avant TOUTE escalade vers une voie à LLM (banc réel R09 : `start_date` recevait l'organisateur, puis `agent_fetch` et `agent`
+       * brûlaient le budget), une nouvelle tentative BON MARCHÉ de la voie déterministe ou JSON : le code corrige l'affectation
+       * du champ refusé d'après le différentiel du contrôle de fidélité (date : champ ISO de la réponse ; libellé : chemin joint),
+       * vérifiée sur les données capturées, puis par une exécution du même couple. Aucun LLM ; une fois par gisement.
+       */
+      const fixed = new Set<string>();
+      const fixMapping = async (pair: TrialPair, entry: PlanEntry, issues: readonly FidelityIssue[]): Promise<boolean> => {
+        if (fixed.has(entry.source)) return false;
+        fixed.add(entry.source);
+        const candidate = reconCandidates.find((c) => c.id === entry.source) ?? null;
+        const body = candidate === null || reconCapture === null ? undefined : capturedBody(candidate, reconCapture);
+        const fix = fixFieldMapping({ spec: entry.spec as unknown as DeclarativeSpec, candidate, issues, outputSchema, body });
+        if (fix === null) {
+          await ctx.log('info', 'fidelity_fix', { source: entry.source, ok: false, reason: 'no_fix' });
+          return false;
+        }
+        const ok = await tryMapping(pair, entry, fix.spec as unknown as Record<string, unknown>, entry.paginated, 'fidelity_fix');
+        if (ok) await ctx.log('info', 'fidelity_fix_applied', { source: entry.source, fields: fix.changes.map((c) => c.field) });
+        return ok;
+      };
+      /**
+       * Nouvelle proposition des emplacements d'UN gisement après un refus de fidélité (une fois par gisement) : rôle
+       * `investigate` avec le schéma validé, la carte précédente et le différentiel (codes) ; la nouvelle stratégie est
+       * essayée par UNE exécution du même couple (2 pages si elle pagine), puis jugée comme la première. Acceptée, elle
+       * remplace la spécification du couple (retenue avec lui).
+       */
+      const remap = async (pair: TrialPair, entry: PlanEntry, issues: readonly FidelityIssue[]): Promise<boolean> => {
+        if (remapped.has(entry.source)) return false;
+        remapped.add(entry.source);
+        const llm = await investigateClient();
+        if (llm === null || proposal === undefined) return false;
+        const previous = proposal.sources.find((s) => s.candidate === entry.source);
+        const args: Parameters<typeof proposeInvestigation>[1] = {
+          description: request.description,
+          candidates: reconCandidates,
+          accessFacts: accessFactsForPrompt(report),
+          fixedSchema: outputSchema,
+          ...(state.validated_by === 'user' && state.validation?.instructions !== undefined ? { ownerCorrections: state.validation.instructions } : {}),
+          ...(ctx.proseLocale === undefined ? {} : { proseLocale: ctx.proseLocale }),
+          previousMapping: { paths: (previous?.paths ?? []).map((p) => ({ candidate: entry.source, field: p.field, path: p.path })), diff: fidelityDiff(issues) },
+        };
+        const ceiling = investigateCallCeilingUsd(args, llm.price);
+        if (liveTrialSpent() + ceiling > budgetUsd || timedOut()) {
+          await ctx.log('info', 'fidelity_remap_skipped', { source: entry.source, reason: timedOut() ? 'investigation_timeout_s' : 'investigation_budget_usd' });
+          return false;
+        }
+        let next: typeof proposal | undefined;
+        try {
+          next = (await proposeInvestigation(llm.client, { ...args, signal, beforeCall: () => {
+            if (liveTrialSpent() + (llm.client.meter.snapshot().cost_usd_known ?? 0) + ceiling > budgetUsd) throw new BudgetGuardError();
+          } })).proposal;
+        } catch (error) {
+          if (ctx.signal.aborted) throw error;
+          next = undefined;
+        }
+        const cost = await chargeOutside(llm.client);
+        await ctx.log('info', 'investigate_call', { model: llm.model, prompt_version: investigatePromptVersion, llm_usd: cost, purpose: 'fidelity_remap' });
+        if (next === undefined) return false;
+        const built = buildFromProposal(next, reconCandidates, null, { fixedSchema: outputSchema });
+        const strategy = built.ok ? built.strategies.find((s) => s.candidate.id === entry.source) : undefined;
+        if (strategy === undefined || JSON.stringify(strategy.spec) === JSON.stringify(entry.spec)) {
+          await ctx.log('info', 'fidelity_remap', { source: entry.source, ok: false, reason: strategy === undefined ? 'no_strategy' : 'same_mapping' });
+          return false;
+        }
+        const spec = strategy.spec as unknown as Record<string, unknown>;
+        const tried = await tryMapping(pair, entry, spec, strategy.paginated, 'fidelity_remap');
+        if (!tried) return false;
+        proposal = next;
+        await save(phase, { proposal: next });
+        return true;
+      };
+      /**
+       * Règle d'arrêt vérifiée en politique `quarantine` : un champ requis absent d'éléments des pages suivantes (second
+       * gabarit de carte, R02) devient facultatif si le schéma a été validé par l'agent (`auto_validate`) : schéma et
+       * spécifications du plan relâchés, état enregistré. Un schéma validé par l'appelant reste le contrat (refus
+       * `missing_required`).
+       */
+      const relaxMissing = async (records: readonly Record<string, unknown>[]): Promise<boolean> => {
+        const missing = missingRequiredFields(records, outputSchema);
+        if (missing.length === 0) return true;
+        if (!autoValidated) return false;
+        const fields = missing.map((m) => m.field);
+        outputSchema = relaxRequired(outputSchema, fields);
+        for (const [p, e] of entries) if ((e.spec as { kind?: unknown }).kind === 'declarative') entries.set(p, { ...e, spec: relaxSpecRequired(e.spec as unknown as DeclarativeSpec, fields) as unknown as Record<string, unknown> });
+        const columns = schemaColumns(outputSchema);
+        await save(phase, { validated_schema: outputSchema, proposed_schema: outputSchema, validated_columns: columns, proposed_columns: columns });
+        await ctx.log('info', 'required_relaxed', { fields: missing.map((m) => ({ field: m.field, records: m.records })), of: records.length });
+        return true;
+      };
+
       let outcome: TrialsOutcome;
       try {
         outcome = await runTrials(
@@ -1088,10 +1569,13 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               const unpricedRole = roleOfEntry === null ? null : unpricedModel(config, roleOfEntry);
               if (unpricedRole !== null) throw new LlmPriceStop(unpricedRole);
               const timeout = AbortSignal.timeout(Math.max(1, limits.deadlineMs - now()));
-              const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(entry.paginated, purpose) };
+              const trialCtx: RunCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, timeout]), input: trialInput(entry.paginated, purpose, hardMaxPagesOf(entry.spec)), ...(purpose === 'stop_check' ? { pageSampling: true } : {}) };
               let trial: StrategyTrial;
+              // Règle d'arrêt d'une stratégie déclarative : lue en politique `quarantine` (des pages suivantes peuvent servir un
+              // second gabarit sans un champ requis : R02) ; les champs requis absents sont jugés par `relaxMissing`.
+              const quarantineStop = purpose === 'stop_check' && declarativeExecutions.has(entry.execution);
               try {
-                trial = await deps.strategy.trial(trialCtx, trialTarget, trialTarget.strategy!);
+                trial = await deps.strategy.trial(trialCtx, trialTarget, trialTarget.strategy!, quarantineStop ? 'quarantine' : undefined);
               } catch (error) {
                 if (ctx.signal.aborted) throw error;
                 if (timeout.aborted) return execution(false, 'run_budget_exceeded', 'investigation_timeout_s', 0, null, 0, null);
@@ -1135,11 +1619,17 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               if (stop === 'challenge_in_tunnel') return execution(false, 'blocked_by_protection', 'challenge_in_tunnel', r.pages, cost, trial.ms, null);
               if (trial.outcome.needsUser === true && !r.ok) return execution(false, 'auth_required', 'site_not_connected', r.pages, cost, trial.ms, null);
               if (cost === null) return execution(false, 'run_budget_exceeded', 'llm_price_missing', r.pages, null, trial.ms, null);
-              if (cost > limits.ceilingUsd) return execution(false, 'run_budget_exceeded', 'max_cost_usd', r.pages, cost, trial.ms, null);
+              // Plafond de l'essai : `max_cost_usd` de l'API, ou le RESTE du budget d'enquête s'il est plus petit. Le motif dit lequel
+              // a coupé (constat Janssens : agent arrêté à 0,72 $ « max_cost_usd » alors que max_cost_usd valait 3 $). Sans plafond
+              // par run (D-123), seul le budget d'enquête coupe : jamais « max_cost_usd ».
+              const capDetail = limits.ceilingUsd < runCapUsd ? 'investigation_budget_usd' : 'max_cost_usd';
+              if (cost > limits.ceilingUsd) return execution(false, 'run_budget_exceeded', capDetail, r.pages, cost, trial.ms, null);
               if (!r.ok) {
                 const f = trial.guardedFailure ?? r.failure;
-                return execution(false, f.failure_class, f.detail, r.pages, cost, trial.ms, null);
+                const detail = f.failure_class === 'run_budget_exceeded' && f.detail === 'max_cost_usd' ? capDetail : f.detail;
+                return execution(false, f.failure_class, detail, r.pages, cost, trial.ms, null);
               }
+              if (quarantineStop && !(await relaxMissing(r.records))) return execution(false, 'extraction', 'missing_required', r.pages, cost, trial.ms, null);
               // E6 réussi sans trace compilable en E5 : jamais retenu (04 §3.1, pas d'agent à chaque run sans `instructed_mode`).
               if (entry.execution === 'agent') {
                 const compiled = trial.outcome.agent?.compiled;
@@ -1155,6 +1645,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
                 pageFor.set(pair, { html: page.html, url: page.url, items: trial.outcome.result.ok ? trial.outcome.result.records : r.records });
               }
               lastRecords.set(pair, r.records);
+              // Cartes SERVIES (doublons d'une liste HTML compris, R02 : 350 cartes pour « 359 annonces », 268 fiches distinctes).
+              // Une lecture par échantillon de pages (vérification de la règle d'arrêt, R01) ne dit rien de la complétude.
+              if (r.sampled !== true) runsFor.set(pair, [...(runsFor.get(pair) ?? []), { records: r.records.length + (r.duplicates ?? 0), stop: r.stop }]);
               if (purpose === 'sample') sampleOutputs.set(pair, [...(sampleOutputs.get(pair) ?? []), r.records]);
               return { ...execution(true, null, null, r.pages, cost, trial.ms, r.stop), records: r.records.length };
             },
@@ -1175,16 +1668,42 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               await decide(EV.attemptFinished, {
                 attempt: { execution: o.pair.execution, network: o.pair.network, est_cost_usd: o.pair.est_cost_usd, result: o.result, cost_usd: o.cost_usd, ms: o.ms },
                 source: o.pair.source,
-                ...(o.detail === null ? {} : { why: { code: o.detail, params: o.detail === 'agent_request_blocked' ? blockedParams(blockedFor.get(o.pair)) : {} } }),
+                ...(o.detail === null ? {} : { why: { code: o.detail, params: o.detail === 'agent_request_blocked' ? blockedParams(blockedFor.get(o.pair)) : o.detail === 'incomplete_vs_counter' ? { ...incompleteFor.get(o.pair) } : {} } }),
                 executions: o.executions.map((e) => ({ ok: e.ok, records: e.records, pages: e.pages, stop: e.stop, cost_usd: e.cost_usd, ms: e.ms })),
                 ...(stopCheckView(o) === undefined ? {} : { pagination: stopCheckView(o) }),
                 budget: budgetView(),
               });
             },
-            contentCheck: (pair) => {
+            // Essai E4 en échantillon conforme dès sa 1re exécution : compilé et vérifié sans LLM, il n'en paie pas d'autre.
+            acceptEarly: async (pair) => entries.get(pair)?.execution === 'agent_fetch' && pageFor.has(pair) && (await promote(pair))?.verified === true,
+            contentCheck: async (pair) => {
               const check = minimalContentCheck(sampleOutputs.get(pair) ?? [], outputSchema);
-              return check.ok ? null : { failure_class: check.failure_class, detail: check.detail };
+              // Essai E4 conforme : compilé en `html`, paginé et vérifié en page 2 (ou sur sa page) avant d'être jugé (Janssens).
+              if (entries.get(pair)?.execution === 'agent_fetch' && pageFor.has(pair)) {
+                const promoted = await promote(pair);
+                if (promoted?.verified === true) return null;
+              }
+              if (!check.ok) return { failure_class: check.failure_class, detail: check.detail };
+              // Stratégie déclarative née d'un gisement : contrôle de fidélité, puis une nouvelle carte au plus (banc réel).
+              const entry = entries.get(pair)!;
+              // Complétude contre le compteur affiché par la page (R13) : une liste finie bien en deçà n'est pas conforme.
+              if (declarativeExecutions.has(entry.execution)) {
+                const gap = incompleteVsCounter(reconCandidates.find((c) => c.id === entry.source)?.counter, runsFor.get(pair) ?? []);
+                if (gap !== null) {
+                  incompleteFor.set(pair, gap);
+                  await ctx.log('warn', 'completeness_check', { source: entry.source, execution: entry.execution, counter: gap.counter, delivered: gap.delivered });
+                  return { failure_class: 'extraction', detail: 'incomplete_vs_counter' };
+                }
+              }
+              if (!declarativeExecutions.has(entry.execution) || (entry.spec as { kind?: unknown }).kind !== 'declarative' || !reconCandidates.some((c) => c.id === entry.source)) return null;
+              const records = (sampleOutputs.get(pair) ?? []).flat();
+              const verdict = await fidelityOf(entry.spec as unknown as DeclarativeSpec, entry.source, records);
+              if (verdict.ok) return null;
+              if (await fixMapping(pair, entry, verdict.issues)) return null;
+              if (await remap(pair, entry, verdict.issues)) return null;
+              return { failure_class: 'extraction', detail: 'fidelity' };
             },
+            spentOutside: () => promotionUsd,
             pruned: async (pairs, by, cls) => {
               await decide(EV.attemptPruned, {
                 by: { execution: by.execution, network: by.network, source: by.source },
@@ -1193,7 +1712,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
               });
             },
           },
-          { maxUsd: budgetUsd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.maxCostUsd },
+          { maxUsd: budgetUsd, spentUsd: spent, deadlineMs, maxAttempts: INVESTIGATION_DEFAULTS.maxAttempts, maxCostPerRunUsd: target.api.costCapUsd },
           { ...(deps.samples === undefined ? {} : { samples: deps.samples }), paginated: (p) => entries.get(p)?.paginated === true, catchUp: true },
         );
       } catch (error) {
@@ -1209,100 +1728,36 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
       }
       spent = outcome.spentUsd;
 
-      /**
-       * Compilation de l'essai E4 conforme en stratégie déclarative `html` (constat UX-20, 04b §2, 19 §1 « Rejeu E1-E3 :
-       * 0 LLM »), sur le modèle de E6 → E5 : un appel du rôle `investigate` sur le HTML capturé et les éléments de l'agent
-       * (données non fiables), plafonné AVANT l'envoi par le budget d'enquête ; vérification SANS LLM sur le même HTML ;
-       * une nouvelle tentative au plus. Coût imputé au run d'enquête ; prix inconnu : aucun appel (jamais 0, 08 §1). Le
-       * récit dit l'issue (`strategy.compiled`) ; un refus garde E4, avec sa raison.
-       */
-      const compileHtml = async (pair: TrialPair, entry: PlanEntry): Promise<{ spec: unknown; estCostUsd: number | null } | null> => {
-        const refuse = async (reason: string, extra: Record<string, unknown> = {}) => {
-          await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: false, reason, ...extra, budget: budgetView() });
-          await ctx.log('info', 'html_compile_skipped', { reason });
-          return null;
-        };
-        const page = pageFor.get(pair);
-        if (page === undefined) return refuse('no_page');
-        // Types du schéma vérifiés AVANT tout appel (constat UX-31) : une compilation impossible n'est jamais payée.
-        const support = htmlCompileSupport(outputSchema);
-        if (!support.ok) return refuse('unsupported_field_type', { fields: support.fields.slice(0, 10) });
-        config ??= deps.llm === undefined ? null : await deps.llm.config().catch(() => null);
-        const role = config?.roles.investigate;
-        if (deps.llm === undefined || config === null || role === undefined) return refuse('llm_not_configured');
-        const price = rolePrice(config, 'investigate');
-        if (price === null || price === undefined) {
-          await ctx.log('warn', 'llm_price_missing', { model: role.model, role: 'investigate' });
-          return refuse('llm_price_missing');
-        }
-        if (spent >= budgetUsd) return refuse('investigation_budget_usd');
-        if (timedOut()) return refuse('investigation_timeout_s');
-        let client: LlmClient;
-        try {
-          client = deps.llm.client({ ...config, roles: { investigate: role } });
-        } catch {
-          return refuse('llm_not_configured');
-        }
-        // Spec E4 de l'essai (défauts posés par la validation) : page, hôtes et limite d'entrée de la compilation.
-        const e4 = validateAgentFetchSpec(entry.spec);
-        if (!e4.ok) return refuse('invalid_agent_fetch_spec');
-        let out: HtmlCompileOutcome | null = null;
-        let failure: string | null = null;
-        try {
-          out = await compileHtmlStrategy(client, {
-            description: request.description,
-            outputSchema,
-            html: page.html,
-            pageUrl: e4.spec.request.url,
-            allowedHosts: e4.spec.request.allowed_hosts,
-            items: page.items,
-            maxInputChars: e4.spec.limits.max_input_chars,
-            price,
-            signal,
-            beforeCall: (ceiling) => {
-              if (spent + (client.meter.snapshot().cost_usd_known ?? 0) + ceiling > budgetUsd) throw new BudgetGuardError();
-            },
-          });
-        } catch (error) {
-          if (ctx.signal.aborted) throw error;
-          if (timedOut()) failure = 'investigation_timeout_s';
-          else if (error instanceof BudgetGuardError) failure = 'investigation_budget_usd';
-          else if (error instanceof LlmError) failure = `llm_${error.class}`;
-          else failure = 'proposal_unreadable';
-        }
-        // Coût de la compilation (tentatives échouées comprises), imputé au run d'enquête : inconnu si le prix manque.
-        const usage = client.meter.snapshot();
-        await charge(ctx, 0, usage.cost_usd, { in: usage.tokens_in, cached: usage.tokens_cached, out: usage.tokens_out, reasoning: usage.tokens_reasoning, estimated: usage.usage_estimated });
-        await ctx.log('info', 'html_compile_call', { model: role.model, prompt_version: htmlCompilePromptVersion, llm_usd: usage.cost_usd, calls: usage.calls });
-        if (usage.cost_usd === null) {
-          await ctx.log('warn', 'llm_price_missing', { model: role.model, role: 'investigate' });
-          return refuse('llm_price_missing', { cost_usd: null });
-        }
-        spent = round6(spent + usage.cost_usd);
-        if (out === null) return refuse(failure ?? 'proposal_unreadable', { cost_usd: usage.cost_usd });
-        if (!out.ok) {
-          return refuse(out.reason, { proposals: out.proposals, cost_usd: usage.cost_usd, ...(out.diff === null ? {} : { expected: out.diff.expected, got: out.diff.got, ratio: out.diff.ratio }) });
-        }
-        // Coût d'un rejeu : E1 sans LLM (octets de la page au prix du réseau du couple, calcul).
-        const perGbUsd = networks.find((n) => n.mode === entry.network)?.perGbUsd ?? 0;
-        const estCostUsd = estimateCostUsd('fetch', entry.network, { bytes: Buffer.byteLength(page.html), pages: 1, perGbUsd, llmPrice: null });
-        await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: true, proposals: out.proposals, records: out.diff.got, ratio: out.diff.ratio, cost_usd: usage.cost_usd, est_cost_usd: estCostUsd, budget: budgetView() });
-        await ctx.log('info', 'html_strategy_compiled', { proposals: out.proposals, records: out.diff.got, ratio: out.diff.ratio, llm_usd: usage.cost_usd });
-        return { spec: out.spec, estCostUsd };
-      };
-
       switch (outcome.kind) {
         case 'conformant': {
           const pair = outcome.outcome.pair;
           const entry = entries.get(pair)!;
-          const records = lastRecords.get(pair) ?? [];
           const runs = Math.max(1, outcome.outcome.executions.length);
           const kept = retainedStrategy(entry, compiledFor.get(pair), round6((spend.get(pair)?.proxy ?? 0) / runs), compileContextFor.get(pair));
           if (!kept.ok) return await finishFailed({ failure_class: 'extraction', retryable: false, detail: kept.reason }, 'testing');
           // Essai E4 conforme : compilé en déclaratif `html` rejoué sans LLM si la vérification passe ; E4 reste la version de
           // repli (écrite avant la compilée, retour de version). Sinon E4 est retenu tel quel (UX-20).
-          const html = entry.execution === 'agent_fetch' ? await compileHtml(pair, entry) : null;
+          let html: Promoted | null = null;
+          if (entry.execution === 'agent_fetch') {
+            if (promotedFor.has(pair)) html = promotedFor.get(pair)!;
+            else {
+              const compiled = await compileHtml(pair, entry, () => spent, (usd) => {
+                spent = round6(spent + usd);
+              });
+              html = compiled === null ? null : { spec: compiled.spec, estCostUsd: compiled.estCostUsd, paginated: false, records: null, verified: false };
+              if (compiled !== null) {
+                await decide(EV.strategyCompiled, { from: 'agent_fetch', to: 'fetch', ok: true, proposals: compiled.proposals, records: compiled.records, ratio: compiled.ratio, cost_usd: compiled.costUsd, est_cost_usd: compiled.estCostUsd, budget: budgetView() });
+                await ctx.log('info', 'html_strategy_compiled', { proposals: compiled.proposals, records: compiled.records, ratio: compiled.ratio, llm_usd: compiled.costUsd });
+              }
+            }
+          }
           const retained = html === null ? { execution: kept.execution, network: kept.network, spec: kept.spec, estCostUsd: kept.estCostUsd } : { execution: 'fetch' as const, network: kept.network, spec: html.spec, estCostUsd: html.estCostUsd };
+          // Stratégie retenue paginée : la sienne (déclarative), ou la compilée d'E4 vérifiée en page 2.
+          const retainedPaginated = html === null ? entry.paginated : html.paginated;
+          // Liste dont la page affiche un compteur (R13 : 6197 biens à 24 par page) : le plafond de requêtes d'un run suit le
+          // nombre de pages annoncé (borné par le format, 1000), sinon le run serait tronqué à 200 pages. La cadence reste.
+          const sourceCandidate = reconCandidates.find((c) => c.id === entry.source);
+          const requestsPerRun = retainedPaginated && sourceCandidate?.counter !== undefined ? hardMaxPagesFor(sourceCandidate.counter, sourceCandidate.count) + 2 : undefined;
           // Source (18 §4.6) : règles injectées et skills lus ; règles embarquées si le compilé porte un prompt (E4) ou vient
           // d'une trace E6 (E5 : `compiled_with` par étape, 19 §4).
           const agentic = entry.execution === 'agent_fetch' || entry.execution === 'agent';
@@ -1328,7 +1783,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             outputSchema,
             ...(state.validated_columns === undefined ? {} : { outputColumns: state.validated_columns }),
             // Import : le schéma d'entrée du fichier (contrôlé à l'import) ; sinon celui que propose l'enquête (2.2).
-            inputSchema: imported !== undefined ? imported.input_schema : buildInputSchema({ paginated: entry.paginated, maxPages: PROPOSAL_HARD_MAX_PAGES }),
+            inputSchema: imported !== undefined ? imported.input_schema : buildInputSchema({ paginated: retainedPaginated, maxPages: hardMaxPagesOf(retained.spec) }),
             state: { ...state, spent_usd: spent, elapsed_ms: baseElapsed + Math.max(0, now() - started) },
             createdBy: state.validated_by === 'import' ? 'import' : recompile ? 'recompile' : 'investigation',
             source: buildStrategySource({
@@ -1343,6 +1798,7 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             }),
             rules: rows,
             ...(html === null ? {} : { compiled: { execution: retained.execution, spec: retained.spec, estCostUsd: retained.estCostUsd } }),
+            ...(requestsPerRun === undefined ? {} : { minRequestsPerRun: requestsPerRun }),
           });
           if (briefRef !== null && briefFinals !== null) await recordBriefOutcome(deps.pool, ctx, briefRef.version, briefFinals.filter((h) => !briefCarried.has(h.id)), now, event);
           phase = 'done';
@@ -1364,7 +1820,9 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           });
           const consulted = dossier !== null ? { sha256: dossier.sha256, refs: dossier.refs } : state.memory;
           if (consulted !== undefined && consulted.refs.length > 0) await recordMemoryRefs(deps.pool, { ownerId: ctx.ownerId, apiId: ctx.apiId, version: saved.version, refs: consulted.refs, sha256: consulted.sha256 });
-          // Résultat livré (figure 1, étape I) : la sortie de la dernière exécution conforme, écrite comme le propriétaire.
+          // Résultat livré (figure 1, étape I) : la sortie de la dernière exécution conforme (celle de la vérification de page 2
+          // pour un E4 compilé paginé), écrite comme le propriétaire.
+          const records = html?.records ?? lastRecords.get(pair) ?? [];
           const dataset = await saveRunDataset(deps.pool, { runId: ctx.runId, apiId: ctx.apiId, ownerId: ctx.ownerId, projectId: target.api.projectId, items: records });
           // Profil du run (après Ajv et la garde de classification : sortie conforme), puis juge CONSULTATIF avant `sain`.
           const profile = profileItems(records, outputSchema);
@@ -1385,6 +1843,11 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
             },
             items: records.length,
             ...(stopCheckView(outcome.outcome) === undefined ? {} : { pagination: stopCheckView(outcome.outcome) }),
+            // Complétude contre le compteur affiché (R13) : éléments lus par la vérification de la règle d'arrêt (ou la dernière
+            // exécution) ; `verified: false` : la liste dépasse la vérification bornée, le rejeu dira le reste.
+            ...(sourceCandidate?.counter === undefined
+              ? {}
+              : { completeness: { counter: sourceCandidate.counter, read: outcome.outcome.stop_check?.records ?? records.length, verified: outcome.outcome.stop_check?.verified ?? null, ...(requestsPerRun === undefined ? {} : { requests_per_run: requestsPerRun }) } }),
             budget: budgetView(),
           });
           return { state: 'succeeded', outcome: 'clean', degraded_reasons: [], items: records.length, dataset_id: dataset.datasetId, strategy_version: saved.version };
@@ -1404,8 +1867,8 @@ function investigationRun(deps: InvestigationExecutorDeps): RunExecutor {
           if (geo !== undefined) return await finishFailed({ failure_class: 'network', retryable: false, detail: geo.detail! }, 'testing');
           const last = outcome.tried.at(-1);
           const lastClass = last?.result;
-          // Un essai coupé par le plafond par run de l'API (`max_cost_usd`) : cause propre, distincte du budget d'enquête et
-          // de l'absence de stratégie conforme (UX-32) ; la suite proposée est de monter `max_cost_usd`.
+          // Un essai coupé par le plafond par run de l'API (`max_cost_usd`, seulement s'il est fixé : D-123) : cause propre, distincte
+          // du budget d'enquête et de l'absence de stratégie conforme (UX-32) ; la suite proposée est de relever ou de retirer ce plafond.
           const detail = last?.detail === 'not_compilable' ? 'not_compilable' : outcome.tried.some((t) => t.detail === 'max_cost_usd') ? 'trial_cost_over_cap' : 'no_conformant_strategy';
           return await finishFailed({ failure_class: lastClass === undefined || lastClass === 'ok' ? 'extraction' : lastClass, retryable: false, detail }, 'testing');
         }
@@ -1431,6 +1894,17 @@ function blockedParams(reasons: readonly string[] | undefined): Record<string, s
 }
 
 /** Prix des rôles agentiques (E4 : `extract`, E6 : `agent`) pour l'ensemble des couples autorisés. */
+/**
+ * Consigne des voies agentiques (E4, E6) : la demande, puis les consignes du client données à la validation du schéma
+ * (`validate_schema` `instructions`, constat Barnes), traitées comme elle ; la demande est raccourcie au besoin pour que les
+ * consignes tiennent sous le plafond de la spécification (2 000 caractères).
+ */
+function agenticInstruction(description: string, instructions: string | undefined): string {
+  if (instructions === undefined) return description;
+  const suffix = `\nOwner corrections: ${instructions}`.slice(0, 1_500);
+  return `${description.slice(0, Math.max(0, 2_000 - suffix.length))}${suffix}`;
+}
+
 function agenticPrices(config: LlmConfig | null): { extract?: TokenPrice | null; agent?: TokenPrice | null } {
   const extract = rolePrice(config, 'extract');
   const agent = rolePrice(config, 'agent');
@@ -1453,8 +1927,8 @@ function previewCouples(input: {
   const usable = input.candidates.filter((c) => c.unsupported === undefined);
   const bytes = usable.length === 0 ? 0 : Math.min(...usable.map((c) => c.bytes));
   const out: TrialPair[] = [];
-  const add = (execution: TrialPair['execution'], network: PlanNetwork, b: number, llm: TokenPrice | null) =>
-    out.push({ execution, network: network.mode, source: '', est_cost_usd: estimateCostUsd(execution, network.mode, { bytes: b, pages: 1, perGbUsd: network.perGbUsd, llmPrice: llm }) });
+  const add = (execution: TrialPair['execution'], network: PlanNetwork, b: number, llm: TokenPrice | null, tokensIn?: number) =>
+    out.push({ execution, network: network.mode, source: '', est_cost_usd: estimateCostUsd(execution, network.mode, { bytes: b, pages: 1, perGbUsd: network.perGbUsd, llmPrice: llm, ...(tokensIn === undefined ? {} : { tokensIn }) }) });
   for (const network of input.networks) {
     const tunnel = network.mode === 'tunnel';
     if (usable.length > 0) {
@@ -1464,7 +1938,7 @@ function previewCouples(input: {
         add('playwright', network, Math.max(input.totalBytes, bytes), null);
       }
     }
-    if (input.agentic.extract !== undefined && !tunnel) add('agent_fetch', network, input.documentBytes, input.agentic.extract);
+    if (input.agentic.extract !== undefined && !tunnel) add('agent_fetch', network, input.documentBytes, input.agentic.extract, Math.ceil(Math.min(input.documentBytes, E4_SAMPLE_INPUT_CHARS) / 4));
     if (input.agentic.agent !== undefined && input.browser && !tunnel) add('agent', network, input.totalBytes * 3, input.agentic.agent);
   }
   return orderTrials(out).map((p) => ({ execution: p.execution, network: p.network, est_cost_usd: p.est_cost_usd }));
@@ -1521,6 +1995,96 @@ async function charge(ctx: RunCtx, proxyUsd: number, llmUsd: number | null = 0, 
   await ctx.chargeCost({ proxy_usd: round6(proxyUsd), llm_usd: llmUsd, ...(tokens === undefined ? {} : { tokens }) });
 }
 
+/** Ports de l'étape 0 et de la reconnaissance par le serveur : session réseau de l'enquête sur les domaines de l'API. */
+function serverAccessPorts(server: { readonly sessionBase: SessionBase; readonly ceiling: number }, host: string, scope: string, pacer: RequestPacer | undefined): AccessPorts {
+  const session: NetworkSession = openNetworkSession({
+    ...server.sessionBase,
+    allowedHosts: [host],
+    allowedHostSuffixes: [scope],
+    costCeiling: { maxUsd: server.ceiling },
+  });
+  return {
+    mode: 'server',
+    probe: sessionAccessProbe(session),
+    reconProbe: sessionAccessProbe(session, STATIC_MAX_BYTES),
+    pacer,
+    proxyUsd: () => session.usage().costUsd,
+    tunnel: null,
+    server,
+    close: async () => {
+      await session.close().catch(() => undefined);
+    },
+  };
+}
+
+/** Sauts de redirection permanente suivis au plus par la sonde de l'étape 0 (R09). */
+const MAX_PERMANENT_HOPS = 3;
+const PERMANENT_REDIRECTS = new Set([301, 308]);
+
+/**
+ * Redirection permanente de l'URL de départ vers un AUTRE site (banc R09 : `lu.ma/paris` répond 301 vers
+ * `luma.com/paris`) : sonde GET qui ne suit pas les redirections, par une session réseau de l'enquête (garde SSRF à chaque
+ * connexion, verrou de domaines sur l'hôte sondé, plafond de coût, User-Agent du robot), cadencée ; au plus
+ * `MAX_PERMANENT_HOPS` sauts 301 ou 308. Un saut dans la portée du site courant est suivi tel quel ; un hôte hors portée
+ * n'est adopté qu'après la garde (résolution contrôlée : jamais une adresse privée, réservée ou de métadonnées cloud), en
+ * http(s), sans identifiants dans l'URL. Une redirection temporaire (302, 307), une erreur ou un refus de la garde laissent
+ * l'URL telle quelle : l'étape 0 décide comme avant (`domain_not_allowed` si la page sort du site). `url: null` : rien
+ * d'adopté ; le coût proxy de la sonde est toujours rendu.
+ */
+async function permanentRedirectTarget(args: {
+  sessionBase: SessionBase;
+  guard: SsrfGuard;
+  url: string;
+  ceiling: number;
+  signal: AbortSignal;
+  pacer?: RequestPacer;
+}): Promise<{ url: string | null; proxyUsd: number }> {
+  let current = new URL(args.url);
+  let adopted = false;
+  let proxyUsd = 0;
+  for (let hop = 0; hop < MAX_PERMANENT_HOPS; hop += 1) {
+    const hopHost = current.hostname.toLowerCase();
+    const session = openNetworkSession({ ...args.sessionBase, allowedHosts: [hopHost], allowedHostSuffixes: [siteScope(hopHost)], costCeiling: { maxUsd: Math.max(0, args.ceiling - proxyUsd) } });
+    const got = await (async (): Promise<{ status: number; location: string | null } | null> => {
+      try {
+        if (args.pacer !== undefined) {
+          const slot = await args.pacer.acquire(current.href);
+          if (!slot.granted) return null;
+        }
+        const response = await session.fetch(current.href, { method: 'GET', headers: { accept: 'text/html,application/json;q=0.9,*/*;q=0.8' }, signal: args.signal }, { followRedirects: false });
+        await response.body?.cancel().catch(() => undefined);
+        await args.pacer?.report(current.href, { status: response.status, retryAfter: response.headers.get('retry-after'), failureClass: null }).catch(() => undefined);
+        return { status: response.status, location: response.headers.get('location') };
+      } catch {
+        args.signal.throwIfAborted();
+        return null;
+      } finally {
+        proxyUsd += session.usage().costUsd;
+        await session.close().catch(() => undefined);
+      }
+    })();
+    if (got === null || !PERMANENT_REDIRECTS.has(got.status) || got.location === null) break;
+    let next: URL;
+    try {
+      next = new URL(got.location, current);
+    } catch {
+      break;
+    }
+    if ((next.protocol !== 'http:' && next.protocol !== 'https:') || next.username !== '' || next.password !== '') break;
+    next.hash = '';
+    if (!withinSiteScope(next.hostname, siteScope(hopHost))) {
+      try {
+        await args.guard.resolve(next.hostname, next.port === '' ? (next.protocol === 'https:' ? 443 : 80) : Number(next.port));
+      } catch {
+        break;
+      }
+      adopted = true;
+    }
+    current = next;
+  }
+  return { url: adopted ? current.href : null, proxyUsd: Math.round(proxyUsd * 1e6) / 1e6 };
+}
+
 /** Domaines de l'API vus par la passe : la page, et les hôtes capturés qui sont dans sa portée de site (04b §2). */
 function apiHostsOf(capture: ReconCapture, host: string, scope: string): string[] {
   const hosts = new Set<string>([host]);
@@ -1562,11 +2126,14 @@ async function browserRecon(
     pacer?: RequestPacer;
   },
 ): Promise<ReconOutcome> {
+  // Code et styles d'un CDN tiers admis pour le rendu (banc R05), bornés ; le même objet tient le proxy d'egress et la page.
+  const staticAssets = createStaticAssetAllowance();
   const openEgress: (options: BrowserEgressOptions) => Promise<RunEgress> = deps.openEgress ?? openBrowserEgress;
   const egress = await openEgress({
     ...args.sessionBase,
     allowedHosts: [args.host],
     allowedHostSuffixes: [args.scope],
+    staticAssets,
     costCeiling: { maxUsd: args.ceiling, otherUsd: args.otherUsd },
   });
   try {
@@ -1577,6 +2144,7 @@ async function browserRecon(
       url: args.url,
       allowedHosts: [args.host],
       allowedHostSuffixes: [args.scope],
+      staticAssets,
       signal: args.signal,
       userAgent: args.userAgent,
       ...(args.pacer === undefined ? {} : { pacer: args.pacer }),

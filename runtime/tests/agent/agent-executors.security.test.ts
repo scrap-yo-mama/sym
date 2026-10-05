@@ -645,9 +645,10 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
   }, 180_000);
 
   test('assert_run_cost_capped — E4 : le client du rôle extract est plafonné ; une réparation qui dépasserait le reliquat n’est pas envoyée', async () => {
-    // Recette 2026-10-04 (UX-32) : le contrôle compte le coût PRÉVU de l'envoi (entrée de la requête, sortie du dernier
-    // appel). Réponse hors schéma de 4 000 jetons de sortie au prix « bon marché » : 0,008 $ ; la réparation, qui en attend
-    // autant, franchirait le plafond de 0,01 $ : elle n'est jamais envoyée (avant : envoyée, 0,016 $ facturés).
+    // Recette 2026-10-04 (UX-32), banc réel R06 : le contrôle compte la borne HAUTE de l'envoi (entrée réelle, sortie au
+    // max_tokens de 8 192 jetons, soit 0,0164 $ au prix « bon marché »). Plafond de 0,02 $ : le premier appel part ; sa réponse
+    // hors schéma de 4 000 jetons coûte 0,008 $ ; la réparation, dont la borne haute franchirait le reliquat, n'est jamais
+    // envoyée (avant UX-32 : envoyée, 0,016 $ facturés).
     const bad = scripted.json({ items: [{ id: 'zz_test_product_x', title: 't', price_eur: 'cher', category: null }] }, { prompt_tokens: 10, completion_tokens: 4_000 });
     fake.setScenario(EXTRACT_MODEL, [bad, bad, bad]);
     const out = await runAgentFetchExecutor({
@@ -663,13 +664,13 @@ describe('plafond de coût de l’essai (04b « Schéma et coût », 08 §1) : r
       llm: extractClient(CHEAP),
       modelId: EXTRACT_MODEL,
       signal,
-      maxCostUsd: 0.01,
+      maxCostUsd: 0.02,
       session: openNetworkSession({ rung: { mode: 'direct' }, guard, allowedHosts: [AGENT_HOSTS.e4] }),
     });
     expect(out.result).toMatchObject({ ok: false, failure: { failure_class: 'run_budget_exceeded', detail: 'max_cost_usd' } });
     expect(fake.requests).toBe(1);
     expect(out.llm?.usd).not.toBeNull();
-    expect(out.llm!.usd!).toBeLessThanOrEqual(0.01);
+    expect(out.llm!.usd!).toBeLessThanOrEqual(0.02);
   });
 
   test('assert_llm_cost_null_when_price_missing — E6 sans prix du modèle : arrêt après le premier appel, coût null (jamais 0), classe run_budget_exceeded (llm_price_missing)', async () => {

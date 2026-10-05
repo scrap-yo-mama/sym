@@ -7,7 +7,7 @@
 // (tâche 2.2) : les N exécutions s'arrêtent à 2 pages, une exécution de plus, au plafond dur, doit finir par la fin
 // naturelle de la liste (sans quoi la règle est journalisée « non vérifiée », jamais présentée comme vérifiée). Le classifieur élague (`pruneAfter`), un refus ou un défi arrête
 // tout (INV6), une connexion requise rend la main. Plafonds : `investigation_budget_usd`, `investigation_timeout_s`,
-// nombre d'essais ; chaque exécution tourne sous le plus petit de `max_cost_usd` et du budget restant.
+// nombre d'essais ; chaque exécution tourne sous le plus petit de `max_cost_usd` (s'il est fixé, D-123) et du budget restant.
 // Orchestration pure : l'exécution d'un couple, le journal et l'horloge sont des ports.
 import type { FailureClass } from '../model/enums.js';
 import { cheaperPairs } from '../rules/plan.js';
@@ -16,9 +16,9 @@ import { pruneAfter, type TrialPair } from './plan.js';
 /** Exécutions d'un couple exigées pour le dire conforme (04 §4, « à valider »). */
 export const INVESTIGATION_SAMPLES = 3;
 
-/** Défauts de l'enquête (04 §4, « à valider » : le CDC ne les chiffre pas). */
+/** Défauts de l'enquête (04 §4, « à valider » : le CDC ne les chiffre pas). Budget : 3 $ depuis D-123 (1 $ avant). */
 export const INVESTIGATION_DEFAULTS = Object.freeze({
-  budgetUsd: 1,
+  budgetUsd: 3,
   timeoutSeconds: 600,
   maxAttempts: 12,
 });
@@ -86,8 +86,22 @@ export type TrialPorts = {
   /**
    * Contenu minimal (tâche 2.12, r4 R5) : après les N exécutions conformes, un champ requis constant, vide ou en
    * sentinelles sur ces sorties rend le couple non conforme (`extraction`, couple suivant). Absent : aucun contrôle.
+   * Peut être asynchrone : pour un essai E4, la compilation en déclaratif `html` paginé et sa vérification en page 2 y ont
+   * lieu (constat Janssens : une page 1 correcte ne se jette plus en `minimal_content`).
    */
-  contentCheck?(pair: TrialPair): { readonly failure_class: FailureClass; readonly detail: string } | null;
+  contentCheck?(pair: TrialPair): { readonly failure_class: FailureClass; readonly detail: string } | null | Promise<{ readonly failure_class: FailureClass; readonly detail: string } | null>;
+  /**
+   * Essai IA d'enquête (E4 en échantillon, banc R06 et R08) : appelé après la PREMIÈRE exécution conforme d'un couple ; vrai
+   * si une stratégie compilée de cet essai a été vérifiée SANS LLM (exécution E1 conforme sous toutes les gardes d'un run) :
+   * elle tient lieu des exécutions suivantes, qui repaieraient le modèle. Le couple est alors conforme sur 1 exécution. Absent
+   * ou faux : les N exécutions comme avant.
+   */
+  acceptEarly?(pair: TrialPair): boolean | Promise<boolean>;
+  /**
+   * Dépense de l'enquête faite HORS des exécutions de couples pendant les essais (compilation et vérification de page 2
+   * d'un essai E4) : comptée dans le budget restant et dans la dépense rendue. Absent : 0.
+   */
+  spentOutside?(): number;
 };
 
 export type TrialBudget = {
@@ -98,8 +112,8 @@ export type TrialBudget = {
   /** Échéance de `investigation_timeout_s` (epoch ms). */
   readonly deadlineMs: number;
   readonly maxAttempts: number;
-  /** `max_cost_usd` de l'API : plafond d'un run. */
-  readonly maxCostPerRunUsd: number;
+  /** `max_cost_usd` de l'API : plafond d'un run ; `null` : aucun plafond par run (D-123), seul le budget restant borne. */
+  readonly maxCostPerRunUsd: number | null;
 };
 
 export type BudgetStop = 'investigation_budget_usd' | 'investigation_timeout_s' | 'max_attempts';
@@ -135,12 +149,14 @@ export async function runTrials(
 ): Promise<TrialsOutcome> {
   const samples = options.samples ?? INVESTIGATION_SAMPLES;
   let remaining = [...plan];
-  let spent = budget.spentUsd;
+  let runsSpent = budget.spentUsd;
+  /** Dépense de l'enquête : exécutions des couples, plus ce que `contentCheck` a dépensé hors d'elles. */
+  const spentNow = (): number => Math.round((runsSpent + (ports.spentOutside?.() ?? 0)) * 1e6) / 1e6;
   const tried: PairOutcome[] = [];
   /** Conforme déjà trouvé pendant le rattrapage : retenu si aucun moins cher ne l'est. */
   let best: PairOutcome | null = null;
   while (remaining.length > 0) {
-    if (tried.length >= budget.maxAttempts) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spent, tried } : { kind: 'budget_exhausted', reason: 'max_attempts', spentUsd: spent, tried };
+    if (tried.length >= budget.maxAttempts) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spentNow(), tried } : { kind: 'budget_exhausted', reason: 'max_attempts', spentUsd: spentNow(), tried };
     const pair = remaining.shift()!;
     const executions: TrialExecution[] = [];
     let failure: { cls: FailureClass; detail: string | null } | null = null;
@@ -152,7 +168,7 @@ export async function runTrials(
      * exécutions d'échantillon et pour la vérification de la règle d'arrêt.
      */
     const execute = async (index: number, purpose: TrialPurpose): Promise<{ stop: boolean; run: TrialExecution | null; perRunCap: boolean }> => {
-      const left = Math.round((budget.maxUsd - spent) * 1e6) / 1e6;
+      const left = Math.round((budget.maxUsd - spentNow()) * 1e6) / 1e6;
       if (left <= 0) {
         budgetStop = 'investigation_budget_usd';
         return { stop: true, run: null, perRunCap: false };
@@ -161,41 +177,48 @@ export async function runTrials(
         budgetStop = 'investigation_timeout_s';
         return { stop: true, run: null, perRunCap: false };
       }
-      const ceilingUsd = Math.min(budget.maxCostPerRunUsd, left);
+      const perRunCap = budget.maxCostPerRunUsd;
+      const ceilingUsd = perRunCap === null ? left : Math.min(perRunCap, left);
       const run = await ports.execute(pair, index, { ceilingUsd, deadlineMs: budget.deadlineMs }, purpose);
       // Un coût inconnu ne se tient pas sous un budget : l'enquête s'arrête là (08 §1, jamais 0 par défaut).
       if (run.cost_usd === null) budgetStop = 'investigation_budget_usd';
-      else spent = Math.round((spent + run.cost_usd) * 1e6) / 1e6;
-      let perRunCap = false;
+      else runsSpent = Math.round((runsSpent + run.cost_usd) * 1e6) / 1e6;
+      let overRunCap = false;
       if (!run.ok) {
         const cls = run.failure_class ?? 'code_error';
         if (cls === 'run_budget_exceeded') {
           // Plafond atteint : celui de l'enquête (budget restant, échéance) l'arrête ; celui d'un run (`max_cost_usd`)
-          // écarte seulement ce couple, trop cher pour un run.
+          // écarte seulement ce couple, trop cher pour un run. Sans plafond par run (D-123), seul le budget restant coupe.
           if (run.detail === 'investigation_timeout_s') budgetStop = 'investigation_timeout_s';
-          else if (ceilingUsd < budget.maxCostPerRunUsd) budgetStop = 'investigation_budget_usd';
-          else perRunCap = true;
+          else if (perRunCap === null || ceilingUsd < perRunCap) budgetStop = 'investigation_budget_usd';
+          else overRunCap = true;
         }
         failure = { cls, detail: run.detail };
-        return { stop: true, run, perRunCap };
+        return { stop: true, run, perRunCap: overRunCap };
       }
-      return { stop: budgetStop !== null, run, perRunCap };
+      return { stop: budgetStop !== null, run, perRunCap: overRunCap };
     };
+    /** Exécutions exigées pour ce couple : N, ou 1 si l'essai IA compilé a été vérifié sans LLM (`acceptEarly`). */
+    let needed = samples;
     for (let i = 0; i < samples; i += 1) {
       const step = await execute(i, 'sample');
       if (step.run !== null) executions.push(step.run);
       if (step.stop) break;
+      if (i === 0 && samples > 1 && step.run?.ok === true && ports.acceptEarly !== undefined && (await ports.acceptEarly(pair))) {
+        needed = 1;
+        break;
+      }
     }
     const paginates = options.paginated?.(pair) === true;
     // Page 2 (04 §4) : une stratégie qui pagine doit l'atteindre au moins une fois, sauf liste finie dès la page 1.
-    if (failure === null && budgetStop === null && executions.length === samples && paginates) {
+    if (failure === null && budgetStop === null && executions.length === needed && paginates) {
       const reached = executions.some((e) => e.pages >= 2);
       const finished = executions.every((e) => e.pages === 1 && e.stop !== null && NATURAL_STOPS.has(e.stop));
       if (!reached && !finished) failure = { cls: 'extraction', detail: 'pagination_page2' };
     }
     // Règle d'arrêt sur la dernière page (04 §4, tâche 2.2) : une exécution d'échantillon qui a fini par la fin naturelle de
     // la liste l'a déjà constatée ; sinon une exécution de plus, au plafond dur, doit y arriver.
-    if (failure === null && budgetStop === null && executions.length === samples && paginates) {
+    if (failure === null && budgetStop === null && executions.length === needed && paginates) {
       const natural = executions.find((e) => e.stop !== null && NATURAL_STOPS.has(e.stop));
       if (natural !== undefined) {
         stopCheck = { verified: true, stop: natural.stop, pages: natural.pages, records: natural.records };
@@ -212,11 +235,11 @@ export async function runTrials(
         }
       }
     }
-    if (failure === null && budgetStop === null && executions.length === samples && ports.contentCheck !== undefined) {
-      const content = ports.contentCheck(pair);
+    if (failure === null && budgetStop === null && executions.length === needed && ports.contentCheck !== undefined) {
+      const content = await ports.contentCheck(pair);
       if (content !== null) failure = { cls: content.failure_class, detail: content.detail };
     }
-    const done = executions.length === samples && failure === null && budgetStop === null;
+    const done = executions.length === needed && failure === null && budgetStop === null;
     const all = checkRun === null ? executions : [...executions, checkRun];
     const outcome: PairOutcome = {
       pair,
@@ -233,21 +256,25 @@ export async function runTrials(
     }
     if (done) {
       const cheaper = options.catchUp === true ? cheaperPairs(remaining, pair) : [];
-      if (cheaper.length === 0) return { kind: 'conformant', outcome, spentUsd: spent, tried };
+      if (cheaper.length === 0) return { kind: 'conformant', outcome, spentUsd: spentNow(), tried };
       best = outcome;
       remaining = cheaper;
       continue;
     }
-    if (budgetStop !== null) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spent, tried } : { kind: 'budget_exhausted', reason: budgetStop, spentUsd: spent, tried };
+    if (budgetStop !== null) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spentNow(), tried } : { kind: 'budget_exhausted', reason: budgetStop, spentUsd: spentNow(), tried };
     const cls = failure!.cls;
     const decision = pruneAfter(cls, pair, remaining);
-    if (decision.pruned.length > 0) {
-      await ports.pruned(decision.pruned, pair, cls);
-      const skip = new Set(decision.pruned);
+    // Contrôle de fidélité refusé (banc réel) : la carte des champs du gisement est en cause, pas le niveau d'exécution ; les
+    // autres niveaux déclaratifs du même gisement liraient les mêmes emplacements : élagués avec lui.
+    const sameSource = (failure as { detail: string | null } | null)?.detail === 'fidelity' ? remaining.filter((p) => p.source === pair.source && !decision.pruned.includes(p)) : [];
+    const pruned = [...decision.pruned, ...sameSource];
+    if (pruned.length > 0) {
+      await ports.pruned(pruned, pair, cls);
+      const skip = new Set(pruned);
       remaining = remaining.filter((p) => !skip.has(p));
     }
-    if (decision.next === 'stop') return { kind: 'stopped', outcome, spentUsd: spent, tried };
-    if (decision.next === 'action_required') return { kind: 'action_required', outcome, spentUsd: spent, tried };
+    if (decision.next === 'stop') return { kind: 'stopped', outcome, spentUsd: spentNow(), tried };
+    if (decision.next === 'action_required') return { kind: 'action_required', outcome, spentUsd: spentNow(), tried };
   }
-  return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spent, tried } : { kind: 'exhausted', spentUsd: spent, tried };
+  return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spentNow(), tried } : { kind: 'exhausted', spentUsd: spentNow(), tried };
 }

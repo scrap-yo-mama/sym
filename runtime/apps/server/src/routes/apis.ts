@@ -60,6 +60,7 @@ import {
 import { briefViewOf, ownerNarrativeLocale, prepareBrief, rejectBrief, saveBrief } from '../rest/briefs.js';
 import { runErrorOf } from '../rest/run-error.js';
 import { buildRunResult, readRunRow, waitForRun } from '../rest/runs.js';
+import { investigationProgress, investigationTimeline } from '../rest/timeline.js';
 import { BLOCKING_STATUS, rejectIfKeyRateLimited, rejectWithoutAck, reasonMessage, reserveRunSlot, RunSlotError, sendRunSlotError, triggerOf, waitSecondsOf } from '../rest/shared.js';
 import { CURSOR_TIME, decodeCursor, encodeCursor, INT4_MAX, UUID } from './account-helpers.js';
 import { audit, notFound, sendError, type Actor } from './guard.js';
@@ -180,7 +181,15 @@ const PERSISTENCE_MESSAGE: Record<PersistenceNotEligibleReason | 'human_confirma
 const validateSchemaBody = {
   type: 'object',
   additionalProperties: false,
-  properties: { output_schema: { type: 'object' }, exclude_executions: executionList, wait_seconds: { type: 'integer', minimum: 0, maximum: 25 } },
+  properties: {
+    output_schema: { type: 'object' },
+    exclude_executions: executionList,
+    wait_seconds: { type: 'integer', minimum: 0, maximum: 25 },
+    // Consignes du client (constat Barnes) : texte de l'utilisateur, borné comme la description de l'API.
+    instructions: { type: 'string', maxLength: 2000 },
+    // Source candidate de la reconnaissance (D-124) : contrôlée contre l'état de l'enquête (`unknown_source`).
+    source_id: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,64}$' },
+  },
 } as const;
 
 const runBody = {
@@ -220,6 +229,15 @@ async function investigationUrlOf(db: Pick<pg.ClientBase, 'query'>, apiId: strin
 
 /** Erreur d'état d'enquête → code HTTP (05 § 4.3). */
 export function investigationError(reply: FastifyReply, error: InvestigationStateError): FastifyReply {
+  if (error.code === 'unknown_source') {
+    // `source_id` absent de la reconnaissance : la liste des identifiants valides, dans le message et dans la marche à suivre.
+    const valid = error.validSources ?? [];
+    const what =
+      valid.length === 0
+        ? 'The reconnaissance kept no usable source: call validate_schema again without source_id.'
+        : `Use one of the source ids found by the reconnaissance: ${valid.join(', ')}; or call validate_schema without source_id.`;
+    return reply.code(400).send({ error: { code: 'unknown_source', message: error.message, what_to_do: what, retryable: true } });
+  }
   const status = error.code === 'api_not_found' ? 404 : error.code === 'invalid_request' || error.code === 'invalid_schema' ? 400 : 409;
   return error.code === 'api_not_found' ? notFound(reply) : sendError(reply, status, error.code, error.message);
 }
@@ -260,7 +278,7 @@ export async function waitApiLeavesEnquete(ctx: ServerContext, actor: Actor, api
 /** Corps de `ApiCreated` (05 § 4.1) : phase, schéma proposé et échantillon (propriétaire), rapport d'accès, run. */
 export async function createdView(ctx: ServerContext, actor: Actor, apiId: string, runId: string) {
   const locale = await ownerNarrativeLocale(ctx, actor.userId);
-  return withActor(ctx.pool, actor, async (db) => {
+  const view = await withActor(ctx.pool, actor, async (db) => {
     const api = await readApiById(db, apiId);
     const proposal = await latestProposal(db, apiId);
     // Dossier d'enquête (19c § 7) : rapport et récit du code, propriétaire seulement (lecture filtrée par owner_id).
@@ -280,8 +298,15 @@ export async function createdView(ctx: ServerContext, actor: Actor, apiId: strin
       ...(run === null ? {} : { run_state: run.state }),
       ...(api === null ? {} : { status: api.status }),
       ...(error === null ? {} : { error }),
+      active: run !== null && !isTerminalRunState(run.state) ? { paused: run.paused_at !== null } : null,
     };
   });
+  // Enquête encore en cours à la réponse (validation automatique plus longue que l'attente, plafonnée à 25 s) : de quoi la suivre
+  // sans deviner, comme RunResult (banc, passage 1) : quand relire, ce que fait SYM, et l'appel suivant (get_run).
+  const { active, ...rest } = view;
+  if (active === null) return rest;
+  const progress = investigationProgress(await investigationTimeline(ctx, actor, runId, view.slug));
+  return { ...rest, poll_after_seconds: active.paused ? null : 5, progress, next_action: { tool: 'get_run', args: { run_id: runId } } };
 }
 
 /** Champs JSON d'une diff (chemins pointés), du plus haut niveau aux feuilles. */
@@ -422,7 +447,11 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         const locale = await ownerNarrativeLocale(ctx, actor.userId);
         const brief = await withActor(ctx.pool, actor, async (db) => briefViewOf(db, { apiId: created.apiId, ownerId: actor.userId, locale, pageUrl: await investigationUrlOf(db, created.apiId, actor.userId) }));
         const result = await buildRunResult(ctx, actor, row);
-        return reply.code(201).send(brief === null ? result : { ...result, brief_version: brief.brief_version, brief_report: brief.brief_report, brief_narrative: brief.narrative });
+        // Banc réel (passage 2, R03 à R06) : une enquête terminée pendant l'attente ne rendait ni `slug` ni `api_id` : la réponse de
+        // création les porte toujours, comme celle d'une enquête encore en cours (ApiCreated).
+        const api = await withActor(ctx.pool, actor, (db) => readApiById(db, created.apiId));
+        const identity = { api_id: created.apiId, slug: api?.slug ?? '' };
+        return reply.code(201).send(brief === null ? { ...result, ...identity } : { ...result, ...identity, brief_version: brief.brief_version, brief_report: brief.brief_report, brief_narrative: brief.narrative });
       }
     }
     return reply.code(201).send(await createdView(ctx, actor, created.apiId, created.runId));
@@ -503,8 +532,9 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (body.purpose !== undefined) set('purpose', body.purpose ?? '');
     if (body.legal_basis !== undefined) set('legal_basis', body.legal_basis);
     if (body.contains_personal_data !== undefined) set('contains_personal_data', body.contains_personal_data);
-    // `null` : retour au défaut de l'instance (défaut de la colonne, 0,5 $ par run et 5 $ par jour), jamais ignoré.
-    if (body.max_cost_usd === null) sets.push('max_cost_usd = DEFAULT');
+    // `null` : max_cost_usd retire le plafond par run (D-123 : NULL, le budget du jour reste le filet) ; budget_daily_usd
+    // revient au défaut de la colonne (5 $ par jour). Jamais ignoré.
+    if (body.max_cost_usd === null) sets.push('max_cost_usd = NULL');
     else if (body.max_cost_usd !== undefined) set('max_cost_usd', body.max_cost_usd);
     if (body.budget_daily_usd === null) sets.push('budget_daily_usd = DEFAULT');
     else if (body.budget_daily_usd !== undefined) set('budget_daily_usd', body.budget_daily_usd);
@@ -569,7 +599,11 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
   });
 
   // ——— Enquête : validation du schéma, ré-enquête ———
-  app.post<{ Params: { id: string }; Body: { output_schema?: Record<string, unknown>; exclude_executions?: Execution[]; wait_seconds?: number }; Querystring: { wait?: number } }>(
+  app.post<{
+    Params: { id: string };
+    Body: { output_schema?: Record<string, unknown>; exclude_executions?: Execution[]; wait_seconds?: number; instructions?: string; source_id?: string };
+    Querystring: { wait?: number };
+  }>(
     '/api/apis/:id/validate-schema',
     { schema: { body: validateSchemaBody, querystring: waitQuery } },
     async (request, reply) => {
@@ -597,6 +631,8 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
             trigger: triggerOf(actor),
             ...(request.body.output_schema === undefined ? {} : { outputSchema: request.body.output_schema }),
             ...(request.body.exclude_executions === undefined ? {} : { excludeExecutions: request.body.exclude_executions }),
+            ...(request.body.instructions === undefined ? {} : { instructions: request.body.instructions }),
+            ...(request.body.source_id === undefined ? {} : { sourceId: request.body.source_id }),
           });
         }));
       } catch (error) {
@@ -604,7 +640,7 @@ export function apiRoutes(app: FastifyInstance, ctx: ServerContext): void {
         if (error instanceof InvestigationStateError) return investigationError(reply, error);
         throw error;
       }
-      await audit(ctx, request, actor, { action: 'api.schema_validated', targetType: 'api', targetId: api.id, outcome: 'success', meta: { corrected: request.body.output_schema !== undefined } });
+      await audit(ctx, request, actor, { action: 'api.schema_validated', targetType: 'api', targetId: api.id, outcome: 'success', meta: { corrected: request.body.output_schema !== undefined, instructions: request.body.instructions !== undefined, source_id: request.body.source_id ?? null } });
       return runResponse(ctx, request, reply, actor, runId, waitSecondsOf(ctx, request.query.wait, request.body.wait_seconds));
     },
   );

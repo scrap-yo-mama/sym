@@ -102,10 +102,47 @@ interface Context {
   deadline: Deadline;
   outputSchema: unknown;
   itemPolicy: ItemPolicy;
+  /** Document JSON de la source en cours (racine des chemins `join.from`) et index des tableaux joints, par source. */
+  docRoot?: unknown;
+  joins?: Map<string, Map<string, unknown>>;
+}
+
+const joinKey = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : undefined);
+
+/** Enregistrements du tableau joint, indexés par leur clé (première occurrence) : construit une fois par source et par jointure. */
+function joinIndex(join: NonNullable<FieldLocator['join']>, ctx: Context): Map<string, unknown> {
+  const cacheKey = `${join.from}\u0000${join.key}`;
+  const cache = (ctx.joins ??= new Map());
+  let index = cache.get(cacheKey);
+  if (index === undefined) {
+    index = new Map();
+    for (const item of queryValues(join.from, ctx.docRoot, ctx)) {
+      const key = joinKey(queryValues(join.key, item, ctx)[0]);
+      if (key !== undefined && !index.has(key)) index.set(key, item);
+    }
+    cache.set(cacheKey, index);
+  }
+  return index;
+}
+
+/** Valeurs d'un champ joint : l'enregistrement de l'autre tableau lié par égalité de clés (ou son parent), puis `take`. */
+function joinValues(record: unknown, join: NonNullable<FieldLocator['join']>, ctx: Context): unknown[] {
+  const local = joinKey(queryValues(join.on, record, ctx)[0]);
+  if (local === undefined) return [];
+  const index = joinIndex(join, ctx);
+  let item = index.get(local);
+  if (item === undefined) return [];
+  if (join.parent !== undefined) {
+    const parent = joinKey(queryValues(join.parent, item, ctx)[0]);
+    item = parent === undefined ? undefined : index.get(parent);
+    if (item === undefined) return [];
+  }
+  return queryValues(join.take, item, ctx);
 }
 
 /** Valeurs d'un champ pour un enregistrement JSON : chemin principal, puis replis, première liste non vide. */
 function jsonFieldValues(record: unknown, loc: FieldLocator, ctx: Context): unknown[] {
+  if (loc.join !== undefined) return joinValues(record, loc.join, ctx);
   for (const path of [loc.path, ...(loc.fallback_paths ?? [])]) {
     if (path === undefined) continue;
     const values = queryValues(path, record, ctx);
@@ -122,9 +159,17 @@ function htmlFieldValues(element: Element, loc: FieldLocator, ctx: Context): unk
     const v = read(element); // pas de sélecteur : l'élément lui-même
     return v === undefined ? [] : [v];
   }
+  // `up` : le sélecteur est cherché sous un ancêtre de l'enregistrement (titre du groupe), premier élément trouvé.
+  let root: Element = element;
+  for (let n = 0; n < (loc.up ?? 0); n += 1) {
+    const parent = root.parent;
+    if (parent === null || parent.type !== 'tag') return [];
+    root = parent as Element;
+  }
   for (const selector of selectors) {
     if (selector === undefined) continue;
-    const found = selectElements(selector, element, ctx.limits.maxItems);
+    const all = selectElements(selector, root, ctx.limits.maxItems);
+    const found = loc.up === undefined ? all : all.slice(0, 1);
     const values = found.map(read).filter((v): v is string => v !== undefined);
     if (values.length > 0) return values;
   }
@@ -192,10 +237,9 @@ function runSource(spec: DeclarativeSpec, source: SourceSpec, cache: ParseCache,
     return { attempt: { source_id: source.id, from: source.from, records: records.length, ok: !problems.some((p) => p.blocking), problems }, records };
   };
   try {
-    const roots: unknown[] =
-      source.from === 'html'
-        ? selectElements(source.records, cache.html(), ctx.limits.maxItems)
-        : queryValues(source.records, source.from === 'response' ? cache.json() : cache.embedded(source), ctx);
+    const doc: unknown = source.from === 'html' ? undefined : source.from === 'response' ? cache.json() : cache.embedded(source);
+    const roots: unknown[] = source.from === 'html' ? selectElements(source.records, cache.html(), ctx.limits.maxItems) : queryValues(source.records, doc, ctx);
+    ctx = { ...ctx, docRoot: doc, joins: new Map() };
     if (roots.length > ctx.limits.maxItems) throw new DslError('too_many_items', `plus de ${ctx.limits.maxItems} enregistrements`);
     const records: Record<string, unknown>[] = [];
     roots.forEach((root, i) => {

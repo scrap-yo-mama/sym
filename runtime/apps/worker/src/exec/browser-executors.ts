@@ -35,9 +35,9 @@ import {
   type ScrollTransport,
   type Transport,
 } from '@runtime/core/exec';
-import { DslError } from '@runtime/core';
-import type { CapturedExchange, ReconCapture } from '@runtime/core/investigation';
-import { DomainNotAllowedError, guardedGoto, type SsrfGuard } from '@runtime/core/net';
+import { DEFAULT_DSL_LIMITS, DslError, parseHtml } from '@runtime/core';
+import { detectLoadMore, type CapturedExchange, type ReconCapture } from '@runtime/core/investigation';
+import { DomainNotAllowedError, guardedGoto, type SsrfGuard, type StaticAssetAllowance } from '@runtime/core/net';
 import type { Page, Request, Response } from 'playwright-core';
 import { boundedContent, boundedDocumentBody, boundedRawBody, countMatching, scrollStep, TOO_LARGE, trackDecodedSizes, type DecodedSizes } from '../browser/bounded.js';
 import type { BrowserPool } from '../browser/pool.js';
@@ -63,6 +63,8 @@ export type BrowserExecutorOptions = Omit<DeclarativeRunOptions, 'transport'> & 
   readonly trackData?: boolean;
   /** Portées de site admises en plus d'`allowed_hosts` (domaine et sous-domaines) : reconnaissance de l'enquête seulement. */
   readonly allowedHostSuffixes?: readonly string[];
+  /** Sous-ressources statiques d'hôtes tiers admises (reconnaissance seulement), même objet que le proxy d'egress de la passe. */
+  readonly staticAssets?: StaticAssetAllowance;
 };
 
 const maxBytesOf = (options: BrowserExecutorOptions): number => options.spec.limits?.max_response_bytes ?? 5_000_000;
@@ -181,6 +183,7 @@ async function withRunContext(
       egress: options.egress,
       allowedHosts: options.spec.request.allowed_hosts,
       ...(options.allowedHostSuffixes === undefined ? {} : { allowedHostSuffixes: options.allowedHostSuffixes }),
+      ...(options.staticAssets === undefined ? {} : { staticAssets: options.staticAssets }),
       ...(options.userAgent === undefined ? {} : { userAgent: options.userAgent }),
       admit: async (request) => nav.admit(request),
       // Navigation lancée par la page vers un hôte hors API (redirection JS d'un défi vers son éditeur) : coupée par la
@@ -335,7 +338,14 @@ export function runFetchInPageExecutor(options: BrowserExecutorOptions): Promise
             r.headers.forEach((value, name) => {
               h[name.toLowerCase()] = value;
             });
-            const text: unknown = new TextDecoder().decode(buffer);
+            const label = /charset\s*=\s*"?([\w:.-]+)/i.exec(h['content-type'] ?? '')?.[1];
+            let text: unknown;
+            try {
+              text = new TextDecoder(label ?? 'utf-8', { fatal: label === undefined }).decode(buffer);
+            } catch {
+              // Charset inconnu ou octets non UTF-8 sans déclaration : Windows-1252 (R08), jamais des caractères de remplacement.
+              text = new TextDecoder(label === undefined ? 'windows-1252' : 'utf-8').decode(buffer);
+            }
             const meta: unknown = JSON.stringify(h);
             const url: unknown = r.url;
             const status: unknown = r.status;
@@ -446,6 +456,8 @@ export type ReconnaissancePassOptions = Omit<BrowserExecutorOptions, 'spec' | 'i
   readonly allowedHosts: readonly string[];
 };
 
+/** Délai de grâce des lectures de réponses de données encore en cours après l'attente du rendu. */
+const RECON_READ_GRACE_MS = 10_000;
 /** Corps lu d'une réponse de données non JSON ou en erreur, pour la seule classification (défi, refus signé). */
 const RECON_MAX_CLASSIFY_BYTES = 256 * 1024;
 /** Suites qui arrêtent la passe : refus ou défi, connexion ou paiement requis, 429 (ralentir, jamais insister). */
@@ -460,7 +472,9 @@ const STOPPING_ROUTES = new Set(['stop', 'action_required', 'slow_down']);
  * CHAQUE réponse `fetch` / XHR d'un domaine de l'API est classée aussi (INV6, comme la reconnaissance statique) : un
  * refus, un défi, une connexion requise ou un 429 sur un point de données arrête la passe ; un 404 ou un 5xx n'est
  * qu'une voie vide.
- * Aucun clic, aucune saisie : la page n'est que regardée.
+ * Aucune saisie ; un seul clic, sur un bouton « charger plus » sans URL hors formulaire (R13), après la lecture du document. Une application rendue en JavaScript dont le code vient d'un CDN
+ * tiers (banc R05) se rend : `staticAssets` admet ses scripts, feuilles de style, polices et préchargements (GET, bornés), rien d'autre vers un tiers ;
+ * ses réponses JSON sur un domaine de l'API sont capturées comme les autres, et son DOM rendu est lu.
  */
 export async function runReconnaissancePass(options: ReconnaissancePassOptions): Promise<{ result: DeclarativeRunResult; capture: ReconCapture }> {
   const url = new URL(options.url).href;
@@ -478,6 +492,15 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
   const seen: { document: ReconCapture['document']; received: number } = { document: null, received: 0 };
   /** Premier refus vu sur une réponse de données de la page (défi, 403, connexion requise) : il arrête la passe. */
   let dataRefusal: { failure: ExecFailure; exchange: HttpExchange } | null = null;
+  /** Réponses de données vues sur un domaine de l'API et sort de chacune (codes, aucune URL) : récit de la reconnaissance. */
+  const data = { seen: 0, captured: 0, skipped: {} as Record<string, number> };
+  const skip = (reason: string) => {
+    data.skipped[reason] = (data.skipped[reason] ?? 0) + 1;
+  };
+  let settled = 0;
+  /** Bouton « charger plus » en cours de clic (R13) : ses fragments HTML sont gardés. */
+  let clicking = false;
+  let loadMore: { clicked: boolean; selector: string } | undefined;
   const result = await withRunContext(base, async ({ page }, strategy, nav) => {
     const reads: Promise<void>[] = [];
     let captured = 0;
@@ -485,24 +508,32 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
       const request = response.request();
       const type = request.resourceType();
       if (type !== 'fetch' && type !== 'xhr') return;
-      if (!hostAllowed(response.url(), options.allowedHosts, options.allowedHostSuffixes) || reads.length >= RECON_MAX_EXCHANGES) return;
+      if (!hostAllowed(response.url(), options.allowedHosts, options.allowedHostSuffixes)) return;
+      data.seen += 1;
+      if (reads.length >= RECON_MAX_EXCHANGES) return skip('max_exchanges');
       const contentType = response.headers()['content-type'] ?? '';
       const json = /json/i.test(contentType);
       const ok = response.status() >= 200 && response.status() < 300;
       reads.push(
         (async () => {
           // Classification de chaque réponse de données (INV6) : corps lu s'il peut porter un défi (non JSON, ou erreur).
-          const body = await boundedDocumentBody(response, json && ok ? RECON_MAX_BODY_BYTES : RECON_MAX_CLASSIFY_BYTES, 10_000, nav.sizes);
+          const body = await boundedDocumentBody(response, (json || clicking) && ok ? RECON_MAX_BODY_BYTES : RECON_MAX_CLASSIFY_BYTES, 10_000, nav.sizes);
           const exchange: HttpExchange = { status: response.status(), headers: response.headers(), body: typeof body === 'string' ? body : '', url: response.url() };
           const refused = classify(exchange, { requestUrl: request.url() });
           if (refused !== null && STOPPING_ROUTES.has(failureRoute(refused.failure_class).next)) {
             dataRefusal ??= { failure: refused, exchange };
-            return;
+            return skip('refused_stop');
           }
-          if (refused !== null || !json || typeof body !== 'string') return;
+          if (refused !== null) return skip(`refused_${refused.failure_class}`);
+          // Fragment HTML chargé par le bouton « charger plus » (R13) : gardé, borné, pour en déduire la pagination ; jamais
+          // un gisement « API JSON ».
+          const htmlFragment = clicking && ok && /text\/html/i.test(contentType);
+          if (!json && !htmlFragment) return skip('not_json');
+          if (typeof body !== 'string') return skip(body === TOO_LARGE ? 'too_large' : 'body_unread');
           const bytes = Buffer.byteLength(body);
-          if (captured + bytes > RECON_MAX_CAPTURE_BYTES) return;
+          if (captured + bytes > RECON_MAX_CAPTURE_BYTES) return skip('capture_bytes');
           captured += bytes;
+          data.captured += 1;
           const post = request.postData();
           exchanges.push({
             url: response.url(),
@@ -514,7 +545,11 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
             body,
             bytes,
           });
-        })().catch(() => undefined),
+        })()
+          .catch(() => skip('read_error'))
+          .finally(() => {
+            settled += 1;
+          }),
       );
     });
     if (options.pacer !== undefined) {
@@ -544,6 +579,9 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
       // page (défi qui se résout seul, redirection) interrompt la passe.
       await nav.during(() => page.waitForLoadState('networkidle', { timeout: renderWaitMs }).catch(() => undefined), () => served);
       await nav.during(() => Promise.race([Promise.all(reads), new Promise((resolve) => setTimeout(resolve, renderWaitMs))]), () => served);
+      // Lectures encore en cours (corps lent, machine chargée) : un délai de grâce borné avant de les perdre (constat R05).
+      if (settled < reads.length) await nav.during(() => Promise.race([Promise.all(reads), new Promise((resolve) => setTimeout(resolve, RECON_READ_GRACE_MS))]), () => served);
+      if (settled < reads.length) data.skipped['pending'] = reads.length - settled;
       // Un refus sur un point de données de la page : la passe s'arrête, aucun gisement n'en sort (INV6).
       const refusedData = dataRefusal as { failure: ExecFailure; exchange: HttpExchange } | null;
       if (refusedData !== null) return failed(refusedData.failure, refusedData.exchange);
@@ -554,6 +592,34 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
       const renderedRefusal = renderedHtml === null ? null : classify({ ...served, body: renderedHtml, url: page.url() }, { requestUrl: url });
       if (renderedRefusal !== null) return failed(renderedRefusal, { ...served, body: renderedHtml ?? '' });
       seen.document = { url: served.url, status: served.status, html: served.body !== '' ? served.body : (renderedHtml ?? ''), renderedHtml, bytes: Buffer.byteLength(served.body) };
+      // Bouton « charger plus » (R13 : « Annonces suivantes » en `javascript:`, liste chargée en XHR) : UN clic, après la
+      // lecture du document, sur un contrôle sans URL hors formulaire (aucune navigation, aucune écriture), réservé à la
+      // cadence ; ses réponses XHR (fragments HTML compris) sont capturées et classées comme les autres. Un clic impossible
+      // ou une navigation tentée (coupée par la garde) ne change rien à ce que la passe a déjà vu.
+      const control = renderedHtml === null ? null : loadMoreSelector(renderedHtml);
+      if (control !== null) {
+        loadMore = { clicked: false, selector: control };
+        const before = reads.length;
+        try {
+          const slot = options.pacer === undefined ? { granted: true } : await options.pacer.acquire(url);
+          if (slot.granted) {
+            clicking = true;
+            // Réponse de données attendue explicitement : l'état « réseau calme » est déjà atteint, il ne dit rien du XHR du clic.
+            const answered = page.waitForResponse((r) => (r.request().resourceType() === 'xhr' || r.request().resourceType() === 'fetch') && hostAllowed(r.url(), options.allowedHosts, options.allowedHostSuffixes), { timeout: renderWaitMs }).catch(() => null);
+            await nav.during(() => page.locator(control).first().click({ timeout: 5_000 }), () => served);
+            await nav.during(() => answered, () => served);
+            await nav.during(() => page.waitForLoadState('networkidle', { timeout: renderWaitMs }).catch(() => undefined), () => served);
+            await nav.during(() => Promise.race([Promise.all(reads), new Promise((resolve) => setTimeout(resolve, RECON_READ_GRACE_MS))]), () => served);
+            loadMore = { clicked: reads.length > before, selector: control };
+          }
+        } catch {
+          loadMore = { clicked: false, selector: control };
+        } finally {
+          clicking = false;
+        }
+        const refusedAfter = dataRefusal as { failure: ExecFailure; exchange: HttpExchange } | null;
+        if (refusedAfter !== null) return failed(refusedAfter.failure, refusedAfter.exchange);
+      }
     } catch (error) {
       if (options.signal.aborted) throw error;
       const failure = classifyTransportError(error);
@@ -563,5 +629,26 @@ export async function runReconnaissancePass(options: ReconnaissancePassOptions):
     return { ok: true, records: [], pages: 1, requests: 1 + exchanges.length, escalated: false, stop: 'no_pagination', truncated: false };
   });
   const capturedBytes = exchanges.reduce((sum, e) => sum + e.bytes, 0) + (seen.document?.bytes ?? 0);
-  return { result, capture: { mode: 'browser', pageUrl: url, document: seen.document, exchanges, totalBytes: Math.max(seen.received, capturedBytes) } };
+  return {
+    result,
+    capture: {
+      mode: 'browser',
+      pageUrl: url,
+      document: seen.document,
+      exchanges,
+      totalBytes: Math.max(seen.received, capturedBytes),
+      ...(options.staticAssets === undefined ? {} : { assets: options.staticAssets.usage() }),
+      data: { seen: data.seen, captured: data.captured, skipped: { ...data.skipped } },
+      ...(loadMore === undefined ? {} : { loadMore }),
+    },
+  };
+}
+
+/** Sélecteur du bouton « charger plus » d'un DOM rendu (dom.ts : libellé, sans URL, hors formulaire, unique), ou `null`. */
+function loadMoreSelector(html: string): string | null {
+  try {
+    return detectLoadMore(parseHtml(html, DEFAULT_DSL_LIMITS))?.selector ?? null;
+  } catch {
+    return null;
+  }
 }

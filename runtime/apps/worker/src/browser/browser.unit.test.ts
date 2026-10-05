@@ -351,7 +351,7 @@ describe('Chromium dédié (E5 agentique, E6) dans un slot du pool : un Chromium
 describe('boundedDocumentBody : corps brut d’un document lu seulement si sa taille DÉCODÉE est connue et bornée', () => {
   type FakeResponse = Parameters<typeof boundedDocumentBody>[0];
   const response = (headers: Record<string, string>, transferred: number, text: () => Promise<string>): FakeResponse =>
-    ({ headers: () => headers, url: () => 'http://zz_test_x.localhost/', request: () => ({ sizes: async () => ({ responseBodySize: transferred }) }), text }) as unknown as FakeResponse;
+    ({ headers: () => headers, url: () => 'http://zz_test_x.localhost/', request: () => ({ sizes: async () => ({ responseBodySize: transferred }) }), text, body: async () => Buffer.from(await text()) }) as unknown as FakeResponse;
   const sizes = (decoded: number | undefined): DecodedSizes => ({ decodedBodySize: async () => decoded, received: () => 0 });
 
   test('bombe de compression (32 Kio transférés, des dizaines de Mo décodés) : jamais rapatriée dans Node', async () => {

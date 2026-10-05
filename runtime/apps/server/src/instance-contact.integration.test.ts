@@ -229,6 +229,21 @@ describe('UX-07 : create_api dit l’état réel de l’enquête', () => {
     expect(textOf(result)).toContain('the investigation is running');
   });
 
+  test('assert_create_auto_validate_poll_hint — auto_validate, enquête encore en cours après l’attente : poll_after_seconds, progress et next_action get_run (REST et MCP)', async () => {
+    await setContact('ops@zz-test.example');
+    // Case « j'ai lu » (17 § 11) : exigée pour auto_validate.
+    await sql("INSERT INTO responsible_use_acks (user_id, version) VALUES ($1, '2026-10-01') ON CONFLICT DO NOTHING", [owner.id]);
+    const res = await rest('POST', '/api/apis', { description: 'zz_test suivi auto', url: 'https://zz-test-poll.example/', auto_validate: true, wait_seconds: 1 });
+    expect(res.statusCode).toBe(201);
+    const body = res.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ run_state: 'queued', poll_after_seconds: 5, next_action: { tool: 'get_run', args: { run_id: body['run_id'] } } });
+    expect(body['progress']).toMatchObject({ phase: expect.any(String), strategies_tried: 0, last_attempt: null });
+    expect(String((body['progress'] as { message: string }).message)).toContain('keep polling get_run');
+    const result = await call('create_api', { description: 'zz_test suivi auto mcp', url: 'https://zz-test-poll-mcp.example/', auto_validate: true, wait_seconds: 0 });
+    expect(result.structuredContent).toMatchObject({ run_state: 'queued', poll_after_seconds: 5, next_action: { tool: 'get_run' } });
+    expect(result.structuredContent!['progress']).toMatchObject({ strategies_tried: 0 });
+  });
+
   test('enquête échouée pendant l’attente : état failed avec sa cause, jamais « running »', async () => {
     await setContact('ops@zz-test.example');
     const pending = call('create_api', { description: 'zz_test échec pendant l’attente', url: 'https://zz-test-failed.example/', wait_seconds: 3 });

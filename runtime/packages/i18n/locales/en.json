@@ -908,7 +908,7 @@
     "not_compilable": "No strategy replays without an agent. The “instructed agent” mode exists, with a cost on every run.",
     "investigation_budget_exhausted": "The investigation budget is spent without a conformant strategy: raise budget_usd to investigate again.",
     "investigation_timeout": "The investigation time ran out without a conformant strategy: raise timeout_s to investigate again.",
-    "trial_cost_over_cap": "A trial costs more than the per-run cap of the API (max_cost_usd): raise max_cost_usd to investigate again.",
+    "trial_cost_over_cap": "A trial costs more than the per-run cap set on the API (max_cost_usd): raise it or remove it to investigate again.",
     "no_conformant_strategy": "No trial returned conformant items: the investigation timeline gives each trial and its reason.",
     "investigation_error": "The investigation stopped on a setup error: the run detail names it.",
     "session_step_broken": "A step broke on a signed-in page; no agent acts there on its own.",
@@ -1015,7 +1015,9 @@
     "sha_mismatch": "The steps changed since they were shown. Read them again before confirming.",
     "instructed_steps_unconfirmed": "Confirm the instructed steps first: the instructed agent stays off.",
     "compilable": "A strategy that replays without an agent exists: the instructed agent stays off.",
-    "no_instructed_steps": "This API has no instructed steps: the instructed agent stays off."
+    "no_instructed_steps": "This API has no instructed steps: the instructed agent stays off.",
+    "budget_exceeded": "Your account’s daily budget is spent (AI and proxy costs). It resets at 00:00 UTC; an admin can raise it.",
+    "cost_cap_exceeded": "This cap is above the instance’s per-run cap: choose a lower amount, or leave it empty."
   },
   "actions": {
     "launch": "Run",
@@ -2091,6 +2093,17 @@
       "on": "on {date}"
     }
   },
+  "costCap": {
+    "title": "Max cost per run",
+    "label": "Max cost per run (USD, optional)",
+    "hint": "Empty: no per-run cap. Your account’s daily budget remains the limit.",
+    "none": "No per-run cap: the account’s daily budget remains the limit.",
+    "current": "Current cap: {cost} per run.",
+    "save": "Save",
+    "clear": "Remove the cap",
+    "saved": "Saved.",
+    "invalid": "Enter a positive amount in dollars, or leave empty for no cap."
+  },
   "quality": {
     "title": "Run quality sheet",
     "summary": "{n} items, {d} duplicates",
@@ -2290,6 +2303,7 @@
     "phase_started": "Step: {phase}.",
     "access_report": {
       "proceed": "Access report: page probed [{duration}, {cost}].",
+      "redirected": "{from} permanently redirects to {domain}: the API now uses {domain}.",
       "review": "Access report: page probed, usage signals to read [{duration}, {cost}].",
       "stopped": "Access report: the site refuses access. SYM stops here [{duration}, {cost}].",
       "unknown": "Access report done [{duration}, {cost}]."
