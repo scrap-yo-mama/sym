@@ -210,7 +210,7 @@ describe(`RLS sur PostgreSQL ${inject('pgVersion')}`, () => {
   test('tables en ajout seul (site_session_events, 0027) : INSERT et SELECT permis au propriétaire, UPDATE, DELETE et TRUNCATE refusés', async () => {
     await withActor(pool, { userId: A, role: 'member' }, async (db) => {
       expect((await db.query('SELECT 1 FROM site_session_events')).rowCount).toBe(1);
-      await db.query("INSERT INTO site_session_events (owner_id, domain, event) VALUES ($1, 'zz-test.example', 'checked')", [A]);
+      await db.query("INSERT INTO site_session_events (owner_id, domain, event) VALUES ($1, 'zz-test.example', 'refreshed')", [A]);
     });
     for (const t of APPEND_ONLY) {
       for (const sql of [`UPDATE ${t} SET owner_id = owner_id`, `DELETE FROM ${t}`, `TRUNCATE ${t}`]) {
