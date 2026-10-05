@@ -3719,8 +3719,10 @@ export interface components {
             items: components["schemas"]["AdminExtensionDevice"][];
         };
         Version: {
-            /** @description Version de l'instance (SemVer, `RUNTIME_VERSION`). */
+            /** @description Version de l'instance (SemVer, `RUNTIME_VERSION`, sinon la version du paquet). */
             server: string;
+            /** @description Commit Git de l'image (`RUNTIME_COMMIT` ou `RENDER_GIT_COMMIT`) ; absent quand l'image n'en porte pas. */
+            commit?: string;
             /** @description Version attendue du schéma de base. */
             schema: number;
             /** @description Version minimale de l'extension acceptée à l'appairage. */

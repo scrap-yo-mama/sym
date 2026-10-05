@@ -62,7 +62,9 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | Variable | Défaut | Lue par | Rôle | État |
 |---|---|---|---|---|
 | `RUNTIME_MODE` | `all` | image (entrypoint) | `server`, `worker`, `all` ou `migrate` | lue |
-| `RUNTIME_VERSION` | `0.0.0` | server, worker | version publiée par `/api/health` et `/api/version` ; posée à la construction de l'image par la chaîne de release | lue |
+| `RUNTIME_VERSION` | version du paquet | server, worker | version publiée par `/api/health` et `/api/version` ; posée à la construction de l'image par la chaîne de release (absente ou `0.0.0` : la version du paquet) | lue |
+| `RUNTIME_COMMIT` | aucun | server | commit Git de l'image, publié par `/api/version` ; posée à la construction (`--build-arg RUNTIME_COMMIT=<sha>`) | lue |
+| `RENDER_GIT_COMMIT` | aucun | server | posée par Render à chaque déploiement : repli de `RUNTIME_COMMIT` | lue |
 | `WORKER_CONCURRENCY` | 5 | worker | jobs en parallèle ; au plus `DB_POOL_MAX` | lue |
 | `BROWSER_CONCURRENCY` | déduit de la mémoire du conteneur | worker | exécutions navigateur simultanées : `max(1, floor((limite − 0,5 Go) / 1,5 Go))`, soit 1 pour 2 Go et 2 pour 4 Go | lue |
 | `DISABLE_BROWSER` | `false` | worker | aucun Chromium : les exécutions navigateur sont refusées | lue |

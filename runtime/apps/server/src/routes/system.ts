@@ -16,9 +16,15 @@ export function systemRoutes(app: FastifyInstance, ctx: ServerContext): void {
   // version de l'application est publiée (aucune version de dépendance ni nom d'hôte).
   app.get('/api/health', { schema: { response: { 200: healthResponseSchema } } }, async () => ({ status: 'ok' as const, version: ctx.appVersion }));
 
-  // Versions (16 §3) : servie localement, aucune requête vers un serveur distant (INV9). Quatre champs, aucune version de
+  // Versions (16 §3) : servie localement, aucune requête vers un serveur distant (INV9). Quatre champs et le commit de l'image (U4.1), aucune version de
   // dépendance. `min_extension` : l'appairage d'une extension plus ancienne est refusé (routes/extension.ts).
-  app.get('/api/version', async () => ({ server: ctx.appVersion, schema: ctx.expectedSchemaVersion, min_extension: ctx.minExtension, mcp_spec: MCP_SPEC_VERSION }));
+  app.get('/api/version', async () => ({
+    server: ctx.appVersion,
+    ...(ctx.appCommit === undefined ? {} : { commit: ctx.appCommit }),
+    schema: ctx.expectedSchemaVersion,
+    min_extension: ctx.minExtension,
+    mcp_spec: MCP_SPEC_VERSION,
+  }));
 
   // Disponibilité : base joignable, migrations appliquées, `key_check` valide, initialisation terminée. Les workers sont
   // informatifs (pas dans le code). « pg-boss démarré » (14 § 3) : le server n'a pas encore de file dans son contexte ;

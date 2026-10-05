@@ -185,6 +185,7 @@ export async function prepareServer(env: NodeJS.ProcessEnv = process.env, option
       adminEmail: config.adminEmail,
       keyFingerprint: '',
       appVersion: config.appVersion,
+      appCommit: config.appCommit,
       minExtension: options.minExtension ?? MIN_EXTENSION_VERSION,
       startup: { ready: tryFinish },
       expectedSchemaVersion: expected,

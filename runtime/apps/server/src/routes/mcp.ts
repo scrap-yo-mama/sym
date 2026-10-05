@@ -124,7 +124,7 @@ export function mcpRoutes(app: FastifyInstance, ctx: ServerContext): void {
   const handler = createMcpHandler(
     async ({ authInfo }) => {
       const caller = authInfo?.extra?.['caller'] as McpCaller;
-      return buildMcpServer(ctx, caller, ctx.appVersion);
+      return buildMcpServer(ctx, caller, ctx.appCommit === undefined ? ctx.appVersion : `${ctx.appVersion}+${ctx.appCommit.slice(0, 7)}`);
     },
     { bus, onerror: (error) => app.log.warn({ err: { name: error.name, message: error.message } }, 'mcp : requête refusée ou erreur hors bande') },
   );

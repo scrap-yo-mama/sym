@@ -140,7 +140,9 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 
 | Variable | Lue par | Statut | Défaut | Rôle |
 |---|---|---|---|---|
-| `RUNTIME_VERSION` | server, worker, CLI | facultative | `0.0.0` | Version publiée par `/api/health` et `/api/version`. Posée à la construction de l’image par la chaîne de release : ne pas la changer. |
+| `RUNTIME_VERSION` | server, worker, CLI | facultative | version du paquet | Version publiée par `/api/health` et `/api/version`. Posée à la construction de l’image par la chaîne de release : ne pas la changer. Absente ou `0.0.0` (image construite sans argument, staging), la version du paquet est publiée. |
+| `RUNTIME_COMMIT` | server | facultative | aucun | Commit Git de l’image, publié par `/api/version` (`commit`) et dans `serverInfo.version` du MCP. Posée à la construction de l’image (`--build-arg RUNTIME_COMMIT=<sha>`) ; sans elle, `RENDER_GIT_COMMIT` est utilisée. Une valeur qui n’est pas un commit hexadécimal est ignorée. |
+| `RENDER_GIT_COMMIT` | server | facultative | aucun | Posée par Render à chaque déploiement : commit déployé, repli de `RUNTIME_COMMIT`. Ne pas la poser soi-même. |
 | `RUNTIME_MODE` | image | facultative | `all` | `server`, `worker`, `all` (les deux dans un processus) ou `migrate`. Lue par le point d’entrée de l’image. |
 | `NODE_ENV` | server, worker, CLI | facultative | `production` | Posée par l’image. En production, le worker refuse de démarrer sans l’utilisateur dédié du bac à sable et `runtime migrate down` est refusé. |
 | `SANDBOX_UID` | worker | facultative | `1500` | Utilisateur dédié du bac à sable (INV7). Posée par l’image : ne pas la changer. |

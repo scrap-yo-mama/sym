@@ -37,6 +37,9 @@ ENV NODE_ENV=production
 # Version publiée par GET /api/health et /api/version (tâche 4.9) ; posée par la chaîne de release.
 ARG RUNTIME_VERSION=0.0.0
 ENV RUNTIME_VERSION=${RUNTIME_VERSION}
+# Commit publié par GET /api/version (U4.1) : `--build-arg RUNTIME_COMMIT=<sha>` ; sans lui, Render pose RENDER_GIT_COMMIT.
+ARG RUNTIME_COMMIT=
+ENV RUNTIME_COMMIT=${RUNTIME_COMMIT}
 WORKDIR /app
 # Bac à sable (08 §3, INV7) : l'enfant tourne sous un utilisateur DÉDIÉ (sandbox, 1500), distinct de pwuser qui porte
 # MASTER_KEY, DATABASE_URL et les clés LLM : il ne peut lire ni /proc/<pid du worker>/environ ni le fichier de clé
