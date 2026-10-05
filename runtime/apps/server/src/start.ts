@@ -19,6 +19,7 @@ import {
   KeyCheckError,
   keyCheck,
   persistenceQueueDefinition,
+  siteSessionCheckQueueDefinition,
   PgBossJobQueue,
   runQueueDefinition,
   scheduledRunQueueDefinition,
@@ -70,7 +71,7 @@ export type PrepareOptions = {
 };
 
 /** Files que le `server` alimente (runs, planifications, livraisons de webhooks, alertes) : créées si elles manquent. */
-const SERVER_QUEUES = () => [runQueueDefinition(), scheduledRunQueueDefinition(), webhookDeliveryQueueDefinition(), alertQueueDefinition(), persistenceQueueDefinition()];
+const SERVER_QUEUES = () => [runQueueDefinition(), scheduledRunQueueDefinition(), webhookDeliveryQueueDefinition(), alertQueueDefinition(), persistenceQueueDefinition(), siteSessionCheckQueueDefinition()];
 
 const BOOTSTRAP_REQUIRED =
   'premier démarrage sans ADMIN_BOOTSTRAP_TOKEN : refusé. Posez ADMIN_BOOTSTRAP_TOKEN (ou _FILE, `openssl rand -base64 32`) ' +

@@ -89,9 +89,12 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: 'PUT', url: '/api/extension/sites/:domain', auth: 'extension', permission: 'sites:connect' },
   { method: 'PUT', url: '/api/extension/sites/:domain/cookies', auth: 'extension', permission: 'sites:server_use' },
   { method: 'DELETE', url: '/api/extension/sites/:domain', auth: 'extension', permission: 'sites:connect' },
+  { method: 'GET', url: '/api/extension/refresh-requests', auth: 'extension', permission: 'sites:connect' },
   { method: 'GET', url: '/api/extension/devices', auth: 'session', permission: 'tunnel:pair', resource: { type: 'tunnel', kind: 'collection' } },
   { method: 'DELETE', url: '/api/extension/devices/:id', auth: 'session', permission: 'tunnel:pair', resource: { type: 'tunnel', kind: 'item' } },
   { method: 'GET', url: '/api/sites', auth: 'session_or_key', scope: 'sites:read', permission: 'sites:connect', resource: { type: 'site_session', kind: 'collection' } },
+  { method: 'PATCH', url: '/api/sites/:id', auth: 'session', permission: 'sites:connect', resource: { type: 'site_session', kind: 'item' } },
+  { method: 'POST', url: '/api/sites/:id/check', auth: 'session', permission: 'sites:connect', resource: { type: 'site_session', kind: 'item' } },
   { method: 'DELETE', url: '/api/sites/:id', auth: 'session', permission: 'sites:connect', resource: { type: 'site_session', kind: 'item' } },
   { method: 'GET', url: '/api/admin/tunnels', auth: 'session', permission: 'tunnel:revoke_other' },
   // Tunnel WSS (tâche 2.7, 07 § 6) : ouverture publique (Origin d'extension, aucun paramètre d'URL), puis jeton

@@ -39,6 +39,19 @@ describe('cause d’un run en échec (UX-04)', () => {
     expect(error?.message.endsWith('.')).toBe(true);
   });
 
+  test('B1 — session_to_refresh:<domaine> : cause `cookie_expired` nommant le domaine, marche à suivre pour l’extension, jamais un détail libre', () => {
+    const error = runErrorOf({ state: 'failed', error_detail: 'session_to_refresh:doctrine.fr' });
+    expect(error).toEqual({
+      code: 'cookie_expired',
+      message: 'La session de doctrine.fr est à rafraîchir : ouvre doctrine.fr dans ton navigateur avec l’extension SYM, puis relance.',
+      what_to_do: expect.stringContaining('open doctrine.fr in their browser with the SYM extension'),
+      retryable: true,
+    });
+    expect(runNotStarted({ state: 'failed', error_detail: 'session_to_refresh:doctrine.fr' })).toBe(true);
+    expect(runErrorOf({ state: 'failed', error_detail: 'session_to_refresh:https://zz-test.example/x?k=1' })).toMatchObject({ message: expect.stringContaining('La session de ce site est à rafraîchir') });
+    expect(runErrorOf({ state: 'failed', error_detail: 'session_to_refresh' })?.what_to_do).toContain('open the site in their browser');
+  });
+
   test('runNotStarted : vrai seulement pour les causes qui arrêtent le run avant tout appel', () => {
     expect(runNotStarted({ state: 'failed', error_detail: 'instance_contact_missing' })).toBe(true);
     expect(runNotStarted({ state: 'failed', error_detail: 'llm_price_missing:zz-model' })).toBe(true);

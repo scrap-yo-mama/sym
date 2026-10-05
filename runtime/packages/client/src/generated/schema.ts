@@ -1649,6 +1649,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/extension/refresh-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Domaines dont la session est à rafraîchir par l'extension (CDC V1 sym-sessions, B1) */
+        get: operations["listExtensionRefreshRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/extension/devices": {
         parameters: {
             query?: never;
@@ -1700,6 +1717,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sites/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test de validité d'une session de site (une requête légère, GET seul, par le worker) */
+        post: operations["checkConnectedSite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sites/{id}": {
         parameters: {
             query?: never;
@@ -1714,7 +1748,8 @@ export interface paths {
         delete: operations["disconnectConnectedSite"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Étiquette du compte d'une session de site */
+        patch: operations["updateConnectedSite"];
         trace?: never;
     };
     "/api/admin/tunnels": {
@@ -3667,6 +3702,47 @@ export interface components {
             capturedAt: string | null;
             /** Format: date-time */
             expiresAt: string | null;
+            /**
+             * @description État de la session calculé par le serveur (CDC V1 sym-sessions, B1) ; jamais une valeur de secret. expiree : aucun cookie vivant, expiration passée ou dernier test « morte » ; a_renouveler : rafraîchissement demandé et pas encore arrivé, ou expiration sous 24 h ; active : preuve de vie (test vivant ou rejeu réussi) de moins de 7 jours, postérieure à la dernière capture ; a_verifier : sinon. Nul en mode tunnel (aucune session côté serveur).
+             * @enum {string|null}
+             */
+            state: "active" | "a_renouveler" | "expiree" | "a_verifier" | null;
+            /** @description Libellé français de l'état (« Active », « À renouveler », « Expirée », « À vérifier »). */
+            stateLabel: string | null;
+            /**
+             * Format: date-time
+             * @description Dernier rejeu serveur de la session.
+             */
+            lastUsedAt: string | null;
+            /**
+             * Format: date-time
+             * @description Dernier test de validité.
+             */
+            lastCheckedAt: string | null;
+            /** @description Code court du dernier test (alive, dead_http_401, dead_http_403, dead_login_redirect, dead_expired, dead_no_session, inconclusive_*), jamais une valeur du site. */
+            lastCheckOutcome: string | null;
+            /** @description Le serveur a demandé un rafraîchissement à l'extension et la session neuve n'est pas encore arrivée. */
+            refreshRequested: boolean;
+            /** @description Étiquette libre du compte, choisie par l'utilisateur. */
+            accountLabel: string | null;
+        };
+        ConnectedSiteLabel: {
+            /** @description Étiquette du compte (120 caractères au plus, sans caractère de contrôle) ; nulle ou vide pour l'effacer. */
+            accountLabel: string | null;
+        };
+        ConnectedSiteCheck: {
+            site: components["schemas"]["ConnectedSite"];
+            /** @description Résultat du test (code court) ; nul tant que le worker ne l'a pas rendu (réponse 202). */
+            check: {
+                outcome: string;
+            } | null;
+        };
+        ExtensionRefreshRequestList: {
+            items: {
+                domain: string;
+                /** Format: date-time */
+                requestedAt: string;
+            }[];
         };
         ConnectedSiteList: {
             items: components["schemas"]["ConnectedSite"][];
@@ -6974,6 +7050,28 @@ export interface operations {
             409: components["responses"]["Error"];
         };
     };
+    listExtensionRefreshRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Domaines pour lesquels le serveur attend une session neuve (un refresh_requested sans refreshed derrière). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionRefreshRequestList"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
     listExtensionDevices: {
         parameters: {
             query?: never;
@@ -7041,6 +7139,41 @@ export interface operations {
             403: components["responses"]["Error"];
         };
     };
+    checkConnectedSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Test terminé. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedSiteCheck"];
+                };
+            };
+            /** @description Test en file, pas encore rendu par le worker ; relire GET /api/sites. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedSiteCheck"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
     disconnectConnectedSite: {
         parameters: {
             query?: never;
@@ -7059,6 +7192,36 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updateConnectedSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectedSiteLabel"];
+            };
+        };
+        responses: {
+            /** @description Session avec son étiquette. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedSite"];
+                };
+            };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
