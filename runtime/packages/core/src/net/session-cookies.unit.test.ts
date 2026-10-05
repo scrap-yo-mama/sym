@@ -75,6 +75,17 @@ describe('createSessionCookies et guardedFetch (redirections)', () => {
     expect(secretValues.redactText('x=zz_test_jar_value_1')).not.toContain('zz_test_jar_value_1');
   });
 
+  test('défense en profondeur : aucune écriture (POST, PUT, corps) ne part avec le Cookie de la session', async () => {
+    const jar = createSessionCookies('site-a.test', [c({ value: 'zz_test_jar_value_2' })]);
+    const guard = fixtureGuard(port, ['site-a.test']);
+    seen.length = 0;
+    for (const init of [{ method: 'POST', body: 'a=1' }, { method: 'PUT' }, { method: 'GET', body: undefined }, { method: 'POST' }]) {
+      const response = await guardedFetch(`http://site-a.test:${port}/w`, { ...init, headers: { cookie: 'forged=1' } }, { guard, cookieFor: (u) => jar.headerFor(u) });
+      await response.body?.cancel();
+    }
+    expect(seen.map((r) => r.cookie)).toEqual([undefined, undefined, 'sid=zz_test_jar_value_2', undefined]);
+  });
+
   test('redirection hors domaine : le Cookie ne suit pas ; vers un sous-domaine : recalculé', async () => {
     const out = await run(`http://site-a.test:${port}/to-other`);
     expect(out.seen.map((r) => [r.host, r.cookie])).toEqual([['site-a.test', 'sid=zz_test_jar_value_1'], ['zz-other.test', undefined]]);

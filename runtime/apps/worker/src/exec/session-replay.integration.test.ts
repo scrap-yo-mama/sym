@@ -11,7 +11,7 @@ import { connectSite, createRun, keyCheck, migrateUp, PgBossJobQueue, PgPacingSt
 import pg from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
-import { fixtureGuard } from '../../../../tests/helpers/fixture-net.ts';
+import { EVIL_EXAMPLE, fixtureGuard, resolverLog } from '../../../../tests/helpers/fixture-net.ts';
 import { createTestDatabase, type TestDatabase } from '../../../../tests/helpers/pg.js';
 import { loadWorkerConfig } from '../config.js';
 import { startWorker, type Worker } from '../worker.js';
@@ -164,6 +164,56 @@ describe('rejeu serveur d’une session (A2)', () => {
     expect(trace).not.toContain(COOKIE_VALUE);
   });
 
+  test('assert_session_never_cross_origin : redirection vers un autre hôte AUTORISÉ par le verrou de domaines, le Cookie ne suit pas (preuve par cookieFor)', async () => {
+    const apiId = await insertApi(A, 'zz_test_sess_leave_allowed', specFor(SESSION_HOST, '/leave', [SESSION_HOST, OTHER_HOST]));
+    received.length = 0;
+    const { run, trace } = await runOf(apiId, A, actorA);
+    expect(run.state).toBe('succeeded');
+    expect(received.map((r) => [r.host, r.cookie])).toEqual([[SESSION_HOST, `sid=${COOKIE_VALUE}`], [OTHER_HOST, undefined]]);
+    expect(trace).not.toContain(COOKIE_VALUE);
+  });
+
+  test('assert_session_only_owner_run : écriture hors V1, une étape POST vers le domaine de la session n’emporte pas la session, aucun Cookie ne part', async () => {
+    const step = { id: 'warm', request: { method: 'POST', url: `http://${SESSION_HOST}:${port}/api/warm`, body: { json: { a: 1 } } }, capture: { first: '$.items[0].id' } };
+    const apiId = await insertApi(A, 'zz_test_sess_step_post', { ...specFor(SESSION_HOST), steps: [step] });
+    received.length = 0;
+    const { trace } = await runOf(apiId, A, actorA);
+    expect(received.every((r) => r.cookie === undefined)).toBe(true);
+    expect(trace).not.toContain(COOKIE_VALUE);
+    // Un corps sur la requête principale : même repli.
+    const bodied = { ...specFor(SESSION_HOST), request: { method: 'GET', url: `http://${SESSION_HOST}:${port}/api/items`, allowed_hosts: [SESSION_HOST], body: { json: { a: 1 } } } };
+    const second = await insertApi(A, 'zz_test_sess_main_body', bodied);
+    received.length = 0;
+    await runOf(second, A, actorA);
+    expect(received.every((r) => r.cookie === undefined)).toBe(true);
+    // Étape en GET : la session part sur l'étape ET sur la requête principale.
+    const getStep = { ...step, id: 'look', request: { method: 'GET', url: `http://${SESSION_HOST}:${port}/api/look` } };
+    const third = await insertApi(A, 'zz_test_sess_step_get', { ...specFor(SESSION_HOST), steps: [getStep] });
+    received.length = 0;
+    const { run } = await runOf(third, A, actorA);
+    expect(run.state).toBe('succeeded');
+    expect(received.map((r) => [r.path, r.cookie])).toEqual([['/api/look', `sid=${COOKIE_VALUE}`], ['/api/items', `sid=${COOKIE_VALUE}`]]);
+  });
+
+  test('assert_session_only_owner_run : B déclenche un run sur le domaine de la session de A, aucun Cookie de A ne part ; B n’obtient que sa propre session', async () => {
+    // B ne peut pas lancer l'API de A.
+    const apiOfA = await insertApi(A, 'zz_test_sess_owner_run_a', specFor(SESSION_HOST, '/api/owner-a'));
+    await expect(withActor(pool, actorB, (tx) => createRun(tx, queue, { apiId: apiOfA, ownerId: B, trigger: 'rest' }))).rejects.toBeDefined();
+    // B a sa propre API sur le même domaine : sa session (B), jamais celle de A.
+    const apiOfB = await insertApi(B, 'zz_test_sess_owner_run_b', specFor(SESSION_HOST, '/api/owner-b'));
+    received.length = 0;
+    const ran = await runOf(apiOfB, B, actorB);
+    expect(ran.run.state).toBe('succeeded');
+    expect(received.map((r) => r.cookie)).toEqual(['sid=zz_test_bs_cookie_value_b']);
+    expect(JSON.stringify(received)).not.toContain(COOKIE_VALUE);
+    // Sans session de B : aucun Cookie, et surtout pas celui de A.
+    await pool.query('DELETE FROM site_sessions WHERE owner_id = $1 AND domain = $2', [B, SESSION_HOST]);
+    received.length = 0;
+    await runOf(apiOfB, B, actorB);
+    expect(JSON.stringify(received)).not.toContain(COOKIE_VALUE);
+    expect(received.every((r) => r.cookie === undefined)).toBe(true);
+  });
+
   test('assert_session_run_paced : deux runs avec session sur le même domaine respectent la cadence par domaine', async () => {
     const pacing = '{"min_delay_ms": 400, "max_requests_per_run": 50, "max_wait_ms": 60000}';
     const one = await insertApi(A, 'zz_test_sess_paced1', specFor(SESSION_HOST, '/api/p1'), pacing);
@@ -178,23 +228,36 @@ describe('rejeu serveur d’une session (A2)', () => {
   });
 
   test('assert_ssrf_guard : cible non autorisée par la garde refusée même avec session, aucun cookie envoyé', async () => {
-    // Le domaine de session résout vers une adresse que le résolveur du harnais ne connaît pas : refus de la garde.
-    await connectSite(pool, { ownerId: A, domain: 'zz-sess-ssrf.example.test', serverUseAllowed: true });
-    await storeSiteCookies(pool, kek, { ownerId: A, domain: 'zz-sess-ssrf.example.test', cookies: [cookie({ domain: '.zz-sess-ssrf.example.test' })] });
+    // Le domaine de session RÉSOUT vers une adresse privée (10.255.255.66) : la garde refuse la connexion, aucun octet ne part.
+    await connectSite(pool, { ownerId: A, domain: EVIL_EXAMPLE, serverUseAllowed: true });
+    await storeSiteCookies(pool, kek, { ownerId: A, domain: EVIL_EXAMPLE, cookies: [cookie({ domain: `.${EVIL_EXAMPLE}` })] });
     const id = (
       await pool.query<{ id: string }>(
-        `INSERT INTO apis (slug, owner_id, output_schema, domain_pacing, requires_session, requires) VALUES ('zz_test_sess_ssrf', $1, $2, '{"min_delay_ms": 5, "max_requests_per_run": 50, "max_wait_ms": 60000}', true, '{"session_domain": "zz-sess-ssrf.example.test"}') RETURNING id`,
+        `INSERT INTO apis (slug, owner_id, output_schema, domain_pacing, requires_session, requires) VALUES ('zz_test_sess_ssrf', $1, $2, '{"min_delay_ms": 5, "max_requests_per_run": 50, "max_wait_ms": 60000}', true, '{"session_domain": "evil.example"}') RETURNING id`,
         [A, JSON.stringify(SCHEMA)],
       )
     ).rows[0]!.id;
-    const spec = { ...specFor('zz-sess-ssrf.example.test'), request: { method: 'GET', url: `http://zz-sess-ssrf.example.test:${port}/api/items`, allowed_hosts: ['zz-sess-ssrf.example.test'] } };
+    const spec = { ...specFor(EVIL_EXAMPLE), request: { method: 'GET', url: `http://${EVIL_EXAMPLE}:${port}/api/items`, allowed_hosts: [EVIL_EXAMPLE] } };
     await pool.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, est_cost_usd, created_by) VALUES ($1, 1, $2, 'fetch', 'tunnel', $3, 0, 'user')", [id, A, JSON.stringify(spec)]);
     await pool.query('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [id]);
+    resolverLog.length = 0;
     received.length = 0;
     const { run, trace } = await runOf(id, A, actorA);
     expect(run.state).toBe('failed');
     expect(received).toHaveLength(0);
+    // Preuve que la garde a résolu l'hôte puis refusé l'adresse privée (et non un hôte irrésoluble).
+    expect(resolverLog).toContain(EVIL_EXAMPLE);
     expect(trace).not.toContain(COOKIE_VALUE);
+  });
+
+  test('non-régression : une API sans session s’exécute comme avant sur le même chemin, sans Cookie', async () => {
+    const id = (await pool.query<{ id: string }>("INSERT INTO apis (slug, owner_id, output_schema, domain_pacing, requires_session, requires) VALUES ('zz_test_nosess', $1, $2, '{\"min_delay_ms\": 5, \"max_requests_per_run\": 50, \"max_wait_ms\": 60000}', false, '{}') RETURNING id", [A, JSON.stringify(SCHEMA)])).rows[0]!.id;
+    await pool.query("INSERT INTO strategy_versions (api_id, version, owner_id, execution, network, spec, est_cost_usd, created_by) VALUES ($1, 1, $2, 'fetch', 'direct', $3, 0, 'user')", [id, A, JSON.stringify(specFor(SESSION_HOST, '/api/nosess'))]);
+    await pool.query('UPDATE apis SET current_strategy_version = 1 WHERE id = $1', [id]);
+    received.length = 0;
+    const { run } = await runOf(id, A, actorA);
+    expect(run).toMatchObject({ state: 'succeeded', items: 2 });
+    expect(received.map((r) => [r.path, r.cookie])).toEqual([['/api/nosess', undefined]]);
   });
 
   test('session non consentie pour le serveur : comportement d’avant (tunnel indisponible), aucune requête', async () => {
