@@ -42,6 +42,7 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `TUNNEL_ALLOW_ANY_EXTENSION` | server | facultative | false | `true` accepte toute extension (développement, extension décompressée) ; à ne pas poser en production. |
 | `DISABLE_MCP` | server | facultative | false | `true` : aucune route `/mcp` (serveur MCP coupé) ; l’API REST et la console restent servies. |
 | `MCP_TOOL_EXPOSURE` | server | facultative | pinned | Outils par API du serveur MCP : `generic` (aucun, tout passe par `run_api` et `list_apis`), `pinned` (les API épinglées pour le MCP, 20 au plus) ou `all` (toutes, 20 au plus ; au-delà de 30 API, `pinned` est conseillé). |
+| `MCP_DEFAULT_TOOLSETS` | server | facultative | build,run,catalog,iterate | Toolsets du serveur MCP actifs quand le client ne demande rien (`?toolsets=`) : `build`, `run`, `catalog` et `iterate` (affiner, tester, promouvoir, revenir en arrière), séparés par des virgules. `iterate` est actif par défaut. |
 | `MCP_ALLOWED_HOSTS` | server | facultative | l’hôte de `PUBLIC_URL` | Noms d’hôte supplémentaires (sans port), séparés par des virgules, admis dans l’en-tête `Host` d’une requête MCP (réseau interne, autre nom de l’instance) ; tout autre hôte reçoit 403. |
 | `MCP_ALLOWED_ORIGINS` | server | facultative | l’origine de `PUBLIC_URL` | Origines supplémentaires admises dans l’en-tête `Origin` d’une requête MCP, séparées par des virgules : origine complète (`https://hote:port`, comparée en entier : schéma, hôte et port, comme celle de `PUBLIC_URL`) ou, plus lâche, nom d’hôte seul (tout schéma et tout port de cet hôte) ; une origine présente et non admise reçoit 403, une requête sans `Origin` (client MCP hors navigateur) est acceptée. |
 
@@ -64,7 +65,8 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `BRIEF_PROBE_MAX` | worker | facultative | 5 | Indices du dossier vérifiés au plus par enquête (une requête GET chacun par le pipeline d’accès), entre 0 et 5. |
 | `BRIEF_PROBE_BUDGET_SHARE` | worker | facultative | 0.25 | Part du budget d’enquête que la vérification des indices peut consommer, entre 0 et 0,25. |
 | `BRIEF_NEGATIVE_TTL_DAYS` | worker | facultative | 14 | Jours pendant lesquels un indice dont la vérification a échoué n’est pas vérifié de nouveau (sauf indice revu plus récemment). |
-| `MAX_WAIT_SECONDS` | server | facultative | 25 | Plafond, en secondes, de l’attente synchrone d’un appel REST ou MCP (paramètre `wait`, 1 à 25) ; au-delà, l’appel rend un run à suivre (202). |
+| `MAX_WAIT_SECONDS` | server | facultative | 50 | Plafond, en secondes, de l’attente synchrone d’un appel MCP (`wait_seconds`, 1 à 50 ; REST : `wait`, 25 au plus) ; au-delà, l’appel rend un run à suivre (202). |
+| `CONFIRM_ABOVE_USD` | server, worker | facultative | 0.10 | Dépense estimée, en dollars, des essais d’une enquête (essai retenu et compilation) au-delà de laquelle la validation automatique du schéma, puis le premier run complet lancé par SYM, attendent une confirmation avant tout appel facturé (valeur à valider en recette). |
 | `MAX_CONCURRENT_RUNS` | server | facultative | 50 | Runs actifs (en file ou en cours) de l’instance au-delà desquels une création de run ou d’API répond 429 `queue_full` avec `Retry-After` (valeur à valider en recette). |
 | `MAX_ACTIVE_RUNS_PER_USER` | server | facultative | 20 | Runs actifs (en file ou en cours, hors pause) d’un même utilisateur au-delà desquels sa création de run ou d’API répond 429 `user_queue_full` avec `Retry-After` : un membre ne remplit pas la file des autres (valeur à valider en recette). |
 | `MAX_RUNS_PER_KEY_PER_MINUTE` | server | facultative | 60 | Créations de run (ou d’API) par clé d’API et par minute au-delà desquelles l’appel répond 429 `key_rate_limited` avec `Retry-After` (compteur du processus ; valeur à valider en recette). |
@@ -80,6 +82,7 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `BROWSER_CDP_PROJECT_ID` (`BROWSER_CDP_PROJECT_ID_FILE`) secret | worker | facultative | aucun | Identifiant de projet chez le fournisseur (adaptateur `browserbase`) ; facultatif, déduit de la clé sinon. |
 | `BROWSER_CDP_SESSION_TIMEOUT_SECONDS` | worker | facultative | 900 | Durée maximale d’une session chez le fournisseur CDP, de 60 à 21600 secondes. |
 | `BROWSER_CDP_ACCOUNT_PROXY` | worker | facultative | false | `true` : demande au fournisseur CDP d’appliquer le proxy de son compte (option « proxy du compte »). Les seuls paramètres de session que SYM envoie : cette option, la durée maximale et les identifiants de corrélation `runId` et `attemptId` ; toute autre variable `BROWSER_CDP_*` est refusée. |
+| `AGENT_BROWSER_PROBE` | worker | facultative | false | `true` : au démarrage, le worker vérifie que le Chromium dédié de l’agent démarre (bac à sable, HOME, binaire) et le dit dans les journaux ; n’empêche aucun run. |
 | `SHUTDOWN_TIMEOUT_SECONDS` | worker | facultative | 30 | Délai d’arrêt propre sur SIGTERM. |
 | `RUN_BUDGET_SECONDS` | worker | facultative | 900 | Budget de durée d’un run. |
 | `RUN_HEARTBEAT_SECONDS` | worker | facultative | 10 | Période d’écriture du battement d’un run actif. |
@@ -147,7 +150,9 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 
 | Variable | Lue par | Statut | Défaut | Rôle |
 |---|---|---|---|---|
-| `RUNTIME_VERSION` | server, worker, CLI | facultative | `0.0.0` | Version publiée par `/api/health` et `/api/version`. Posée à la construction de l’image par la chaîne de release : ne pas la changer. |
+| `RUNTIME_VERSION` | server, worker, CLI | facultative | version du paquet | Version publiée par `/api/health` et `/api/version`. Posée à la construction de l’image par la chaîne de release : ne pas la changer. Absente ou `0.0.0` (image construite sans argument, staging), la version du paquet est publiée. |
+| `RUNTIME_COMMIT` | server | facultative | aucun | Commit Git de l’image, publié par `/api/version` (`commit`) et dans `serverInfo.version` du MCP. Posée à la construction de l’image (`--build-arg RUNTIME_COMMIT=<sha>`) ; sans elle, `RENDER_GIT_COMMIT` est utilisée. Une valeur qui n’est pas un commit hexadécimal est ignorée. |
+| `RENDER_GIT_COMMIT` | server | facultative | aucun | Posée par Render à chaque déploiement : commit déployé, repli de `RUNTIME_COMMIT`. Ne pas la poser soi-même. |
 | `RUNTIME_MODE` | image | facultative | `all` | `server`, `worker`, `all` (les deux dans un processus) ou `migrate`. Lue par le point d’entrée de l’image. |
 | `NODE_ENV` | server, worker, CLI | facultative | `production` | Posée par l’image. En production, le worker refuse de démarrer sans l’utilisateur dédié du bac à sable et `runtime migrate down` est refusé. |
 | `SANDBOX_UID` | worker | facultative | `1500` | Utilisateur dédié du bac à sable (INV7). Posée par l’image : ne pas la changer. |
