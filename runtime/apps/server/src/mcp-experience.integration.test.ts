@@ -484,6 +484,49 @@ describe('élicitation de la validation du schéma (05 § 1.3) : question plate,
   });
 });
 
+describe('B1 : un run arrêté pour une session à rafraîchir est lisible par MCP (get_run) avec sa marche à suivre', () => {
+  test('get_run : erreur nommée `cookie_expired`, statut de l’API inchangé, what_to_do qui dit au client d’ouvrir le site avec l’extension, aucune valeur de secret', async () => {
+    const api = await seedApi(srv.db.url, a.user.id, { status: 'sain' });
+    const { runId } = await seedRun(srv.db.url, { apiId: api.id, ownerId: a.user.id, state: 'failed' });
+    await withClient(srv.db.url, (c) => c.query("UPDATE runs SET error_detail = 'session_to_refresh:zz-session.example', failure_class = NULL WHERE id = $1", [runId]));
+    const result = await call(await connect(a.key), 'get_run', { run_id: runId });
+    expect(result.isError ?? false).toBe(false);
+    expect(result.structuredContent).toMatchObject({
+      state: 'failed',
+      status: 'sain',
+      error: {
+        code: 'cookie_expired',
+        message: 'La session de zz-session.example est à rafraîchir : ouvre zz-session.example dans ton navigateur avec l’extension SYM, puis relance.',
+        retryable: true,
+      },
+    });
+    const error = (result.structuredContent as { error: { what_to_do: string } }).error;
+    expect(error.what_to_do).toContain('open zz-session.example in their browser with the SYM extension');
+    expect(error.what_to_do).toContain('nothing was repaired');
+    expect(text(result)).toContain('The run could not start (cookie_expired)');
+    expect(text(result)).not.toContain('zz_test_private_error');
+    // Un domaine illisible n'est jamais publié tel quel.
+    await withClient(srv.db.url, (c) => c.query("UPDATE runs SET error_detail = 'session_to_refresh:https://zz.example/x?k=1' WHERE id = $1", [runId]));
+    expect(text(await call(await connect(a.key), 'get_run', { run_id: runId }))).not.toContain('https://zz.example/x');
+  });
+
+  test('statut d’une enquête arrêtée par une session consentie morte : action_requise / cookie_expired, gabarit fermé qui dit de rafraîchir avec l’extension', async () => {
+    for (const [party, locale] of [[a, 'en'], [frAccount, 'fr']] as const) {
+      const api = await seedApi(srv.db.url, party.user.id, { status: 'action_requise', strategy: false });
+      const { runId } = await seedRun(srv.db.url, { apiId: api.id, ownerId: party.user.id, state: 'running', kind: 'investigation' });
+      await emit(runId, 'action.required', { cause: 'cookie_expired', domain: 'zz-session.example' });
+      await withClient(srv.db.url, async (c) => {
+        await c.query("UPDATE runs SET state = 'failed', outcome = 'failed', failure_class = NULL, retryable = false, error_detail = 'session_to_refresh:zz-session.example', started_at = coalesce(started_at, now()), finished_at = now(), duration_ms = 5 WHERE id = $1", [runId]);
+        await c.query("UPDATE apis SET status_reason = 'cookie_expired', investigation_phase = 'done' WHERE id = $1", [api.id]);
+      });
+      const result = await call(await connect(party.key), 'get_run', { run_id: runId });
+      expect(result.structuredContent).toMatchObject({ state: 'failed', status: 'action_requise', error: { code: 'cookie_expired' } });
+      expect(text(result)).toContain(actionTemplate(locale, 'cookie_expired'));
+      expect(actionTemplate(locale, 'cookie_expired')).toMatch(locale === 'en' ? /SYM extension/ : /extension SYM/);
+    }
+  });
+});
+
 describe('UX-04 / UX-07 : le récit porte la cause nommée d’un run arrêté (envelope.error)', () => {
   test('get_run d’une enquête arrêtée (contact du robot absent, failure_class NULL) : la phrase d’UX-04, le gabarit fermé de la cause et la marche à suivre dans le texte', async () => {
     for (const [party, locale] of [[a, 'en'], [frAccount, 'fr']] as const) {

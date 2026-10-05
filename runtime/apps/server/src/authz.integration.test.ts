@@ -161,6 +161,9 @@ const VALID_BODIES: Record<string, (party: Party) => Record<string, unknown>> = 
   'POST /api/extension/pair': () => ({ code: 'ZZZZZ-ZZZZZ', deviceId: 'zz_test_authz_body' }),
   'PUT /api/extension/sites/:domain': () => ({ serverUseAllowed: false }),
   'PUT /api/extension/sites/:domain/cookies': () => ({ cookies: [] }),
+  // Sessions de site (CDC V1 sym-sessions, B1) : étiquette du compte, test de validité.
+  'PATCH /api/sites/:id': () => ({ accountLabel: 'zz_test' }),
+  'POST /api/sites/:id/check': () => ({}),
   // Comptes avancés (3.7).
   'POST /api/auth/two-factor/verify': () => ({ code: '123456' }),
   'POST /api/auth/password-reset/request': () => ({ email: 'zz_test_nobody@example.test' }),
