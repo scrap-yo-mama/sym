@@ -6,12 +6,17 @@
 // contre-pression sur `bufferedAmount`. Fermetures applicatives : 4401 (jeton révoqué ou expiré) → appairage oublié,
 // pas de reconnexion ; 4409 (connexion plus récente du même utilisateur ailleurs) → pas de reconnexion automatique
 // (sinon deux appareils se chasseraient), jusqu'au prochain démarrage de Chrome ou à une reconnexion demandée.
+// U3.4 : reconnexion à attente croissante (1, 2, 4, 8, 16, 30 s ; la première tient « moins de 10 s »), état visible
+// (`status()` : tentatives et échéance, pour le compte à rebours du panneau), et `resume` des runs servis après un welcome.
 import {
   chunkResult,
   parseServerFrame,
+  reconnectDelayMs,
   TUNNEL_MAX_PAYLOAD,
   TUNNEL_PATH,
   TUNNEL_PING_MS,
+  TUNNEL_RESUME_MAX_RUNS,
+  TUNNEL_RESUME_WINDOW_MS,
   WS_CLOSE,
   type CommandFrame,
   type TunnelResult,
@@ -43,16 +48,24 @@ export type TunnelClientDeps = {
   clearTimeout?: (handle: unknown) => void;
   setInterval?: (fn: () => void, ms: number) => unknown;
   clearInterval?: (handle: unknown) => void;
+  /** Horloge (ms depuis l'époque) : échéance de la prochaine reconnexion, ancienneté des runs servis. */
+  now?: () => number;
   log?: (event: string, data?: Record<string, unknown>) => void;
 };
 
 const OPEN = 1;
 const SUPERSEDED_KEY = 'tunnel_superseded';
-const BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000];
+/** Runs servis par cette extension (stockage de session) : `{ run_id: { seq, at } }`, annoncés par `resume` après une reconnexion (U3.4). */
+const RUNS_KEY = 'tunnel_runs';
+type ServedRuns = Record<string, { seq: number; at: number }>;
 /** Au-delà de ces octets en attente d'envoi, l'envoi du morceau suivant attend (contre-pression). */
 const BUFFER_HIGH = TUNNEL_MAX_PAYLOAD;
 
-export type TunnelState = 'idle' | 'connecting' | 'open' | 'superseded' | 'unauthorized';
+/** `reconnecting` : coupure subie, nouvelle tentative planifiée (`status().retryAt`) ; `idle` : aucune connexion voulue. */
+export type TunnelState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'superseded' | 'unauthorized';
+
+/** État du tunnel pour le panneau et « Ma stack » : tentatives depuis la dernière connexion et échéance de la prochaine (compte à rebours). */
+export type TunnelStatus = { readonly state: TunnelState; readonly attempt: number; readonly retryAt: number | null };
 
 /** URL WSS de l'instance : `https://` → `wss://` (ws:// seulement pour l'instance locale de développement). */
 export function tunnelUrl(origin: string): string {
@@ -70,6 +83,8 @@ export class TunnelClient {
   #state: TunnelState = 'idle';
   #attempt = 0;
   #retry: unknown = null;
+  #retryAt: number | null = null;
+  #notes: Promise<void> = Promise.resolve();
   #ping: unknown = null;
   #connecting: Promise<void> | null = null;
   /** Commandes reçues et réponses envoyées (observabilité locale). */
@@ -82,6 +97,52 @@ export class TunnelClient {
 
   get state(): TunnelState {
     return this.#state;
+  }
+
+  #now(): number {
+    return (this.#deps.now ?? Date.now)();
+  }
+
+  /** État visible : connecté, en reconnexion (avec l'échéance), hors ligne… (U3.4, 05 § 5 « Visibilité »). */
+  status(): TunnelStatus {
+    return { state: this.#state, attempt: this.#attempt, retryAt: this.#retryAt };
+  }
+
+  /** Runs servis depuis moins de `TUNNEL_RESUME_WINDOW_MS`, lus dans le stockage de session. */
+  async #servedRuns(): Promise<ServedRuns> {
+    const raw = await this.#deps.session.get(RUNS_KEY);
+    const out: ServedRuns = {};
+    if (typeof raw !== 'object' || raw === null) return out;
+    const floor = this.#now() - TUNNEL_RESUME_WINDOW_MS;
+    for (const [runId, v] of Object.entries(raw as Record<string, unknown>)) {
+      const e = v as { seq?: unknown; at?: unknown };
+      if (typeof e.seq === 'number' && typeof e.at === 'number' && e.at >= floor) out[runId] = { seq: e.seq, at: e.at };
+    }
+    return out;
+  }
+
+  /**
+   * Une commande de plus reçue pour ce run : borné aux `TUNNEL_RESUME_MAX_RUNS` runs les plus récents. Lecture-écriture du
+   * stockage SÉRIALISÉE : les commandes d'une connexion arrivent en parallèle (jusqu'à 8), sans quoi une mise à jour écraserait l'autre.
+   */
+  #noteCommand(runId: string): Promise<void> {
+    const next = this.#notes.then(async () => {
+      const runs = await this.#servedRuns();
+      runs[runId] = { seq: (runs[runId]?.seq ?? 0) + 1, at: this.#now() };
+      const newest = Object.entries(runs).sort((a, b) => b[1].at - a[1].at).slice(0, TUNNEL_RESUME_MAX_RUNS);
+      await this.#deps.session.set(RUNS_KEY, Object.fromEntries(newest));
+    });
+    this.#notes = next.catch(() => undefined);
+    return next;
+  }
+
+  /** Après un `welcome` : un `resume` par run servi récemment (rien à la toute première connexion, aucun run servi). */
+  async #sendResumes(socket: WebSocketLike): Promise<void> {
+    const runs = await this.#servedRuns();
+    for (const [runId, e] of Object.entries(runs).sort((a, b) => a[1].at - b[1].at)) {
+      if (socket.readyState !== OPEN) return;
+      socket.send(JSON.stringify({ type: 'resume', run_id: runId, last_command_seq: e.seq }));
+    }
   }
 
   #set(fn: () => void, ms: number): unknown {
@@ -120,6 +181,7 @@ export class TunnelClient {
     }
     this.#clear(this.#retry);
     this.#retry = null;
+    this.#retryAt = null;
     this.#state = 'connecting';
     const socket = this.#deps.createSocket(tunnelUrl(pairing.origin));
     this.#socket = socket;
@@ -143,16 +205,20 @@ export class TunnelClient {
       case 'welcome':
         this.#state = 'open';
         this.#attempt = 0;
+        this.#retryAt = null;
         this.#stopPing();
         this.#ping = (this.#deps.setInterval ?? ((f: () => void, t: number) => setInterval(f, t)))(() => {
           if (socket.readyState === OPEN) socket.send(JSON.stringify({ type: 'ping' }));
         }, Math.min(frame.ping_ms, TUNNEL_PING_MS));
         this.#deps.log?.('tunnel_open', { email: frame.email });
+        // Reconnexion : la passerelle sait quels runs cette extension servait (rattrapage de leurs commandes en attente).
+        await this.#sendResumes(socket);
         return;
       case 'pong':
         return;
       case 'cmd': {
         this.received += 1;
+        await this.#noteCommand(frame.run_id).catch(() => undefined);
         const result = await this.#deps.execute(frame);
         await this.#reply(socket, frame.job_id, result);
         return;
@@ -177,18 +243,23 @@ export class TunnelClient {
     this.#stopPing();
     if (code === WS_CLOSE.unauthorized) {
       this.#state = 'unauthorized';
+      this.#retryAt = null;
+      await this.#deps.session.set(RUNS_KEY, {}).catch(() => undefined);
       await this.#deps.onUnauthorized();
       return;
     }
     if (code === WS_CLOSE.replaced) {
       this.#state = 'superseded';
+      this.#retryAt = null;
       await this.#deps.session.set(SUPERSEDED_KEY, true);
       return;
     }
     if (this.#state === 'idle') return; // fermeture voulue (déconnexion)
-    this.#state = 'idle';
-    const delay = BACKOFF_MS[Math.min(this.#attempt, BACKOFF_MS.length - 1)]!;
+    // Coupure subie (redéploiement, veille, réseau) : nouvelle tentative après un délai croissant (1, 2, 4, 8, 16, 30 s).
+    this.#state = 'reconnecting';
+    const delay = reconnectDelayMs(this.#attempt);
     this.#attempt += 1;
+    this.#retryAt = this.#now() + delay;
     this.#retry = this.#set(() => void this.ensureConnected(), delay);
   }
 
@@ -196,6 +267,7 @@ export class TunnelClient {
   disconnect(): void {
     this.#clear(this.#retry);
     this.#retry = null;
+    this.#retryAt = null;
     this.#stopPing();
     const socket = this.#socket;
     this.#socket = null;

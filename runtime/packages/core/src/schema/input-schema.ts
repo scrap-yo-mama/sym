@@ -116,7 +116,13 @@ const FORBIDDEN_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
  * stratégie pagine (le plafond que la boucle de pagination lit, `limits.max_pages_input`), plus les entrées nommées
  * `inputs` (nom, type, description). Le schéma rendu passe toujours `assertInputSchema` : une entrée sans description lève.
  */
-export function buildInputSchema(options: { readonly paginated: boolean; readonly maxPages?: number; readonly inputs?: readonly ProposedInput[] }): Record<string, unknown> {
+export function buildInputSchema(options: {
+  readonly paginated: boolean;
+  readonly maxPages?: number;
+  readonly inputs?: readonly ProposedInput[];
+  /** Pages demandées par la description (U1.11, UX-26) : valeur par défaut annoncée de `max_pages` (borne haute comprise). */
+  readonly requestedPages?: number;
+}): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const set = (name: string, value: unknown): void => {
     Object.defineProperty(properties, name, { value, enumerable: true, writable: true, configurable: true });
@@ -131,11 +137,16 @@ export function buildInputSchema(options: { readonly paginated: boolean; readonl
   }
   if (options.paginated) {
     const max = options.maxPages ?? INPUT_MAX_PAGES_DEFAULT;
+    const requested = options.requestedPages !== undefined && Number.isInteger(options.requestedPages) && options.requestedPages >= 1 ? Math.min(options.requestedPages, max) : undefined;
     set('max_pages', {
       type: 'integer',
       minimum: 1,
       maximum: max,
-      description: `Nombre maximal de pages lues par run (1 à ${max}) ; la liste peut finir avant. Sans valeur, la lecture va jusqu'à la fin de la liste, dans la limite de ${max} pages.`,
+      ...(requested === undefined ? {} : { default: requested }),
+      description:
+        requested === undefined
+          ? `Nombre maximal de pages lues par run (1 à ${max}) ; la liste peut finir avant. Sans valeur, la lecture va jusqu'à la fin de la liste, dans la limite de ${max} pages.`
+          : `Nombre maximal de pages lues par run (1 à ${max}) ; la liste peut finir avant. La demande d'origine en voulait ${requested} : valeur par défaut annoncée ; sans valeur, la lecture va jusqu'à la fin de la liste, dans la limite de ${max} pages.`,
     });
   }
   const schema = { $schema: DRAFT_2020_12, type: 'object', properties, ...(required.length === 0 ? {} : { required }), additionalProperties: false };

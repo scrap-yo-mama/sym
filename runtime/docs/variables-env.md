@@ -75,6 +75,7 @@ des cinq premières est posée. Une autorité de certification privée pour Post
 | `WORKER_CONCURRENCY` | worker, CLI | facultative | 5 | Jobs sans navigateur en parallèle par worker (inférieur ou égal à `DB_POOL_MAX`). |
 | `BROWSER_CONCURRENCY` | worker | facultative | déduit de la mémoire du conteneur | Runs navigateur simultanés par worker (1 à 32). Dimensionnement : 2 Go de mémoire pour 1 run navigateur, 4 Go pour 2. |
 | `DISABLE_BROWSER` | worker | facultative | false | `true` : aucun Chromium, les exécuteurs navigateur sont refusés. |
+| `AGENT_BROWSER_PROBE` | worker | facultative | false | `true` : au démarrage, le worker vérifie que le Chromium dédié de l’agent démarre (bac à sable, HOME, binaire) et le dit dans les journaux ; n’empêche aucun run. |
 | `SHUTDOWN_TIMEOUT_SECONDS` | worker | facultative | 30 | Délai d’arrêt propre sur SIGTERM. |
 | `RUN_BUDGET_SECONDS` | worker | facultative | 900 | Budget de durée d’un run. |
 | `RUN_HEARTBEAT_SECONDS` | worker | facultative | 10 | Période d’écriture du battement d’un run actif. |

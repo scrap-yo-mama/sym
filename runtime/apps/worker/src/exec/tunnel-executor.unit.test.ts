@@ -84,3 +84,55 @@ describe('mode tunnel (worker) : correctifs de vérification', () => {
     expect(p.sent[0]).toMatchObject({ cmd: 'page_fetch', args: { method: 'POST' } });
   });
 });
+
+describe('U3.4 : tunnel perdu en cours de run (cause tunnel_lost)', () => {
+  const fetchSpec = () =>
+    spec({
+      schema_version: 1,
+      kind: 'declarative',
+      request: { method: 'GET', url: `https://${SHOP}/api/items`, allowed_hosts: [SHOP], params: [{ at: 'url.query.page', role: 'pagination' }] },
+      sources: [{ id: 'api', from: 'response', format: 'json', records: '$.items[*]' }],
+      fields: { id: { path: '$.id', type: 'string', required: true } },
+      pagination: { type: 'page_param', param: 'url.query.page', start: 1, stop: [{ when: 'records_empty' }], limits: { max_pages_input: 'input.max_pages', hard_max_pages: 5 } },
+    });
+  const page = (n: number) => ok({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: n <= 2 ? [{ id: `zz${n}` }] : [] }), url: `https://${SHOP}/api/items?page=${n}` });
+  const session = (p: TunnelPort) => new TunnelSession(p, { runId: RUN, ownerId: OWNER, domain: SHOP, allowWriteActions: false, execution: 'fetch' }, new AbortController().signal);
+  const run = (s: TunnelSession) => runTunnelExecutor({ session: s, execution: 'fetch', spec: fetchSpec(), input: {}, outputSchema: SCHEMA, signal: new AbortController().signal });
+
+  test('l’extension disparaît après une page lue : arrêt « hors ligne » et tunnel perdu (lost), aucune commande de plus', async () => {
+    let calls = 0;
+    const p = port(() => {
+      calls += 1;
+      return calls === 1 ? page(1) : { kind: 'error', error: 'tunnel_offline' };
+    });
+    const s = session(p);
+    const out = await run(s);
+    expect(out.stop).toBe('tunnel_offline');
+    expect(out.lost).toBe(true);
+    expect(s.lost).toBe(true);
+    expect(p.sent).toHaveLength(2);
+  });
+
+  test('extension jamais connectée pendant ce run : hors ligne, pas « perdu »', async () => {
+    const p = port(() => ({ kind: 'error', error: 'tunnel_offline' }));
+    const out = await run(session(p));
+    expect(out.stop).toBe('tunnel_offline');
+    expect(out.lost).toBe(false);
+  });
+
+  test('commande émise puis connexion coupée (écriture non rejouable : tunnel_disconnected) : arrêt, tunnel perdu, jamais une erreur réseau ordinaire', async () => {
+    const p = port(() => ({ kind: 'error', error: 'tunnel_disconnected' }));
+    const s = session(p);
+    const out = await run(s);
+    expect(out.stop).toBe('tunnel_offline');
+    expect(out.lost).toBe(true);
+    expect(p.sent).toHaveLength(1);
+  });
+
+  test('défi en tunnel : arrêt propre au défi, jamais « perdu »', async () => {
+    const p = port(() => ok({ status: 403, headers: { 'content-type': 'application/json' }, body: '{"url":"https://geo.captcha-delivery.com/captcha/?initialCid=zz"}', url: `https://${SHOP}/api/items` }));
+    const out = await run(session(p));
+    expect(out.stop).toBe('challenge_in_tunnel');
+    expect(out.lost).toBe(false);
+  });
+});

@@ -77,6 +77,7 @@ import type { AgentBrowser, AgentBrowserOptions } from '../browser/agent-browser
 import type { BrowserPool, SlotLease } from '../browser/pool.js';
 import { createAgentRequestGate, type AgentRequestGate } from '../browser/agent-request-gate.js';
 import { hostAllowed, isMainNavigation, openRunContext, trackStrategyRequests } from '../browser/run-context.js';
+import { agentEngineErrorClass } from './agent-error-class.js';
 import { AttemptBudgetExceededError, AttemptCost, type RunBudget } from './attempt-cost.js';
 
 /** Coût et traçabilité LLM d'un essai (`run_attempts`). `usd = null` si un prix manque (jamais 0, 08 §1). */
@@ -221,7 +222,8 @@ export function conformRecords(records: readonly unknown[], outputSchema: unknow
 
 function pageText(exchange: HttpExchange, maxChars: number): { text: string; truncated: boolean } {
   const type = exchange.headers['content-type'] ?? 'text/html';
-  if (/html/i.test(type)) return htmlToVisibleText(exchange.body, maxChars);
+  // UX-22 : les liens de la page entrent dans le texte, « texte (URL absolue) » sans requête ni fragment (jamais un jeton d'URL).
+  if (/html/i.test(type)) return htmlToVisibleText(exchange.body, maxChars, { linksBase: exchange.url });
   return { text: exchange.body.slice(0, maxChars), truncated: exchange.body.length > maxChars };
 }
 
@@ -883,7 +885,8 @@ async function runAgentInSlot(options: AgentOptions, lease: SlotLease, gate: Age
       const refused = watch.refusal();
       if (refused !== undefined) return { result: fail(refused, 1), llm: null };
       // Construction refusée (mode non local, X1) ou erreur du moteur : jamais un succès, jamais un repli.
-      return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'agent_engine_error' }), llm: null };
+      // UX-23 : la classe d'erreur du moteur (code fermé) accompagne la cause ; le message n'en sort jamais.
+      return { result: fail({ failure_class: 'code_error', retryable: false, detail: 'agent_engine_error', params: { class: agentEngineErrorClass(error) } }), llm: null };
     }
     budget.report(run.costUsd);
     await watch.settled();

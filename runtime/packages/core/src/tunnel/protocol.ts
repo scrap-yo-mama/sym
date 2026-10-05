@@ -3,8 +3,8 @@
 // worker et l'extension importent les mêmes types et les mêmes validations (`@runtime/core/tunnel`).
 //
 // Messages (un objet JSON par message WebSocket, schéma strict : tout champ en plus est une violation de protocole) :
-// - extension → instance : `hello` (jeton HORS URL, premier message), `ping` (toutes les 20 s), `result` (réponse
-//   découpée en morceaux numérotés `seq` / `last`, chacun ≤ 1 Mio) ;
+// - extension → instance : `hello` (jeton HORS URL, premier message), `ping` (toutes les 20 s), `resume` (après une
+//   reconnexion, un par run servi : U3.4), `result` (réponse découpée en morceaux numérotés `seq` / `last`, chacun ≤ 1 Mio) ;
 // - instance → extension : `welcome`, `pong`, `cmd` (jeu fermé de quatre commandes).
 // Codes de fermeture applicatifs : 4401 jeton refusé ou révoqué, 4409 remplacée par une connexion plus récente du même
 // utilisateur, 4400 violation de protocole, 4429 débit dépassé, 4408 aucun `hello` à temps ou connexion muette.
@@ -21,6 +21,18 @@ export const TUNNEL_ALARM_PERIOD_MINUTES = 0.5;
  * ligne `tunnels`. Trois pings manqués : portable en veille, coupure réseau sans FIN (connexion à moitié ouverte).
  */
 export const TUNNEL_IDLE_TIMEOUT_MS = 3 * TUNNEL_PING_MS;
+/**
+ * Reconnexion de l'extension après une coupure (U3.4, 05 § 5) : attente croissante, plafonnée à 30 s. Le premier délai (1 s)
+ * tient la cible « reconnecté en moins de 10 s » d'un redéploiement ou d'une coupure de la passerelle.
+ */
+export const TUNNEL_RECONNECT_BACKOFF_MS = Object.freeze([1000, 2000, 4000, 8000, 16_000, 30_000] as const);
+export const TUNNEL_RECONNECT_TARGET_MS = 10_000;
+/** Attente avant la tentative `attempt` (0 pour la première après une coupure). */
+export const reconnectDelayMs = (attempt: number): number => TUNNEL_RECONNECT_BACKOFF_MS[Math.min(Math.max(0, Math.trunc(attempt)), TUNNEL_RECONNECT_BACKOFF_MS.length - 1)]!;
+/** Runs que l'extension annonce par `resume` après une reconnexion (les plus récents), et durée pendant laquelle un run reste annonçable. */
+export const TUNNEL_RESUME_MAX_RUNS = 16;
+export const TUNNEL_RESUME_WINDOW_MS = 10 * 60 * 1000;
+
 /** Délai pour recevoir `hello` après l'ouverture. */
 export const TUNNEL_HELLO_TIMEOUT_MS = 10_000;
 /** Délai par défaut d'une commande (07 §8). */
@@ -63,9 +75,14 @@ export type TunnelError = (typeof TUNNEL_ERRORS)[number];
 
 export type HelloFrame = { readonly type: 'hello'; readonly token: string; readonly version: string };
 export type PingFrame = { readonly type: 'ping' };
+/**
+ * Reprise après reconnexion (U3.4) : l'extension servait le run `run_id` et avait reçu `last_command_seq` commandes pour lui. La
+ * passerelle rattrape alors les commandes en attente de ce run (lectures rejouées, écritures déjà mises en échec).
+ */
+export type ResumeFrame = { readonly type: 'resume'; readonly run_id: string; readonly last_command_seq: number };
 /** Morceau d'une réponse : `data` est une tranche du JSON de `TunnelResult` ; `seq` part de 0, `last` clôt. */
 export type ResultFrame = { readonly type: 'result'; readonly job_id: string; readonly seq: number; readonly last: boolean; readonly data: string };
-export type ExtensionFrame = HelloFrame | PingFrame | ResultFrame;
+export type ExtensionFrame = HelloFrame | PingFrame | ResultFrame | ResumeFrame;
 
 export type WelcomeFrame = { readonly type: 'welcome'; readonly email: string; readonly ping_ms: number; readonly max_payload: number };
 export type PongFrame = { readonly type: 'pong' };
@@ -127,6 +144,8 @@ export function parseExtensionFrame(raw: string): ExtensionFrame | null {
       return onlyKeys(m, ['type', 'token', 'version']) && str(m['token'], 256) && str(m['version'], 64) ? { type: 'hello', token: m['token'], version: m['version'] } : null;
     case 'ping':
       return onlyKeys(m, ['type']) ? { type: 'ping' } : null;
+    case 'resume':
+      return onlyKeys(m, ['type', 'run_id', 'last_command_seq']) && isUuid(m['run_id']) && int(m['last_command_seq'], 0, 1_000_000) ? { type: 'resume', run_id: m['run_id'], last_command_seq: m['last_command_seq'] } : null;
     case 'result':
       return onlyKeys(m, ['type', 'job_id', 'seq', 'last', 'data']) && isUuid(m['job_id']) && int(m['seq'], 0, 100_000) && typeof m['last'] === 'boolean' && typeof m['data'] === 'string'
         ? { type: 'result', job_id: m['job_id'], seq: m['seq'], last: m['last'], data: m['data'] }

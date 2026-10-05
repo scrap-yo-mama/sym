@@ -86,6 +86,7 @@ export const ENV_CATALOG: readonly EnvVariable[] = [
   v({ name: 'WORKER_CONCURRENCY', group: 'Exécution', roles: ['worker', 'cli'], required: false, default: '5', description: 'Jobs sans navigateur en parallèle par worker (inférieur ou égal à `DB_POOL_MAX`).' }),
   v({ name: 'BROWSER_CONCURRENCY', group: 'Exécution', roles: ['worker'], required: false, default: 'déduit de la mémoire du conteneur', description: 'Runs navigateur simultanés par worker (1 à 32). Dimensionnement : 2 Go de mémoire pour 1 run navigateur, 4 Go pour 2.' }),
   v({ name: 'DISABLE_BROWSER', group: 'Exécution', roles: ['worker'], required: false, default: 'false', description: '`true` : aucun Chromium, les exécuteurs navigateur sont refusés.' }),
+  v({ name: 'AGENT_BROWSER_PROBE', group: 'Exécution', roles: ['worker'], required: false, default: 'false', description: '`true` : au démarrage, le worker vérifie que le Chromium dédié de l’agent démarre (bac à sable, HOME, binaire) et le dit dans les journaux ; n’empêche aucun run.' }),
   v({ name: 'SHUTDOWN_TIMEOUT_SECONDS', group: 'Exécution', roles: ['worker'], required: false, default: '30', description: 'Délai d’arrêt propre sur SIGTERM.' }),
   v({ name: 'RUN_BUDGET_SECONDS', group: 'Exécution', roles: ['worker'], required: false, default: '900', description: 'Budget de durée d’un run.' }),
   v({ name: 'RUN_HEARTBEAT_SECONDS', group: 'Exécution', roles: ['worker'], required: false, default: '10', description: 'Période d’écriture du battement d’un run actif.' }),

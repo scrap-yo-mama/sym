@@ -10,3 +10,4 @@ export * from './write-actions.js';
 export * from '../agent/step-wire.js';
 export * from '../agent/step-session.js';
 export type * from '../agent/engine.js';
+export * from './pairing-code.js';

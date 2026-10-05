@@ -4,6 +4,7 @@
 // révocation d'un domaine (0 cookie en base), et résolution des cookies d'un run liée au propriétaire
 // (assert_identity_pinned). Le parcours dans un vrai Chromium est dans apps/extension/e2e (étage E2).
 import { kekFor, MasterKey, type SiteCookie } from '@runtime/core';
+import { decodePairingCode } from '@runtime/core/tunnel';
 import { siteCookiesForRun, withActor } from '@runtime/db';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { withClient } from '../../../tests/helpers/pg.js';
@@ -112,6 +113,29 @@ describe('appairage (07 § 1)', () => {
     expect(empty.json()).toMatchObject({ error: { code: 'invalid_request', message: expect.any(String) } });
     const none = await srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', payload: { currentPassword: user.password } });
     expect(none.statusCode).toBe(401);
+  });
+
+  test('assert_pairing_single_paste (instance) — le code en un collage porte l’adresse de l’instance ET le code ; coller ce code (adresse lue dedans) puis l’échanger appaire', async () => {
+    const user = await createUser(srv, 'zz_test_ext_onepaste@example.test');
+    const cookieU = await signIn(srv, user);
+    const res = await srv.app.inject({ method: 'POST', url: '/api/extension/pairing-codes', headers: { cookie: cookieU, origin: PUBLIC_URL }, payload: { currentPassword: user.password } });
+    expect(res.statusCode, res.body).toBe(201);
+    const created = res.json<{ code: string; pairingCode: string; expiresAt: string }>();
+    expect(created.pairingCode.startsWith('sym-pair:v1:')).toBe(true);
+    // Un seul texte : l'extension n'a plus d'URL à saisir.
+    const decoded = decodePairingCode(created.pairingCode);
+    expect(decoded).toEqual({ ok: true, url: new URL(PUBLIC_URL).origin, code: created.code });
+    // Le code lu dans le collage est exactement celui que la route d'échange accepte, une seule fois.
+    const paired = await pair((decoded as { code: string }).code, 'zz_test_dev_onepaste');
+    expect(paired.statusCode, paired.body).toBe(201);
+    expect((await pair(created.code, 'zz_test_dev_onepaste_2')).statusCode).toBe(400);
+    // Route nommée par le CDC (snake_case) : même contenu.
+    const named = await srv.app.inject({ method: 'POST', url: '/api/tunnel/pairing-code', headers: { cookie: cookieU, origin: PUBLIC_URL }, payload: { current_password: user.password } });
+    expect(named.statusCode, named.body).toBe(201);
+    const body = named.json<{ code: string; pairing_code: string; expires_at: string }>();
+    expect(decodePairingCode(body.pairing_code)).toEqual({ ok: true, url: new URL(PUBLIC_URL).origin, code: body.code });
+    // Le code en un collage n'est jamais écrit dans l'audit ni stocké : seule l'empreinte du code l'est.
+    expect(JSON.stringify(await sql('SELECT * FROM extension_pairing_codes WHERE owner_id = $1', [user.id]))).not.toContain(created.pairingCode);
   });
 
   test('assert_pairing_code_single_use : code utilisé, expiré ou inconnu → refus, aucun jeton', async () => {

@@ -138,6 +138,11 @@ export class TunnelJobClient implements TunnelPort {
     if (!connected) await setWaiting(true);
     const started = Date.now();
     let dispatchedAt: number | null = null;
+    /**
+     * Instant où la passerelle a RENDU la commande après une coupure (lecture rejouable repassée en attente, U3.4) : la grâce
+     * hors ligne se compte depuis là, pas depuis l'envoi, et la commande n'attend pas `timeout_ms + 15 s` une extension absente.
+     */
+    let releasedAt: number | null = null;
     let keepWaiting = false;
     /** Extension hors ligne : le run RESTE en `waiting_tunnel` jusqu'à sa fin (`skipped_tunnel_offline`, 04 §6). */
     const offline = async (): Promise<TunnelOutcome> => {
@@ -162,7 +167,8 @@ export class TunnelJobClient implements TunnelPort {
           return result === null ? { kind: 'error', error } : { kind: 'error', error, result };
         }
         if (job.state === 'expired' || job.state === 'cancelled') return job.dispatched ? { kind: 'error', error: 'timeout' } : await offline();
-        if (job.dispatched) {
+        if (job.state === 'dispatched') {
+          releasedAt = null;
           dispatchedAt ??= Date.now();
           await setWaiting(false);
           // La passerelle clôt d'elle-même un job émis à `timeout_ms + 5 s` ; filet si elle a disparu entre-temps.
@@ -172,12 +178,20 @@ export class TunnelJobClient implements TunnelPort {
             continue;
           }
         } else {
+          // En attente : jamais prise, ou RENDUE après une coupure (`dispatched_at` posé, état revenu à `pending`) ; une nouvelle
+          // émission remettra l'état à `dispatched` et le filet ci-dessus repartira de zéro.
+          if (job.dispatched) {
+            releasedAt ??= Date.now();
+            dispatchedAt = null;
+          }
+          const since = releasedAt ?? started;
           // Extension hors ligne (ou commande non prise depuis un moment) : le run passe en `waiting_tunnel`. Une commande
           // simplement en route vers une extension connectée ne fait pas basculer l'état (aucune écriture par commande).
-          if (!connected || Date.now() - started > WAITING_AFTER_MS) await setWaiting(true);
-          if (Date.now() - started > offlineGraceMs) {
+          if (!connected || job.dispatched || Date.now() - since > WAITING_AFTER_MS) await setWaiting(true);
+          if (Date.now() - since > offlineGraceMs) {
             const was = await abandonTunnelJob(pool, jobId, 'expired');
-            if (was !== null) return was.wasDispatched ? { kind: 'error', error: 'timeout' } : await offline();
+            // Hors ligne dans les deux cas : commande jamais prise, ou rendue par la passerelle puis jamais reprise (tunnel perdu).
+            if (was !== null) return await offline();
             continue;
           }
         }

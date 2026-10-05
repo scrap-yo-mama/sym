@@ -6,6 +6,7 @@
 //   consentement par domaine, cookies en usage serveur (écriture seule, scellés), déconnexion d'un domaine.
 // L'utilisateur est toujours celui du jeton ou de la session (garde) : aucun corps ne choisit un propriétaire (INV5).
 import { checkSiteDomain } from '@runtime/core/net';
+import { encodePairingCode } from '@runtime/core/tunnel';
 import { extensionTooOld, SITE_COOKIE_LIMITS, type SiteCookie } from '@runtime/core';
 import {
   adminRevokeDevice,
@@ -140,7 +141,8 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
   app.post<{ Body: { currentPassword?: string } }>('/api/extension/pairing-codes', { schema: { body: pairingCodeSchema } }, async (request, reply) => {
     const created = await pairingCode(request, reply, request.body.currentPassword);
     // Seule apparition du code : il n'est stocké que sous forme d'empreinte.
-    return created === null ? reply : reply.code(201).send({ code: created.code, expiresAt: created.expiresAt.toISOString() });
+    // U3.1 : `pairingCode` porte l'adresse de l'instance ET le code (un seul collage dans l'extension, 05 § 2).
+    return created === null ? reply : reply.code(201).send({ code: created.code, pairingCode: encodePairingCode({ url: ctx.publicUrl, code: created.code }), expiresAt: created.expiresAt.toISOString() });
   });
 
   // Route nommée par 05 § 4.2 et 07 § 1 (3.1) : même service, corps et réponse en snake_case (`PasswordConfirmation`, `PairingCode`).
@@ -149,7 +151,7 @@ export function extensionRoutes(app: FastifyInstance, ctx: ServerContext): void 
     { schema: { body: { type: 'object', additionalProperties: false, properties: { current_password: { type: 'string', minLength: 1, maxLength: 1024 } } } } },
     async (request, reply) => {
       const created = await pairingCode(request, reply, request.body.current_password);
-      return created === null ? reply : reply.code(201).send({ code: created.code, expires_at: created.expiresAt.toISOString() });
+      return created === null ? reply : reply.code(201).send({ code: created.code, pairing_code: encodePairingCode({ url: ctx.publicUrl, code: created.code }), expires_at: created.expiresAt.toISOString() });
     },
   );
 

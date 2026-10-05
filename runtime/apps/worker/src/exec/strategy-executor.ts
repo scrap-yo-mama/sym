@@ -289,6 +289,8 @@ type Outcome = {
   agent?: Omit<AgentOutcome, 'result'>;
   /** Mode tunnel : arrêt sans classe d'échec (défi, extension hors ligne). */
   stop?: TunnelStop;
+  /** Mode tunnel : l'extension servait ce run puis a disparu (cause `tunnel_lost`, U3.4), plutôt que jamais connectée. */
+  tunnelLost?: boolean;
   /** Mode tunnel : le site n'est pas connecté dans le navigateur de l'utilisateur. */
   needsUser?: boolean;
   /** Stratégie `steps` (2.13) : étape en échec, effet observé, arrêt avant une étape. */
@@ -577,7 +579,7 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
       ...(deps.classify === undefined ? {} : { classify: deps.classify }),
     });
     if (session.refusedAfterStop > 0) await ctx.log('info', 'tunnel_commands_withheld', { count: session.refusedAfterStop, reason: session.stop });
-    return { result: out.result, usage: null, ...(out.stop === null ? {} : { stop: out.stop }), ...(out.needsUser ? { needsUser: true } : {}) };
+    return { result: out.result, usage: null, ...(out.stop === null ? {} : { stop: out.stop }), ...(out.lost ? { tunnelLost: true } : {}), ...(out.needsUser ? { needsUser: true } : {}) };
   };
 
   const execute = async (ctx: RunCtx, target: RunTarget, strategy: NonNullable<RunTarget['strategy']>, itemPolicy: ItemPolicy, extras?: StepsTrialExtras): Promise<Outcome> => {
@@ -1308,8 +1310,11 @@ export function createStrategyRuntime(deps: StrategyExecutorDeps): StrategyRunti
     // essai (aucune commande n'a abouti, ce n'est pas un échec réseau), aucune classe d'échec, statut de l'API inchangé.
     const stop = outcome.stop;
     if (stop === 'tunnel_offline') {
-      await ctx.log('warn', 'tunnel_offline', { network: 'tunnel' });
-      return { state: 'skipped_tunnel_offline', stop_reason: 'tunnel_offline', error_detail: 'tunnel_offline', strategy_version: strategy.version };
+      // U3.4 : l'extension servait ce run puis a disparu (au-delà de la grâce) : cause lisible `tunnel_lost`, action « Relancer ».
+      // Même état et même raison d'arrêt qu'hors ligne (04 §6) : seule la cause (error_detail) dit « perdu ».
+      const lost = outcome.tunnelLost === true;
+      await ctx.log('warn', lost ? 'tunnel_lost' : 'tunnel_offline', { network: 'tunnel' });
+      return { state: 'skipped_tunnel_offline', stop_reason: 'tunnel_offline', error_detail: lost ? 'tunnel_lost' : 'tunnel_offline', strategy_version: strategy.version };
     }
     // Défi en tunnel : l'essai est journalisé avec sa cause de fait (protection), le run s'arrête SANS classe d'échec
     // (04 §6) : `challenge_in_tunnel` → action_requise, la main revient à l'humain.

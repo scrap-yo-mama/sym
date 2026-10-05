@@ -3925,8 +3925,10 @@ export interface components {
             [key: string]: unknown;
         };
         PairingCode: {
-            /** @description Code à usage unique, valable 10 minutes. */
+            /** @description Code à usage unique, valable 10 minutes (saisie à la main). */
             code: string;
+            /** @description Code en un collage `sym-pair:v1:<base64url({url, code})>` (adresse de l'instance et code à usage unique, 10 minutes) ; l'extension le lit sans saisie d'URL. */
+            pairing_code: string;
             /** Format: date-time */
             expires_at: string;
         };
@@ -3934,8 +3936,10 @@ export interface components {
             currentPassword?: components["schemas"]["CurrentPassword"];
         };
         ExtensionPairingCode: {
-            /** @description Code à usage unique, valable 10 minutes. */
+            /** @description Code à usage unique, valable 10 minutes (saisie à la main). */
             code: string;
+            /** @description Code en un collage `sym-pair:v1:<base64url({url, code})>` (adresse de l'instance et code à usage unique, 10 minutes) ; l'extension le lit sans saisie d'URL. */
+            pairingCode: string;
             /** Format: date-time */
             expiresAt: string;
         };

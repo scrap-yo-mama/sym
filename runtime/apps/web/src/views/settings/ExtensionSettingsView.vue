@@ -13,6 +13,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import PairingCard from '@/components/settings/PairingCard.vue';
 import { useExtensionSettings } from '@/composables/useSettings';
 import { takeFieldValue } from '@/lib/form-field';
 import { formatDateTime } from '@/lib/format';
@@ -30,6 +31,7 @@ onServerPrefetch(async () => {
 });
 
 const password = ref('');
+const instanceUrl = typeof window === 'undefined' ? '' : window.location.origin;
 const date = (iso: string | null): string => formatDateTime(iso, locale.value) ?? t('settings.extension.never');
 
 /**
@@ -39,7 +41,8 @@ const date = (iso: string | null): string => formatDateTime(iso, locale.value) ?
  */
 async function createCode(event: Event): Promise<void> {
   const form = event.currentTarget instanceof HTMLFormElement ? event.currentTarget : null;
-  await extension.createPairingCode(takeFieldValue(form, 'currentPassword', password));
+  // Le code créé : « Extension connectée » arrive seul, dès que l'extension s'appaire (relevé toutes les 2 s, 05 § 2).
+  if (await extension.createPairingCode(takeFieldValue(form, 'currentPassword', password))) extension.watchPairing();
 }
 </script>
 
@@ -72,11 +75,7 @@ async function createCode(event: Event): Promise<void> {
       <div>
         <Button type="submit" class="aria-disabled:pointer-events-none aria-disabled:opacity-50" :aria-disabled="pairingBusy">{{ t('settings.extension.createCode') }}</Button>
       </div>
-      <div v-if="pairing" class="flex flex-col gap-2 rounded-lg border-2 p-3" role="status" data-testid="pairing-code">
-        <p class="font-mono text-lg">{{ t('settings.extension.code', { code: pairing.code }) }}</p>
-        <p class="text-sm text-muted-foreground">{{ t('settings.extension.codeExpires', { date: date(pairing.expiresAt) }) }}</p>
-        <div><Button type="button" variant="outline" size="sm" @click="extension.dismissPairing()">{{ t('settings.extension.dismissCode') }}</Button></div>
-      </div>
+      <PairingCard v-if="pairing" :pairing="pairing" :instance-url="instanceUrl" @dismiss="extension.dismissPairing()" />
     </form>
 
     <div class="flex flex-col gap-2">

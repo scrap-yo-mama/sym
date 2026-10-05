@@ -69,6 +69,7 @@ Pour l'instant, le TLS vers la base se règle par `sslmode` dans `DATABASE_URL` 
 | `WORKER_CONCURRENCY` | 5 | worker | jobs en parallèle ; au plus `DB_POOL_MAX` | lue |
 | `BROWSER_CONCURRENCY` | déduit de la mémoire du conteneur | worker | exécutions navigateur simultanées : `max(1, floor((limite − 0,5 Go) / 1,5 Go))`, soit 1 pour 2 Go et 2 pour 4 Go | lue |
 | `DISABLE_BROWSER` | `false` | worker | aucun Chromium : les exécutions navigateur sont refusées | lue |
+| `AGENT_BROWSER_PROBE` | `false` | worker | `true` : au démarrage, vérifie que le Chromium dédié de l'agent démarre et le dit dans les journaux ; n'empêche aucun run | lue |
 | `SHUTDOWN_TIMEOUT_SECONDS` | 30 | worker | délai d'arrêt propre | lue |
 | `RUN_BUDGET_SECONDS` | 900 | worker | durée maximale d'un run | lue |
 | `RUN_HEARTBEAT_SECONDS` | 10 | worker | battement d'un run actif | lue |

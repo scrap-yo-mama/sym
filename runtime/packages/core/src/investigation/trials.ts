@@ -26,11 +26,19 @@ export const INVESTIGATION_DEFAULTS = Object.freeze({
 /** Raison d'une exécution de plus que les N exécutions d'échantillon : vérifier la règle d'arrêt (tâche 2.2). */
 export type TrialPurpose = 'sample' | 'stop_check';
 
+/**
+ * Paramètres d'une cause d'échec (U1.12, UX-21 et UX-23) : codes fermés et noms de champs du schéma, jamais une valeur du
+ * site ni un message libre. `minimal_content` : `field`, `reason` ; `agent_engine_error` : `class`.
+ */
+export type CauseParams = Readonly<Record<string, string | number>>;
+
 /** Une exécution d'un couple. */
 export type TrialExecution = {
   readonly ok: boolean;
   readonly failure_class: FailureClass | null;
   readonly detail: string | null;
+  /** Paramètres de la cause (`detail`) quand elle en a ; absent sinon. */
+  readonly params?: CauseParams;
   readonly records: number;
   readonly pages: number;
   /** Raison d'arrêt de la pagination (`max_pages_input`, `records_empty`, …) ; `null` en échec. */
@@ -45,6 +53,8 @@ export type PairOutcome = {
   /** `ok` ou classe d'échec du couple (première exécution en échec, ou contrôle de la page 2). */
   readonly result: 'ok' | FailureClass;
   readonly detail: string | null;
+  /** Paramètres de la cause (`detail`) : champ et raison du contenu minimal, classe d'erreur du moteur agentique. Absent sinon. */
+  readonly params?: CauseParams;
   /** Les N exécutions d'échantillon (la vérification de la règle d'arrêt est dans `stop_check`). */
   readonly executions: readonly TrialExecution[];
   /** Règle d'arrêt de la pagination : constatée sur la dernière page ou non ; `null` : la stratégie ne pagine pas. */
@@ -71,6 +81,9 @@ export type StopCheck = {
   readonly reason?: 'max_cost_usd';
 };
 
+/** Échec du contrôle de contenu (`params` : champ et raison du contenu minimal, UX-21). */
+export type ContentFailure = { readonly failure_class: FailureClass; readonly detail: string; readonly params?: CauseParams };
+
 export type TrialPorts = {
   /**
    * Une exécution du couple sous le plafond `ceilingUsd` et l'échéance `deadlineMs` (epoch). Un plafond atteint rend
@@ -89,7 +102,7 @@ export type TrialPorts = {
    * Peut être asynchrone : pour un essai E4, la compilation en déclaratif `html` paginé et sa vérification en page 2 y ont
    * lieu (constat Janssens : une page 1 correcte ne se jette plus en `minimal_content`).
    */
-  contentCheck?(pair: TrialPair): { readonly failure_class: FailureClass; readonly detail: string } | null | Promise<{ readonly failure_class: FailureClass; readonly detail: string } | null>;
+  contentCheck?(pair: TrialPair): ContentFailure | null | Promise<ContentFailure | null>;
   /**
    * Essai IA d'enquête (E4 en échantillon, banc R06 et R08) : appelé après la PREMIÈRE exécution conforme d'un couple ; vrai
    * si une stratégie compilée de cet essai a été vérifiée SANS LLM (exécution E1 conforme sous toutes les gardes d'un run) :
@@ -159,7 +172,7 @@ export async function runTrials(
     if (tried.length >= budget.maxAttempts) return best !== null ? { kind: 'conformant', outcome: best, spentUsd: spentNow(), tried } : { kind: 'budget_exhausted', reason: 'max_attempts', spentUsd: spentNow(), tried };
     const pair = remaining.shift()!;
     const executions: TrialExecution[] = [];
-    let failure: { cls: FailureClass; detail: string | null } | null = null;
+    let failure: { cls: FailureClass; detail: string | null; params?: CauseParams } | null = null;
     let budgetStop: BudgetStop | null = null;
     let stopCheck: StopCheck | null = null;
     let checkRun: TrialExecution | null = null;
@@ -193,7 +206,7 @@ export async function runTrials(
           else if (perRunCap === null || ceilingUsd < perRunCap) budgetStop = 'investigation_budget_usd';
           else overRunCap = true;
         }
-        failure = { cls, detail: run.detail };
+        failure = { cls, detail: run.detail, ...(run.params === undefined ? {} : { params: run.params }) };
         return { stop: true, run, perRunCap: overRunCap };
       }
       return { stop: budgetStop !== null, run, perRunCap: overRunCap };
@@ -237,7 +250,7 @@ export async function runTrials(
     }
     if (failure === null && budgetStop === null && executions.length === needed && ports.contentCheck !== undefined) {
       const content = await ports.contentCheck(pair);
-      if (content !== null) failure = { cls: content.failure_class, detail: content.detail };
+      if (content !== null) failure = { cls: content.failure_class, detail: content.detail, ...(content.params === undefined ? {} : { params: content.params }) };
     }
     const done = executions.length === needed && failure === null && budgetStop === null;
     const all = checkRun === null ? executions : [...executions, checkRun];
@@ -245,6 +258,7 @@ export async function runTrials(
       pair,
       result: failure?.cls ?? (done ? 'ok' : 'run_budget_exceeded'),
       detail: failure?.detail ?? (done ? null : budgetStop),
+      ...(failure?.params === undefined ? {} : { params: failure.params }),
       executions,
       stop_check: stopCheck,
       cost_usd: sumCost(all),
