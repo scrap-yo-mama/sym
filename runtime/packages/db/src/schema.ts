@@ -998,7 +998,7 @@ export const siteSessions = pgTable(
     alg: text('alg'),
     consentedAt: tstz('consented_at').notNull().defaultNow(),
     updatedAt: updatedAt(),
-    // Migration 0027_session_server_state (CDC V1 sym-sessions, A1) : nature du secret (cookie en V1), usage et
+    // Migration 0028_session_server_state (CDC V1 sym-sessions, A1) : nature du secret (cookie en V1), usage et
     // vérification, étiquette du compte. La durée de vie du secret reste `expires_at`.
     secretKind: text('secret_kind').notNull().default('cookie'),
     lastUsedAt: tstz('last_used_at'),
@@ -1013,7 +1013,7 @@ export const siteSessions = pgTable(
   ],
 );
 
-// Journal d'usage des sessions (migration 0027) : ajout seul pour le rôle applicatif, aucune valeur de secret.
+// Journal d'usage des sessions (migration 0028) : ajout seul pour le rôle applicatif, aucune valeur de secret.
 export const siteSessionEvents = pgTable(
   'site_session_events',
   {

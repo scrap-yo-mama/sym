@@ -207,7 +207,7 @@ describe(`RLS sur PostgreSQL ${inject('pgVersion')}`, () => {
     expect(row.meta).toEqual({ password: '[REDACTED]', label: 'ok' });
   });
 
-  test('tables en ajout seul (site_session_events, 0027) : INSERT et SELECT permis au propriétaire, UPDATE, DELETE et TRUNCATE refusés', async () => {
+  test('tables en ajout seul (site_session_events, 0028) : INSERT et SELECT permis au propriétaire, UPDATE, DELETE et TRUNCATE refusés', async () => {
     await withActor(pool, { userId: A, role: 'member' }, async (db) => {
       expect((await db.query('SELECT 1 FROM site_session_events')).rowCount).toBe(1);
       await db.query("INSERT INTO site_session_events (owner_id, domain, event) VALUES ($1, 'zz-test.example', 'refreshed')", [A]);

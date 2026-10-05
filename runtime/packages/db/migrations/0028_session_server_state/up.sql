@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- 0027_session_server_state : sessions de site rejouées côté serveur pour leur propriétaire (CDC V1 sym-sessions, A1, S-01 ;
+-- 0028_session_server_state : sessions de site rejouées côté serveur pour leur propriétaire (CDC V1 sym-sessions, A1, S-01 ;
 --   INV5 évolué : la session appartient à son propriétaire et se rejoue côté serveur quand il a consenti, pour lui seul).
 --   site_sessions.secret_kind      nature du secret scellé ; `cookie` en V1 (la V2 ajoutera `token` en élargissant la contrainte).
 --                                  La durée de vie du secret reste `expires_at` (fin de la session entière, posée à l'envoi).

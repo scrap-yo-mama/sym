@@ -234,7 +234,7 @@ export async function adminRevokeDevice(db: Queryable, tunnelId: string): Promis
 // Domaines connectés et cookies (07 § 2)
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** Natures de secret de session connues ; la contrainte `site_sessions_secret_kind` (0027) tient la même liste. */
+/** Natures de secret de session connues ; la contrainte `site_sessions_secret_kind` (0028) tient la même liste. */
 export type SecretKind = 'cookie';
 
 export type SiteView = {
