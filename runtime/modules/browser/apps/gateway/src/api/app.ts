@@ -44,6 +44,8 @@ import {
   SESSION_STATES,
   SESSION_TYPES,
   type ConnectUrls,
+  type EgressPolicy,
+  type EgressState,
   type Session,
   type SessionPage,
   type SessionState,
@@ -59,9 +61,9 @@ import { createEventHub } from '../events/hub.js';
 import { serveEventStream, type OpenStream } from '../events/stream.js';
 import { createWebhookDispatcher } from '../webhooks/dispatcher.js';
 import { ApiProblem, invalidOption, preferredLanguage } from './errors.js';
-import type { GatewayDeps, Principal, Scope } from './types.js';
+import type { EgressOutcome, GatewayDeps, Principal, Scope } from './types.js';
 import { usageCsv } from '../usage/csv.js';
-import { isDateTime, parseCreateSession, parseExtendSession, UUID } from './validation.js';
+import { isDateTime, parseCreateSession, parseEgressPolicy, parseExtendSession, UUID } from './validation.js';
 import { createDbRelayResolver, registerRelay } from '../relay/index.js';
 
 /** Défauts de l'instance (04 § 3) et durée des jetons de connexion (04 § 7, « à valider, tâche 2.1 »). */
@@ -546,6 +548,32 @@ export async function createGatewayApi(deps: GatewayDeps): Promise<FastifyInstan
       const updated = (await getSessionView(deps.db, { tenantId: view.tenantId, sessionId: view.id })) ?? view;
       return { status: 200, body: await present(request, updated) };
     });
+  });
+
+  // --- Egress de session (04 § 2, 04c § 1.3) : compteurs de l'époque courante, remplacement à chaud de la politique. ---
+  /** Session non terminée dont un nœud tient l'egress ; sinon 422 `invalid_option` (comme `extend`) ou 404. */
+  const egressOutcome = (view: SessionView, outcome: EgressOutcome): EgressState => {
+    if (outcome.ok) return outcome.state;
+    if (outcome.code === 'invalid_option') throw invalidOption([{ field: outcome.field, reason: outcome.reason }]);
+    if (outcome.code === 'proxy_unreachable') throw new ApiProblem('proxy_unreachable', 'Upstream proxy unreachable.', { details: { reason: outcome.reason } });
+    throw invalidOption([{ field: 'id', reason: isTerminal(view.state) ? 'session_finished' : 'session_not_running' }]);
+  };
+
+  app.get('/v1/sessions/:id/egress', { preHandler: authorize('sessions:read') }, async (request): Promise<EgressState> => {
+    const view = await loadSession(request, (request.params as { id: string }).id);
+    if (isTerminal(view.state)) throw invalidOption([{ field: 'id', reason: 'session_finished' }]);
+    return egressOutcome(view, await deps.launcher.egressState(view.id));
+  });
+
+  app.put('/v1/sessions/:id/egress', { preHandler: authorize('sessions:write') }, async (request): Promise<EgressState> => {
+    const view = await loadSession(request, (request.params as { id: string }).id);
+    const policy = parseEgressPolicy(bodyOf(request));
+    if (isTerminal(view.state)) throw invalidOption([{ field: 'id', reason: 'session_finished' }]);
+    // Plafond d'octets : jamais au-delà du reste du mois (04c § 1.4), comme à la création.
+    const usage = await monthlyUsage(deps.db, view.tenantId);
+    const bytesLeft = Math.max(0, usage.limits.monthlyBytes - usage.bytes);
+    const effective: EgressPolicy = { ...policy, budgetBytes: Math.min(policy.budgetBytes ?? Number.MAX_SAFE_INTEGER, bytesLeft) };
+    return egressOutcome(view, await deps.launcher.replaceEgress(view.id, effective));
   });
 
   // --- Événements (tâche 2.5) : flux SSE par session et par client, reprise par Last-Event-ID (04 § 2). ---

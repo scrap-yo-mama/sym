@@ -317,6 +317,38 @@ describe('release_idempotent (A12) et prolongation', () => {
   });
 });
 
+describe('egress de session : GET et PUT /v1/sessions/{id}/egress (04 § 2, 04c § 1.3, F-20261004-01)', () => {
+  test('lecture puis remplacement : nouvelle époque ; scopes read/write ; autre client : 404 ; invalide : 422 ; terminée : 422', async () => {
+    const session = (await create({ type: 'shared', egress: { allowedHosts: ['a.example'] } })).body;
+    const url = `/v1/sessions/${session.id}/egress`;
+    const read = await h.call({ method: 'GET', url, key: 'aRead' });
+    expect(read.status).toBe(200);
+    expect(read.body).toMatchObject({ epoch: 1, requests: 0, blocked: 0, budgetExceeded: false });
+    const put = await h.call({ method: 'PUT', url, body: { allowedHosts: ['b.example'], ports: [443] } });
+    expect(put.status).toBe(200);
+    expect(put.body.epoch).toBe(2);
+    expect(h.launcher.policies.get(session.id)).toMatchObject({ allowedHosts: ['b.example'], ports: [443] });
+    // Le plafond d'octets ne dépasse jamais le reste du mois (04c § 1.4) et sert aussi au remplacement.
+    expect(typeof put.body.budgetBytes).toBe('number');
+    // Lecture seule : PUT refusé ; autre client : session introuvable pour les deux.
+    expect((await h.call({ method: 'PUT', url, key: 'aRead', body: {} })).status).toBe(403);
+    expect((await h.call({ method: 'GET', url, key: 'b' })).status).toBe(404);
+    expect((await h.call({ method: 'PUT', url, key: 'b', body: {} })).status).toBe(404);
+    expect((await h.call({ method: 'GET', url, key: null })).status).toBe(401);
+    // Politique invalide : champ nommé, époque inchangée.
+    const bad = await h.call({ method: 'PUT', url, body: { ports: [0], extra: true } });
+    expect(bad.status).toBe(422);
+    expect(bad.body.error.details.map((d: { field: string }) => d.field)).toEqual(expect.arrayContaining(['ports[0]', 'extra']));
+    expect((await h.call({ method: 'GET', url })).body.epoch).toBe(2);
+    await h.call({ method: 'DELETE', url: `/v1/sessions/${session.id}` });
+    const ended = await h.call({ method: 'GET', url });
+    expect(ended.status).toBe(422);
+    expect(ended.body.error.details).toEqual([{ field: 'id', reason: 'session_finished' }]);
+    expect((await h.call({ method: 'PUT', url, body: {} })).status).toBe(422);
+    expect((await h.call({ method: 'GET', url: '/v1/sessions/00000000-0000-4000-8000-000000000000/egress' })).status).toBe(404);
+  });
+});
+
 describe('authentification et erreurs typées (04 § 1 et § 6)', () => {
   test('sans clé ou clé inconnue : 401 unauthorized ; X-Request-Id sur chaque réponse', async () => {
     const none = await h.call({ method: 'GET', url: '/v1/sessions', key: null });

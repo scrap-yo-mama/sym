@@ -13,7 +13,7 @@
 import { randomBytes } from 'node:crypto';
 import { ApiKeyAuthenticator, ConnectTokens, createBrowserMetrics, MasterKey, MetricsRegistry, newApiKey, Secret, type UsageClosure } from '@sym-browser/core';
 import { insertApiKey, migrateUp, pgApiKeyStore, recordHeartbeat, revokeApiKey, transitionSession } from '@sym-browser/db';
-import { browserOpenApi } from '@sym/contracts/browser';
+import { browserOpenApi, type EgressPolicy } from '@sym/contracts/browser';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import pg from 'pg';
@@ -41,7 +41,7 @@ export type Harness = {
   revoke: (key: keyof Harness['keys']) => Promise<void>;
   /** Jeton de lecture de `/metrics` (tâche 3.7). */
   metricsToken: string;
-  launcher: { mode: LauncherMode; launched: string[]; released: string[]; nodes: Map<string, string>; requests: Map<string, LaunchRequest> };
+  launcher: { mode: LauncherMode; launched: string[]; released: string[]; nodes: Map<string, string>; requests: Map<string, LaunchRequest>; epochs: Map<string, number>; policies: Map<string, EgressPolicy> };
   call: (options: { method: InjectOptions['method']; url: string; key?: keyof Harness['keys'] | null; body?: unknown; headers?: Record<string, string> }) => Promise<Reply>;
   close: () => Promise<void>;
 };
@@ -158,7 +158,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     });
   }
 
-  const state = { mode: 'ok' as LauncherMode, launched: [] as string[], released: [] as string[], nodes: new Map<string, string>(), requests: new Map<string, LaunchRequest>() };
+  const state = { mode: 'ok' as LauncherMode, launched: [] as string[], released: [] as string[], nodes: new Map<string, string>(), requests: new Map<string, LaunchRequest>(), epochs: new Map<string, number>(), policies: new Map<string, EgressPolicy>() };
   const launcher: SessionLauncher = {
     async launch(request) {
       const { sessionId } = request;
@@ -168,6 +168,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       if (state.mode === 'fail') return { ok: false, code: 'launch_failed' };
       if (state.mode === 'hang') return new Promise(() => undefined);
       const outcome = await transitionSession(pool, { sessionId, to: 'running', reason: null, nodeId: request.nodeId });
+      if (outcome.ok) state.epochs.set(sessionId, 1);
       return outcome.ok ? { ok: true } : { ok: false, code: 'launch_failed' };
     },
     async release(sessionId) {
@@ -175,10 +176,23 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       const outcome = await transitionSession(pool, { sessionId, to: 'ended', reason: 'released' });
       if (!outcome.ok) return 'not_held';
       state.released.push(sessionId);
+      state.epochs.delete(sessionId);
       return 'released';
     },
     async extend() {
       return 'not_held';
+    },
+    // Nœud simulé : l'egress d'une session `running` répond avec une époque qui avance à chaque remplacement.
+    async egressState(sessionId) {
+      const epoch = state.epochs.get(sessionId);
+      return epoch === undefined ? { ok: false, code: 'not_held' } : { ok: true, state: { epoch, requests: 0, blocked: 0, bytesIn: 0, bytesOut: 0, budgetExceeded: false } };
+    },
+    async replaceEgress(sessionId, policy) {
+      const epoch = state.epochs.get(sessionId);
+      if (epoch === undefined) return { ok: false, code: 'not_held' };
+      state.policies.set(sessionId, policy);
+      state.epochs.set(sessionId, epoch + 1);
+      return { ok: true, state: { epoch: epoch + 1, requests: 0, blocked: 0, bytesIn: 0, bytesOut: 0, ...(policy.budgetBytes === undefined ? {} : { budgetBytes: policy.budgetBytes }), budgetExceeded: false } };
     },
   };
 

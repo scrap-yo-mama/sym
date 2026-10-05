@@ -131,6 +131,31 @@ export const browserOpenApi = {
         }),
       },
     },
+    '/sessions/{id}/egress': {
+      get: {
+        operationId: 'getSessionEgress',
+        description: 'Compteurs de l’époque courante de l’egress de la session (demandes, refus, octets, budget, IP de sortie).',
+        parameters: [sessionId],
+        responses: secured({
+          '200': { description: 'Etat de l’egress', content: json(ref('EgressState')) },
+          '404': error('`session_not_found`'),
+          '422': error('`invalid_option` (session terminée ou pas encore démarrée)'),
+        }),
+      },
+      put: {
+        operationId: 'replaceSessionEgress',
+        description:
+          'Remplace la politique d’egress à chaud : ouvre une nouvelle époque aux compteurs remis à zéro. Les identifiants d’un proxy amont ne sont ni stockés ni journalisés.',
+        parameters: [sessionId],
+        requestBody: { required: true, content: json(ref('EgressPolicy')) },
+        responses: secured({
+          '200': { description: 'Etat de la nouvelle époque', content: json(ref('EgressState')) },
+          '404': error('`session_not_found`'),
+          '422': error('`invalid_option` (politique refusée, session terminée ou pas encore démarrée)'),
+          '502': error('`proxy_unreachable` (nouvel amont injoignable ; politique courante inchangée)'),
+        }),
+      },
+    },
     '/version': {
       get: {
         operationId: 'getVersion',

@@ -21,10 +21,10 @@ import type { Duplex } from 'node:stream';
 import { ConfigError, egressGuardFromConfig, type BrowserConfig, type Logger } from '@sym-browser/core';
 import { createPgSessionStore } from '@sym-browser/db';
 import type { BrowserPool, PoolLease } from '@sym-browser/node';
-import type { SessionEgress as ProxyEgress } from '@sym-browser/node/egress';
+import { EgressPolicyError, type SessionEgress as ProxyEgress } from '@sym-browser/node/egress';
 import { createNodeRelay } from '@sym-browser/node/relay';
 import { SessionHost, SessionSupervisor, type HostLease, type SessionAcquireRequest, type SharedSessionInput } from '@sym-browser/node/sessions';
-import { DEFAULT_IP_ECHO_URL, startUpstreamSessionEgress } from '@sym-browser/node/upstream';
+import { DEFAULT_IP_ECHO_URL, ProxyUnreachableError, startUpstreamSessionEgress, type UpstreamSession } from '@sym-browser/node/upstream';
 import { replayUsageWal, UsageMeter, UsageWal } from '@sym-browser/node/usage';
 import type { CreateSessionRequest, EgressPolicy } from '@sym/contracts/browser';
 import type pg from 'pg';
@@ -71,6 +71,8 @@ export async function assembleAllModeSessions(deps: AllModeSessionsDeps): Promis
   const onError = (error: unknown): void => log('warn', 'session_error', { error: (error as Error).name, code: (error as { code?: string }).code });
   const guard = egressGuardFromConfig(config);
   const policies = new Map<string, EgressPolicy>();
+  /** Egress amont de chaque session tenue : lecture et remplacement à chaud de la politique (`/v1/sessions/{id}/egress`). */
+  const upstreams = new Map<string, UpstreamSession>();
   const leases = new Map<string, HostLease>();
   const store = createPgSessionStore(db);
   // Répertoire de travail inutilisable : arrêt du démarrage avec un message qui nomme la variable et le code système.
@@ -94,11 +96,13 @@ export async function assembleAllModeSessions(deps: AllModeSessionsDeps): Promis
       });
       const egress = upstream.egress;
       egresses.set(sessionId, egress);
+      upstreams.set(sessionId, upstream);
       return {
         proxyUrl: egress.url,
         close: async () => egress.shut(),
         stop: async () => {
           egresses.delete(sessionId);
+          upstreams.delete(sessionId);
           await egress.close();
         },
       };
@@ -196,6 +200,24 @@ export async function assembleAllModeSessions(deps: AllModeSessionsDeps): Promis
     },
     async extend(sessionId, seconds) {
       return (await supervisor.extend(sessionId, seconds)).ok ? 'extended' : 'not_held';
+    },
+    // Egress de la session : tenu tant que le bail l'est (arrêt ordonné de la session : plus de lecture ni de remplacement).
+    async egressState(sessionId) {
+      const upstream = upstreams.get(sessionId);
+      if (upstream === undefined || !leases.has(sessionId)) return { ok: false, code: 'not_held' };
+      return { ok: true, state: upstream.egress.state() };
+    },
+    async replaceEgress(sessionId, policy) {
+      const upstream = upstreams.get(sessionId);
+      if (upstream === undefined || !leases.has(sessionId)) return { ok: false, code: 'not_held' };
+      try {
+        return { ok: true, state: await upstream.replace(policy) };
+      } catch (error) {
+        // Politique refusée ou amont injoignable : l'egress garde sa politique courante, sans identifiant dans la réponse.
+        if (error instanceof EgressPolicyError) return { ok: false, code: 'invalid_option', field: error.field, reason: error.message };
+        if (error instanceof ProxyUnreachableError) return { ok: false, code: 'proxy_unreachable', reason: error.details.reason };
+        throw error;
+      }
     },
   };
 

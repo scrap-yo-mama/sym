@@ -210,6 +210,14 @@ export async function startAllMode(): Promise<AllModeInstance> {
       async extend(sessionId, seconds) {
         return (await supervisor.extend(sessionId, seconds)).ok ? 'extended' : 'not_held';
       },
+      async egressState(sessionId) {
+        const egress = egresses.get(sessionId);
+        return egress === undefined ? { ok: false, code: 'not_held' } : { ok: true, state: egress.state() };
+      },
+      async replaceEgress(sessionId, policy) {
+        const egress = egresses.get(sessionId);
+        return egress === undefined ? { ok: false, code: 'not_held' } : { ok: true, state: egress.replace(policy) };
+      },
     };
 
     // Passerelle.

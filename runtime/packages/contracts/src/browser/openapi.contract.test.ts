@@ -36,8 +36,8 @@ const refs = (node: unknown): string[] => {
 describe('OpenAPI de SYM Browser', () => {
   test('OpenAPI 3.1, chemins de base du cycle de vie', () => {
     expect(browserOpenApi.openapi).toBe('3.1.0');
-    // Seules les routes servies sont publiées (tâche 2.2) ; egress, événements, fichiers… entrent avec leur tâche.
-    expect(Object.keys(browserOpenApi.paths).sort()).toEqual(['/openapi.json', '/sessions', '/sessions/{id}', '/sessions/{id}/extend', '/version']);
+    // Seules les routes servies sont publiées (tâche 2.2) ; l'egress de session (F-20261004-01) y est ; événements, fichiers… entrent avec leur tâche.
+    expect(Object.keys(browserOpenApi.paths).sort()).toEqual(['/openapi.json', '/sessions', '/sessions/{id}', '/sessions/{id}/egress', '/sessions/{id}/extend', '/version']);
     expect(browserOpenApi.paths['/version'].get.security).toEqual([]);
   });
 

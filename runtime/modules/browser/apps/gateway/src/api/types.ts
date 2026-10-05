@@ -11,7 +11,7 @@ import type { FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import type { LiveTokens, UsageClosure } from '@sym-browser/core';
 import type { UsageReconciliation } from '@sym-browser/db';
-import type { CreateSessionRequest, SessionType } from '@sym/contracts/browser';
+import type { CreateSessionRequest, EgressPolicy, EgressState, SessionType } from '@sym/contracts/browser';
 
 /** Scopes d'une clé d'API (04 § 1) : ensemble fermé de la tâche 2.1. */
 export type Scope = ApiScope;
@@ -30,6 +30,16 @@ export type LaunchRequest = {
   idleTimeoutSeconds: number;
 };
 
+/** Résultat d'une lecture ou d'un remplacement de la politique d'egress d'une session tenue par un nœud (04c § 1.3). */
+export type EgressOutcome =
+  | { ok: true; state: EgressState }
+  /** Aucun nœud ne tient la session (pas encore démarrée, ou déjà détruite). */
+  | { ok: false; code: 'not_held' }
+  /** Politique refusée en entier (champ nommé), politique courante inchangée. */
+  | { ok: false; code: 'invalid_option'; field: string; reason: string }
+  /** Nouvel amont injoignable (502 `proxy_unreachable`, motif dans `details`), politique courante inchangée. */
+  | { ok: false; code: 'proxy_unreachable'; reason: string };
+
 export interface SessionLauncher {
   /** Démarre la session (`pending → running` écrit par le nœud) ; `launch_failed` : aucun nœud n'a pu la lancer. */
   launch(request: LaunchRequest): Promise<{ ok: true } | { ok: false; code: 'launch_failed' }>;
@@ -37,6 +47,13 @@ export interface SessionLauncher {
   release(sessionId: string): Promise<'released' | 'not_held'>;
   /** Prolonge sur le nœud (délais et base) ; `not_held` : la passerelle prolonge en base seule. */
   extend(sessionId: string, seconds: number): Promise<'extended' | 'not_held'>;
+  /** Compteurs de l'époque courante de l'egress de la session (`GET /v1/sessions/{id}/egress`). */
+  egressState(sessionId: string): Promise<EgressOutcome>;
+  /**
+   * Remplace la politique d'egress à chaud (`PUT /v1/sessions/{id}/egress`) : nouvelle époque, compteurs remis à zéro. Les
+   * identifiants d'un proxy amont en ligne ne sont ni gardés en base ni journalisés (BINV6) ; le nœud ne les tient qu'en mémoire.
+   */
+  replaceEgress(sessionId: string, policy: EgressPolicy): Promise<EgressOutcome>;
 }
 
 export type GatewayDeps = {

@@ -3,7 +3,7 @@
 // passerelle refuse exactement ce que le contrat publié refuse (Schemathesis le vérifie), puis applique les contrôles que
 // JSON Schema n'exprime pas (langue BCP 47, fuseau IANA), comme le nœud (tâche 1.3). Chaque champ fautif est nommé
 // (`launchArgs[0]`, `viewport.height`, `metadata.k`) dans `details` de la 422 `invalid_option`.
-import { browserOpenApi, type CreateSessionRequest, type ExtendSessionRequest } from '@sym/contracts/browser';
+import { browserOpenApi, type CreateSessionRequest, type EgressPolicy, type ExtendSessionRequest } from '@sym/contracts/browser';
 import { Ajv2020, type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
 import { invalidOption, type InvalidField } from './errors.js';
 
@@ -25,6 +25,7 @@ const compile = <T>(name: keyof typeof browserOpenApi.components.schemas): Valid
 
 const createSession = compile<CreateSessionRequest>('CreateSessionRequest');
 const extendSession = compile<ExtendSessionRequest>('ExtendSessionRequest');
+const egressPolicy = compile<EgressPolicy>('EgressPolicy');
 
 /** `/launchArgs/0` → `launchArgs[0]` ; `/viewport` + `height` manquant → `viewport.height`. */
 function fieldOf(error: ErrorObject): string {
@@ -94,6 +95,16 @@ export function parseCreateSession(body: unknown): CreateSessionRequest {
   const upstream = input.egress?.upstream as { password?: unknown } | undefined;
   if (upstream?.password !== undefined) problems.push({ field: 'egress.upstream.password', reason: 'inline proxy credentials are not accepted yet: use a proxy profile' });
   if (problems.length > 0) throw invalidOption(problems);
+  return input;
+}
+
+/**
+ * Corps de `PUT /v1/sessions/{id}/egress` : le schéma publié de la politique. Les identifiants en ligne d'un proxy amont sont
+ * admis ici (remplacement à chaud par un client de confiance, ex. le worker de SYM) : jamais stockés, jamais journalisés.
+ */
+export function parseEgressPolicy(body: unknown): EgressPolicy {
+  const input = body === undefined ? {} : body;
+  if (!egressPolicy(input)) throw invalidOption(details(egressPolicy.errors));
   return input;
 }
 

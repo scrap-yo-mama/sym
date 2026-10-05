@@ -322,4 +322,55 @@ describe('mode all : API /v1, relais et superviseur montés dans le binaire (F-2
     expect(mine?.killed).toBe(true);
     expect(await readdir(join(dataDir, 'sessions')).catch(() => [])).toEqual([]);
   });
+
+  test('GET et PUT /v1/sessions/{id}/egress sur le binaire (F-20261004-01) : politique lue, remplacée à chaud (nouvelle époque), refus nommés, amont injoignable en 502 sans fuite du mot de passe', async () => {
+    const db = await freshDatabase();
+    databases.push(db);
+    const dataDir = await scratchDir();
+    const key = generateApiKey().key.reveal();
+    const launched: Array<{ sessionId: string | undefined; launchProxyUrl: string; killed: boolean }> = [];
+    const service = await boot(db, { SYMB_BOOTSTRAP_API_KEY: key, NODE_ID: 'all-egress', SYMB_DATA_DIR: dataDir }, { dedicatedLauncher: dedicatedProbe(launched) });
+    await until(service, (r) => r.status === 200);
+    const base = `http://127.0.0.1:${service.port}`;
+    const auth = { authorization: `Bearer ${key}`, 'content-type': 'application/json' };
+    const created = await fetch(`${base}/v1/sessions`, { method: 'POST', headers: auth, body: JSON.stringify({ type: 'dedicated', timeoutSeconds: 120, egress: { allowedHosts: ['allowed.example'], ports: [80] } }) });
+    const session = (await created.json()) as { id: string };
+    expect(created.status).toBe(201);
+    const url = `${base}/v1/sessions/${session.id}/egress`;
+    const proxy = launched.find((l) => l.sessionId === session.id)!.launchProxyUrl;
+
+    // Lecture : compteurs de l'époque 1 ; le refus de denied.example est compté.
+    expect(await throughProxy(proxy, 'http://denied.example/')).toBe(403);
+    const first = await fetch(url, { headers: auth });
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({ epoch: 1, blocked: 1, budgetExceeded: false });
+
+    // Remplacement à chaud : nouvelle époque, compteurs remis à zéro, nouvelle liste d'hôtes appliquée sur le même proxy.
+    const put = await fetch(url, { method: 'PUT', headers: auth, body: JSON.stringify({ allowedHosts: ['other.example'], ports: [80] }) });
+    expect(put.status).toBe(200);
+    expect(await put.json()).toMatchObject({ epoch: 2, requests: 0, blocked: 0 });
+    expect(await throughProxy(proxy, 'http://allowed.example/')).toBe(403);
+    expect(await (await fetch(url, { headers: auth })).json()).toMatchObject({ epoch: 2, blocked: 1 });
+
+    // Politique invalide : 422 qui nomme le champ, politique courante inchangée.
+    const invalid = await fetch(url, { method: 'PUT', headers: auth, body: JSON.stringify({ ports: [0] }) });
+    expect(invalid.status).toBe(422);
+    expect(JSON.stringify(await invalid.json())).toContain('ports');
+    expect(((await (await fetch(url, { headers: auth })).json()) as { epoch: number }).epoch).toBe(2);
+
+    // Amont injoignable avec identifiants en ligne : 502 proxy_unreachable, le mot de passe n'est nulle part dans la réponse.
+    const secret = 'zz_test_secret_pw_8f3a';
+    const down = await fetch(url, { method: 'PUT', headers: auth, body: JSON.stringify({ allowedHosts: ['other.example'], upstream: { type: 'http', host: '127.0.0.1', port: 1, username: 'u', password: secret } }) });
+    const downText = await down.text();
+    expect(down.status).toBe(502);
+    expect(downText).toContain('proxy_unreachable');
+    expect(downText).not.toContain(secret);
+    expect(((await (await fetch(url, { headers: auth })).json()) as { epoch: number }).epoch).toBe(2);
+
+    // Session libérée : plus de politique à lire ni à remplacer.
+    await fetch(`${base}/v1/sessions/${session.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${key}` } });
+    expect((await fetch(url, { headers: auth })).status).toBe(422);
+    expect((await fetch(url, { method: 'PUT', headers: auth, body: '{}' })).status).toBe(422);
+    expect((await fetch(`${base}/v1/sessions/00000000-0000-4000-8000-000000000000/egress`, { headers: auth })).status).toBe(404);
+  });
 });
